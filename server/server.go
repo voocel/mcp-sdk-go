@@ -10,6 +10,7 @@ import (
 	"github.com/voocel/mcp-sdk-go/protocol"
 	"github.com/voocel/mcp-sdk-go/transport/sse"
 	"github.com/voocel/mcp-sdk-go/transport/stdio"
+	"github.com/voocel/mcp-sdk-go/transport/websocket"
 )
 
 type ToolHandler func(ctx context.Context, args map[string]interface{}) (*protocol.CallToolResult, error)
@@ -295,4 +296,10 @@ func ServeSSE(server *MCPServer, addr string) error {
 	handler := NewHandler(server)
 	sseServer := sse.NewServer(addr, handler)
 	return sseServer.Serve(context.Background())
+}
+
+func ServeWebSocket(server *MCPServer, addr string) error {
+	handler := NewHandler(server)
+	wsServer := websocket.NewServer(addr, handler)
+	return wsServer.Serve(context.Background())
 }

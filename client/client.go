@@ -12,6 +12,7 @@ import (
 	"github.com/voocel/mcp-sdk-go/transport"
 	"github.com/voocel/mcp-sdk-go/transport/sse"
 	"github.com/voocel/mcp-sdk-go/transport/stdio"
+	"github.com/voocel/mcp-sdk-go/transport/websocket"
 )
 
 type Client interface {
@@ -55,6 +56,17 @@ func WithStdioTransport(command string, args []string) Option {
 func WithSSETransport(url string) Option {
 	return func(c *MCPClient) error {
 		t := sse.New(url)
+		if err := t.Connect(context.Background()); err != nil {
+			return err
+		}
+		c.transport = t
+		return nil
+	}
+}
+
+func WithWebSocketTransport(url string) Option {
+	return func(c *MCPClient) error {
+		t := websocket.New(url)
 		if err := t.Connect(context.Background()); err != nil {
 			return err
 		}
