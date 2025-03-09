@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/voocel/mcp-sdk-go/protocol"
 	"github.com/voocel/mcp-sdk-go/transport"
+	"github.com/voocel/mcp-sdk-go/transport/grpc"
 	"github.com/voocel/mcp-sdk-go/transport/sse"
 	"github.com/voocel/mcp-sdk-go/transport/stdio"
 	"github.com/voocel/mcp-sdk-go/transport/websocket"
@@ -67,6 +68,17 @@ func WithSSETransport(url string) Option {
 func WithWebSocketTransport(url string) Option {
 	return func(c *MCPClient) error {
 		t := websocket.New(url)
+		if err := t.Connect(context.Background()); err != nil {
+			return err
+		}
+		c.transport = t
+		return nil
+	}
+}
+
+func WithGRPCTransport(target string) Option {
+	return func(c *MCPClient) error {
+		t := grpc.New(target)
 		if err := t.Connect(context.Background()); err != nil {
 			return err
 		}

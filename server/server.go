@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/voocel/mcp-sdk-go/protocol"
+	"github.com/voocel/mcp-sdk-go/transport/grpc"
 	"github.com/voocel/mcp-sdk-go/transport/sse"
 	"github.com/voocel/mcp-sdk-go/transport/stdio"
 	"github.com/voocel/mcp-sdk-go/transport/websocket"
@@ -302,4 +303,10 @@ func ServeWebSocket(server *MCPServer, addr string) error {
 	handler := NewHandler(server)
 	wsServer := websocket.NewServer(addr, handler)
 	return wsServer.Serve(context.Background())
+}
+
+func ServeGRPC(server *MCPServer, addr string) error {
+	handler := NewHandler(server)
+	grpcServer := grpc.NewServer(addr, handler)
+	return grpcServer.Serve(context.Background())
 }
