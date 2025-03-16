@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"sync"
 	"time"
 
@@ -134,6 +135,9 @@ func (h *Handler) HandleMessage(ctx context.Context, data []byte) ([]byte, error
 		return nil, fmt.Errorf("invalid message format: %w", err)
 	}
 
+	// 记录收到的请求
+	fmt.Fprintf(os.Stderr, "收到请求: %s\n", string(data))
+
 	var result interface{}
 	var err error
 
@@ -142,6 +146,11 @@ func (h *Handler) HandleMessage(ctx context.Context, data []byte) ([]byte, error
 		result = protocol.ServerInfo{
 			Name:    h.server.name,
 			Version: h.server.version,
+			Capabilities: protocol.Capabilities{
+				Tools:     len(h.server.tools) > 0,
+				Resources: len(h.server.resources) > 0,
+				Prompts:   len(h.server.prompts) > 0,
+			},
 		}
 	case "listTools":
 		result, err = h.handleListTools(ctx)
@@ -185,6 +194,9 @@ func (h *Handler) HandleMessage(ctx context.Context, data []byte) ([]byte, error
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal response: %w", err)
 	}
+
+	// 记录发送的响应
+	fmt.Fprintf(os.Stderr, "发送响应: %s\n", string(respBytes))
 
 	return respBytes, nil
 }
@@ -287,10 +299,13 @@ func (h *Handler) handleGetPrompt(ctx context.Context, paramsBytes json.RawMessa
 	return promptInfo.Handler(ctx, params.Args)
 }
 
-func ServeStdio(server *MCPServer) error {
+func ServeStdio(ctx context.Context, server *MCPServer) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	handler := NewHandler(server)
 	stdioServer := stdio.NewServer(handler)
-	return stdioServer.Serve(context.Background())
+	return stdioServer.Serve(ctx)
 }
 
 func ServeSSE(server *MCPServer, addr string) error {

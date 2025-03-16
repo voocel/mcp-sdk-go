@@ -49,8 +49,8 @@ func NewWithCommand(command string, args []string) (*Transport, error) {
 func NewWithStdio() *Transport {
 	return &Transport{
 		cmd:     nil,
-		stdin:   os.Stdout,
-		stdout:  os.Stdin,
+		stdin:   os.Stdin,
+		stdout:  os.Stdout,
 		scanner: bufio.NewScanner(os.Stdin),
 	}
 }

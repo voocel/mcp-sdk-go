@@ -83,9 +83,16 @@ type Error struct {
 	Data    any    `json:"data,omitempty"`
 }
 
+type Capabilities struct {
+	Tools     bool `json:"tools"`
+	Resources bool `json:"resources"`
+	Prompts   bool `json:"prompts"`
+}
+
 type ServerInfo struct {
-	Name    string `json:"name"`
-	Version string `json:"version"`
+	Name         string       `json:"name"`
+	Version      string       `json:"version"`
+	Capabilities Capabilities `json:"capabilities"`
 }
 
 type Subscription struct {
