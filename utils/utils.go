@@ -4,15 +4,76 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/google/uuid"
+	"github.com/voocel/mcp-sdk-go/protocol"
 	"reflect"
 	"strings"
-	"time"
-
-	"github.com/voocel/mcp-sdk-go/protocol"
 )
 
-func TimeoutContext(parent context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
-	return context.WithTimeout(parent, timeout)
+func NewJSONRPCRequest(method string, params interface{}) (*protocol.JSONRPCMessage, error) {
+	id := uuid.New().String()
+
+	var paramsBytes json.RawMessage
+	if params != nil {
+		bytes, err := json.Marshal(params)
+		if err != nil {
+			return nil, fmt.Errorf("failed to marshal params: %w", err)
+		}
+		paramsBytes = bytes
+	}
+
+	return &protocol.JSONRPCMessage{
+		JSONRPC: protocol.JSONRPCVersion,
+		ID:      &id,
+		Method:  method,
+		Params:  paramsBytes,
+	}, nil
+}
+
+func NewJSONRPCResponse(id string, result interface{}) (*protocol.JSONRPCMessage, error) {
+	var resultBytes json.RawMessage
+	if result != nil {
+		bytes, err := json.Marshal(result)
+		if err != nil {
+			return nil, fmt.Errorf("failed to marshal result: %w", err)
+		}
+		resultBytes = bytes
+	}
+
+	return &protocol.JSONRPCMessage{
+		JSONRPC: protocol.JSONRPCVersion,
+		ID:      &id,
+		Result:  resultBytes,
+	}, nil
+}
+
+func NewJSONRPCError(id string, code int, message string, data interface{}) (*protocol.JSONRPCMessage, error) {
+	return &protocol.JSONRPCMessage{
+		JSONRPC: protocol.JSONRPCVersion,
+		ID:      &id,
+		Error: &protocol.JSONRPCError{
+			Code:    code,
+			Message: message,
+			Data:    data,
+		},
+	}, nil
+}
+
+func NewJSONRPCNotification(method string, params interface{}) (*protocol.JSONRPCMessage, error) {
+	var paramsBytes json.RawMessage
+	if params != nil {
+		bytes, err := json.Marshal(params)
+		if err != nil {
+			return nil, fmt.Errorf("failed to marshal params: %w", err)
+		}
+		paramsBytes = bytes
+	}
+
+	return &protocol.JSONRPCMessage{
+		JSONRPC: protocol.JSONRPCVersion,
+		Method:  method,
+		Params:  paramsBytes,
+	}, nil
 }
 
 func StructToJSONSchema(v interface{}) (protocol.JSONSchema, error) {
@@ -25,6 +86,10 @@ func StructToJSONSchema(v interface{}) (protocol.JSONSchema, error) {
 		return nil, fmt.Errorf("input must be a struct or pointer to struct")
 	}
 
+	return createStructSchema(t), nil
+}
+
+func createStructSchema(t reflect.Type) protocol.JSONSchema {
 	schema := protocol.JSONSchema{
 		"type":       "object",
 		"properties": make(map[string]interface{}),
@@ -32,79 +97,97 @@ func StructToJSONSchema(v interface{}) (protocol.JSONSchema, error) {
 	}
 
 	properties := schema["properties"].(map[string]interface{})
-	required := schema["required"].([]string)
+	var required []string
 
 	for i := 0; i < t.NumField(); i++ {
 		field := t.Field(i)
 		if field.PkgPath != "" {
-			continue
+			continue // 跳过私有字段
 		}
+
 		jsonTag := field.Tag.Get("json")
 		if jsonTag == "-" {
 			continue
 		}
+
 		jsonName := field.Name
 		tagParts := strings.Split(jsonTag, ",")
 		if tagParts[0] != "" {
 			jsonName = tagParts[0]
 		}
 
-		isRequired := !strings.Contains(jsonTag, "omitempty")
+		// 检查是否必需 (没有omitempty)
+		isRequired := !contains(tagParts, "omitempty")
 		if isRequired {
 			required = append(required, jsonName)
 		}
 
+		// 添加字段描述 (从jsonschema tag获取)
 		fieldSchema := createFieldSchema(field.Type)
+		if desc := field.Tag.Get("jsonschema"); desc != "" {
+			parts := strings.Split(desc, ",")
+			for _, part := range parts {
+				if strings.HasPrefix(part, "description=") {
+					fieldSchema["description"] = strings.TrimPrefix(part, "description=")
+				}
+			}
+		}
+
 		properties[jsonName] = fieldSchema
 	}
-	schema["required"] = required
-	return schema, nil
+
+	if len(required) > 0 {
+		schema["required"] = required
+	}
+
+	return schema
 }
 
 func createFieldSchema(t reflect.Type) map[string]interface{} {
 	schema := make(map[string]interface{})
+
 	switch t.Kind() {
 	case reflect.String:
 		schema["type"] = "string"
 	case reflect.Bool:
 		schema["type"] = "boolean"
-	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
-		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64,
-		reflect.Float32, reflect.Float64:
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		schema["type"] = "integer"
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		schema["type"] = "integer"
+		schema["minimum"] = 0
+	case reflect.Float32, reflect.Float64:
 		schema["type"] = "number"
 	case reflect.Array, reflect.Slice:
 		schema["type"] = "array"
 		schema["items"] = createFieldSchema(t.Elem())
 	case reflect.Map:
 		schema["type"] = "object"
-	case reflect.Struct:
-		schema["type"] = "object"
-		schema["properties"] = make(map[string]interface{})
-		for i := 0; i < t.NumField(); i++ {
-			field := t.Field(i)
-			if field.PkgPath != "" {
-				continue
-			}
-			jsonTag := field.Tag.Get("json")
-			if jsonTag == "-" {
-				continue
-			}
-			jsonName := field.Name
-			tagParts := strings.Split(jsonTag, ",")
-			if tagParts[0] != "" {
-				jsonName = tagParts[0]
-			}
-
-			fieldSchema := createFieldSchema(field.Type)
-			schema["properties"].(map[string]interface{})[jsonName] = fieldSchema
+		if t.Elem().Kind() != reflect.Interface {
+			schema["additionalProperties"] = createFieldSchema(t.Elem())
 		}
+	case reflect.Struct:
+		schema = createStructSchema(t)
 	case reflect.Ptr:
 		return createFieldSchema(t.Elem())
+	case reflect.Interface:
+		// 对于interface{}类型，允许任何类型
+		schema = map[string]interface{}{}
 	default:
 		schema["type"] = "string"
 	}
 
 	return schema
+}
+
+// 工具函数
+func contains(slice []string, item string) bool {
+	for _, s := range slice {
+		if s == item {
+			return true
+		}
+	}
+	return false
 }
 
 func JSONToStruct(data []byte, v interface{}) error {
@@ -117,4 +200,30 @@ func StructToJSON(v interface{}) ([]byte, error) {
 
 func IsCanceled(err error) bool {
 	return err == context.Canceled || err == context.DeadlineExceeded
+}
+
+func ValidateJSONRPCMessage(msg *protocol.JSONRPCMessage) error {
+	if msg.JSONRPC != protocol.JSONRPCVersion {
+		return fmt.Errorf("invalid jsonrpc version: %s", msg.JSONRPC)
+	}
+
+	// 请求必须有method和id
+	if msg.Method != "" && msg.ID == nil {
+		return fmt.Errorf("request must have an id")
+	}
+
+	// 响应必须有id和result或error
+	if msg.Method == "" {
+		if msg.ID == nil {
+			return fmt.Errorf("response must have an id")
+		}
+		if msg.Result == nil && msg.Error == nil {
+			return fmt.Errorf("response must have result or error")
+		}
+		if msg.Result != nil && msg.Error != nil {
+			return fmt.Errorf("response cannot have both result and error")
+		}
+	}
+
+	return nil
 }

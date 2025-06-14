@@ -1,44 +1,101 @@
 package protocol
 
+// Resource 资源定义
 type Resource struct {
 	URI         string `json:"uri"`
 	Name        string `json:"name"`
 	Description string `json:"description,omitempty"`
+	MimeType    string `json:"mimeType,omitempty"`
 }
 
-type ResourceList struct {
+// ResourceContents 资源内容
+type ResourceContents struct {
+	URI      string `json:"uri"`
+	MimeType string `json:"mimeType,omitempty"`
+	Text     string `json:"text,omitempty"`
+	Blob     string `json:"blob,omitempty"`
+}
+
+// ListResourcesRequest resources/list 请求和响应
+type ListResourcesRequest struct {
+	Cursor string `json:"cursor,omitempty"`
+}
+
+// ListResourcesParams 列表资源的参数类型
+type ListResourcesParams struct {
+	Cursor string `json:"cursor,omitempty"`
+}
+
+type ListResourcesResult struct {
 	Resources []Resource `json:"resources"`
+	PaginatedResult
 }
 
-type ResourceContent struct {
-	URI     string        `json:"uri"`
-	Content []interface{} `json:"content"`
+// ReadResourceRequest resources/read 请求和响应
+type ReadResourceRequest struct {
+	URI string `json:"uri"`
 }
 
+// ReadResourceParams 读取资源的参数类型
 type ReadResourceParams struct {
 	URI string `json:"uri"`
 }
 
-func NewResourceResultText(uri string, text string) *ResourceContent {
-	return &ResourceContent{
-		URI: uri,
-		Content: []interface{}{
-			TextContent{
-				Type: ContentTypeText,
-				Text: text,
-			},
-		},
+type ReadResourceResult struct {
+	Contents []ResourceContents `json:"contents"`
+}
+
+// ListResourceTemplatesRequest resources/templates/list 请求和响应
+type ListResourceTemplatesRequest struct {
+	Cursor string `json:"cursor,omitempty"`
+}
+
+type ResourceTemplate struct {
+	URITemplate string `json:"uriTemplate"`
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	MimeType    string `json:"mimeType,omitempty"`
+}
+
+type ListResourceTemplatesResult struct {
+	ResourceTemplates []ResourceTemplate `json:"resourceTemplates"`
+	PaginatedResult
+}
+
+// ResourcesListChangedNotification 资源变更通知
+type ResourcesListChangedNotification struct{}
+
+type ResourcesUpdatedNotification struct {
+	URI string `json:"uri"`
+}
+
+func NewResource(uri, name, description, mimeType string) Resource {
+	return Resource{
+		URI:         uri,
+		Name:        name,
+		Description: description,
+		MimeType:    mimeType,
 	}
 }
 
-func NewResourceResultJSON(uri string, data interface{}) (*ResourceContent, error) {
-	jsonContent, err := NewJSONContent(data)
-	if err != nil {
-		return nil, err
+func NewTextResourceContents(uri, text string) ResourceContents {
+	return ResourceContents{
+		URI:      uri,
+		MimeType: "text/plain",
+		Text:     text,
 	}
+}
 
-	return &ResourceContent{
-		URI:     uri,
-		Content: []interface{}{jsonContent},
-	}, nil
+func NewBlobResourceContents(uri, blob, mimeType string) ResourceContents {
+	return ResourceContents{
+		URI:      uri,
+		MimeType: mimeType,
+		Blob:     blob,
+	}
+}
+
+func NewReadResourceResult(contents ...ResourceContents) *ReadResourceResult {
+	return &ReadResourceResult{
+		Contents: contents,
+	}
 }

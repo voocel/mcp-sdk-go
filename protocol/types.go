@@ -2,17 +2,79 @@ package protocol
 
 import (
 	"encoding/json"
-	"time"
 )
 
-const MCPVersion = "0.1.0"
+const (
+	MCPVersion     = "2024-11-05"
+	JSONRPCVersion = "2.0"
+)
+
+// JSON-RPC 2.0 标准错误代码
+const (
+	ParseError     = -32700
+	InvalidRequest = -32600
+	MethodNotFound = -32601
+	InvalidParams  = -32602
+	InternalError  = -32603
+)
+
+// MCP 特定错误代码
+const (
+	ToolNotFound     = -32000
+	ResourceNotFound = -32001
+	PromptNotFound   = -32002
+	InvalidTool      = -32003
+	InvalidResource  = -32004
+	InvalidPrompt    = -32005
+)
+
+type JSONRPCMessage struct {
+	JSONRPC string          `json:"jsonrpc"`
+	ID      *string         `json:"id,omitempty"`
+	Method  string          `json:"method,omitempty"`
+	Params  json.RawMessage `json:"params,omitempty"`
+	Result  json.RawMessage `json:"result,omitempty"`
+	Error   *JSONRPCError   `json:"error,omitempty"`
+}
+
+type JSONRPCError struct {
+	Code    int         `json:"code"`
+	Message string      `json:"message"`
+	Data    interface{} `json:"data,omitempty"`
+}
 
 type ContentType string
 
 const (
-	ContentTypeText ContentType = "text"
-	ContentTypeJSON ContentType = "json"
+	ContentTypeText  ContentType = "text"
+	ContentTypeImage ContentType = "image"
 )
+
+type TextContent struct {
+	Type ContentType `json:"type"`
+	Text string      `json:"text"`
+}
+
+type ImageContent struct {
+	Type     ContentType `json:"type"`
+	Data     string      `json:"data"`
+	MimeType string      `json:"mimeType"`
+}
+
+type Content interface {
+	GetType() ContentType
+}
+
+func (tc TextContent) GetType() ContentType  { return tc.Type }
+func (ic ImageContent) GetType() ContentType { return ic.Type }
+
+func NewTextContent(text string) TextContent {
+	return TextContent{Type: ContentTypeText, Text: text}
+}
+
+func NewImageContent(data, mimeType string) ImageContent {
+	return ImageContent{Type: ContentTypeImage, Data: data, MimeType: mimeType}
+}
 
 type Role string
 
@@ -22,86 +84,70 @@ const (
 	RoleSystem    Role = "system"
 )
 
-type TextContent struct {
-	Type ContentType `json:"type"`
-	Text string      `json:"text"`
+type ClientCapabilities struct {
+	Roots        *RootsCapability       `json:"roots,omitempty"`
+	Sampling     *SamplingCapability    `json:"sampling,omitempty"`
+	Experimental map[string]interface{} `json:"experimental,omitempty"`
 }
 
-type JSONContent struct {
-	Type ContentType     `json:"type"`
-	JSON json.RawMessage `json:"json"`
+type ServerCapabilities struct {
+	Tools        *ToolsCapability       `json:"tools,omitempty"`
+	Resources    *ResourcesCapability   `json:"resources,omitempty"`
+	Prompts      *PromptsCapability     `json:"prompts,omitempty"`
+	Logging      *LoggingCapability     `json:"logging,omitempty"`
+	Experimental map[string]interface{} `json:"experimental,omitempty"`
 }
 
-type Content interface {
-	GetType() ContentType
+type RootsCapability struct {
+	ListChanged bool `json:"listChanged,omitempty"`
 }
 
-func (tc TextContent) GetType() ContentType {
-	return tc.Type
+type SamplingCapability struct{}
+
+type ToolsCapability struct {
+	ListChanged bool `json:"listChanged,omitempty"`
 }
 
-func (jc JSONContent) GetType() ContentType {
-	return jc.Type
+type ResourcesCapability struct {
+	Subscribe   bool `json:"subscribe,omitempty"`
+	ListChanged bool `json:"listChanged,omitempty"`
 }
 
-func NewTextContent(text string) TextContent {
-	return TextContent{
-		Type: ContentTypeText,
-		Text: text,
-	}
+type PromptsCapability struct {
+	ListChanged bool `json:"listChanged,omitempty"`
 }
 
-func NewJSONContent(data interface{}) (JSONContent, error) {
-	jsonBytes, err := json.Marshal(data)
-	if err != nil {
-		return JSONContent{}, err
-	}
+type LoggingCapability struct{}
 
-	return JSONContent{
-		Type: ContentTypeJSON,
-		JSON: jsonBytes,
-	}, nil
-}
-
-type Message struct {
-	ID        string          `json:"id"`
-	Method    string          `json:"method"`
-	Params    json.RawMessage `json:"params,omitempty"`
-	Timestamp time.Time       `json:"timestamp"`
-}
-
-type Response struct {
-	ID        string          `json:"id"`
-	Result    json.RawMessage `json:"result,omitempty"`
-	Error     *Error          `json:"error,omitempty"`
-	Timestamp time.Time       `json:"timestamp"`
-}
-
-type Error struct {
-	Code    int    `json:"code"`
-	Message string `json:"message"`
-	Data    any    `json:"data,omitempty"`
-}
-
-type Capabilities struct {
-	Tools     bool `json:"tools"`
-	Resources bool `json:"resources"`
-	Prompts   bool `json:"prompts"`
+type ClientInfo struct {
+	Name    string `json:"name"`
+	Version string `json:"version"`
 }
 
 type ServerInfo struct {
-	Name         string       `json:"name"`
-	Version      string       `json:"version"`
-	Capabilities Capabilities `json:"capabilities"`
+	Name    string `json:"name"`
+	Version string `json:"version"`
 }
 
-type Subscription struct {
-	ID      string   `json:"id"`
-	Methods []string `json:"methods"`
+type InitializeRequest struct {
+	ProtocolVersion string             `json:"protocolVersion"`
+	Capabilities    ClientCapabilities `json:"capabilities"`
+	ClientInfo      ClientInfo         `json:"clientInfo"`
 }
 
-type Notification struct {
-	Method    string          `json:"method"`
-	Params    json.RawMessage `json:"params"`
-	Timestamp time.Time       `json:"timestamp"`
+type InitializeResult struct {
+	ProtocolVersion string             `json:"protocolVersion"`
+	Capabilities    ServerCapabilities `json:"capabilities"`
+	ServerInfo      ServerInfo         `json:"serverInfo"`
+	Instructions    string             `json:"instructions,omitempty"`
+}
+
+type JSONSchema map[string]interface{}
+
+type PaginationParams struct {
+	Cursor string `json:"cursor,omitempty"`
+}
+
+type PaginatedResult struct {
+	NextCursor *string `json:"nextCursor,omitempty"`
 }

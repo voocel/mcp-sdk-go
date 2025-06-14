@@ -4,324 +4,374 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
 	"sync"
-	"time"
 
 	"github.com/voocel/mcp-sdk-go/protocol"
-	"github.com/voocel/mcp-sdk-go/transport/grpc"
-	"github.com/voocel/mcp-sdk-go/transport/sse"
-	"github.com/voocel/mcp-sdk-go/transport/stdio"
-	"github.com/voocel/mcp-sdk-go/transport/websocket"
+	"github.com/voocel/mcp-sdk-go/utils"
 )
 
-type ToolHandler func(ctx context.Context, args map[string]interface{}) (*protocol.CallToolResult, error)
-
-type ResourceHandler func(ctx context.Context) (*protocol.ResourceContent, error)
-
-type PromptHandler func(ctx context.Context, args map[string]string) (*protocol.GetPromptResult, error)
-
 type Server interface {
-	AddTool(name, description string, handler ToolHandler, parameters ...protocol.ToolParameter)
+	RegisterTool(name, description string, inputSchema protocol.JSONSchema, handler ToolHandler) error
+	UnregisterTool(name string) error
 
-	AddResource(uri, name string, handler ResourceHandler)
+	RegisterResource(uri, name, description, mimeType string, handler ResourceHandler) error
+	UnregisterResource(uri string) error
 
-	AddPrompt(name, description string, handler PromptHandler, arguments ...protocol.PromptArgument)
+	RegisterPrompt(name, description string, arguments []protocol.PromptArgument, handler PromptHandler) error
+	UnregisterPrompt(name string) error
 
-	Name() string
+	GetServerInfo() protocol.ServerInfo
+	GetCapabilities() protocol.ServerCapabilities
 
-	Version() string
+	HandleMessage(ctx context.Context, message *protocol.JSONRPCMessage) (*protocol.JSONRPCMessage, error)
+	SendNotification(method string, params interface{}) error
 }
+
+type ToolHandler func(ctx context.Context, arguments map[string]interface{}) (*protocol.CallToolResult, error)
+type ResourceHandler func(ctx context.Context) (*protocol.ReadResourceResult, error)
+type PromptHandler func(ctx context.Context, arguments map[string]string) (*protocol.GetPromptResult, error)
 
 type MCPServer struct {
-	name      string
-	version   string
-	tools     map[string]*ToolInfo
-	resources map[string]*ResourceInfo
-	prompts   map[string]*PromptInfo
-	mu        sync.RWMutex
+	serverInfo   protocol.ServerInfo
+	capabilities protocol.ServerCapabilities
+
+	tools     map[string]*ToolRegistration
+	resources map[string]*ResourceRegistration
+	prompts   map[string]*PromptRegistration
+
+	initialized bool
+	clientInfo  *protocol.ClientInfo
+
+	notificationHandler func(method string, params interface{}) error
+
+	mu sync.RWMutex
 }
 
-type ToolInfo struct {
-	Name        string
-	Description string
-	Parameters  []protocol.ToolParameter
-	Handler     ToolHandler
+type ToolRegistration struct {
+	Tool    protocol.Tool
+	Handler ToolHandler
 }
 
-type ResourceInfo struct {
-	URI     string
-	Name    string
-	Handler ResourceHandler
+type ResourceRegistration struct {
+	Resource protocol.Resource
+	Handler  ResourceHandler
 }
 
-type PromptInfo struct {
-	Name        string
-	Description string
-	Arguments   []protocol.PromptArgument
-	Handler     PromptHandler
+type PromptRegistration struct {
+	Prompt  protocol.Prompt
+	Handler PromptHandler
 }
 
-func New(name, version string) *FastMCP {
-	return NewFastMCP(name, version)
-}
-
+// NewServer 创建MCP服务端
 func NewServer(name, version string) *MCPServer {
 	return &MCPServer{
-		name:      name,
-		version:   version,
-		tools:     make(map[string]*ToolInfo),
-		resources: make(map[string]*ResourceInfo),
-		prompts:   make(map[string]*PromptInfo),
+		serverInfo: protocol.ServerInfo{
+			Name:    name,
+			Version: version,
+		},
+		capabilities: protocol.ServerCapabilities{
+			Tools:     &protocol.ToolsCapability{ListChanged: true},
+			Resources: &protocol.ResourcesCapability{ListChanged: true, Subscribe: false},
+			Prompts:   &protocol.PromptsCapability{ListChanged: true},
+		},
+		tools:     make(map[string]*ToolRegistration),
+		resources: make(map[string]*ResourceRegistration),
+		prompts:   make(map[string]*PromptRegistration),
 	}
 }
 
-func (s *MCPServer) Name() string {
-	return s.name
-}
-
-func (s *MCPServer) Version() string {
-	return s.version
-}
-
-func (s *MCPServer) AddTool(name, description string, handler ToolHandler, parameters ...protocol.ToolParameter) {
+// RegisterTool 注册工具
+func (s *MCPServer) RegisterTool(name, description string, inputSchema protocol.JSONSchema, handler ToolHandler) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	s.tools[name] = &ToolInfo{
-		Name:        name,
-		Description: description,
-		Parameters:  parameters,
-		Handler:     handler,
-	}
-}
-
-func (s *MCPServer) AddResource(uri, name string, handler ResourceHandler) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	s.resources[uri] = &ResourceInfo{
-		URI:     uri,
-		Name:    name,
+	tool := protocol.NewTool(name, description, inputSchema)
+	s.tools[name] = &ToolRegistration{
+		Tool:    tool,
 		Handler: handler,
 	}
+
+	// 发送变更通知
+	if s.initialized {
+		go s.SendNotification("notifications/tools/list_changed", &protocol.ToolsListChangedNotification{})
+	}
+
+	return nil
 }
 
-func (s *MCPServer) AddPrompt(name, description string, handler PromptHandler, arguments ...protocol.PromptArgument) {
+// UnregisterTool 注销工具
+func (s *MCPServer) UnregisterTool(name string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	s.prompts[name] = &PromptInfo{
-		Name:        name,
-		Description: description,
-		Arguments:   arguments,
-		Handler:     handler,
-	}
-}
+	delete(s.tools, name)
 
-type Handler struct {
-	server *MCPServer
-}
-
-func NewHandler(server *MCPServer) *Handler {
-	return &Handler{
-		server: server,
-	}
-}
-
-func (h *Handler) HandleMessage(ctx context.Context, data []byte) ([]byte, error) {
-	var message protocol.Message
-	if err := json.Unmarshal(data, &message); err != nil {
-		return nil, fmt.Errorf("invalid message format: %w", err)
+	// 发送变更通知
+	if s.initialized {
+		go s.SendNotification("notifications/tools/list_changed", &protocol.ToolsListChangedNotification{})
 	}
 
-	// 记录收到的请求
-	fmt.Fprintf(os.Stderr, "收到请求: %s\n", string(data))
+	return nil
+}
 
+// RegisterResource 注册资源
+func (s *MCPServer) RegisterResource(uri, name, description, mimeType string, handler ResourceHandler) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	resource := protocol.NewResource(uri, name, description, mimeType)
+	s.resources[uri] = &ResourceRegistration{
+		Resource: resource,
+		Handler:  handler,
+	}
+
+	// 发送变更通知
+	if s.initialized {
+		go s.SendNotification("notifications/resources/list_changed", &protocol.ResourcesListChangedNotification{})
+	}
+
+	return nil
+}
+
+// UnregisterResource 注销资源
+func (s *MCPServer) UnregisterResource(uri string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	delete(s.resources, uri)
+
+	// 发送变更通知
+	if s.initialized {
+		go s.SendNotification("notifications/resources/list_changed", &protocol.ResourcesListChangedNotification{})
+	}
+
+	return nil
+}
+
+// RegisterPrompt 注册提示模板
+func (s *MCPServer) RegisterPrompt(name, description string, arguments []protocol.PromptArgument, handler PromptHandler) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	prompt := protocol.NewPrompt(name, description, arguments...)
+	s.prompts[name] = &PromptRegistration{
+		Prompt:  prompt,
+		Handler: handler,
+	}
+
+	// 发送变更通知
+	if s.initialized {
+		go s.SendNotification("notifications/prompts/list_changed", &protocol.PromptsListChangedNotification{})
+	}
+
+	return nil
+}
+
+// UnregisterPrompt 注销提示模板
+func (s *MCPServer) UnregisterPrompt(name string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	delete(s.prompts, name)
+
+	// 发送变更通知
+	if s.initialized {
+		go s.SendNotification("notifications/prompts/list_changed", &protocol.PromptsListChangedNotification{})
+	}
+
+	return nil
+}
+
+// GetServerInfo 获取服务器信息
+func (s *MCPServer) GetServerInfo() protocol.ServerInfo {
+	return s.serverInfo
+}
+
+// GetCapabilities 获取服务器能力
+func (s *MCPServer) GetCapabilities() protocol.ServerCapabilities {
+	return s.capabilities
+}
+
+// SetNotificationHandler 设置通知处理器
+func (s *MCPServer) SetNotificationHandler(handler func(method string, params interface{}) error) {
+	s.notificationHandler = handler
+}
+
+// SendNotification 发送通知
+func (s *MCPServer) SendNotification(method string, params interface{}) error {
+	if s.notificationHandler != nil {
+		return s.notificationHandler(method, params)
+	}
+	return nil
+}
+
+// HandleMessage 处理JSON-RPC消息
+func (s *MCPServer) HandleMessage(ctx context.Context, message *protocol.JSONRPCMessage) (*protocol.JSONRPCMessage, error) {
+	if err := utils.ValidateJSONRPCMessage(message); err != nil {
+		return utils.NewJSONRPCError("", protocol.InvalidRequest, err.Error(), nil)
+	}
+
+	// 处理请求
+	if message.Method != "" {
+		return s.handleRequest(ctx, message)
+	}
+
+	return nil, fmt.Errorf("unsupported message type")
+}
+
+// 处理请求
+func (s *MCPServer) handleRequest(ctx context.Context, request *protocol.JSONRPCMessage) (*protocol.JSONRPCMessage, error) {
 	var result interface{}
 	var err error
 
-	switch message.Method {
+	switch request.Method {
 	case "initialize":
-		result = protocol.ServerInfo{
-			Name:    h.server.name,
-			Version: h.server.version,
-			Capabilities: protocol.Capabilities{
-				Tools:     len(h.server.tools) > 0,
-				Resources: len(h.server.resources) > 0,
-				Prompts:   len(h.server.prompts) > 0,
-			},
-		}
-	case "listTools":
-		result, err = h.handleListTools(ctx)
-	case "callTool":
-		result, err = h.handleCallTool(ctx, message.Params)
-	case "listResources":
-		result, err = h.handleListResources(ctx)
-	case "readResource":
-		result, err = h.handleReadResource(ctx, message.Params)
-	case "listPrompts":
-		result, err = h.handleListPrompts(ctx)
-	case "getPrompt":
-		result, err = h.handleGetPrompt(ctx, message.Params)
+		result, err = s.handleInitialize(ctx, request.Params)
+	case "tools/list":
+		result, err = s.handleListTools(ctx, request.Params)
+	case "tools/call":
+		result, err = s.handleCallTool(ctx, request.Params)
+	case "resources/list":
+		result, err = s.handleListResources(ctx, request.Params)
+	case "resources/read":
+		result, err = s.handleReadResource(ctx, request.Params)
+	case "prompts/list":
+		result, err = s.handleListPrompts(ctx, request.Params)
+	case "prompts/get":
+		result, err = s.handleGetPrompt(ctx, request.Params)
 	default:
-		err = fmt.Errorf("unknown method: %s", message.Method)
-	}
-
-	response := protocol.Response{
-		ID:        message.ID,
-		Timestamp: time.Now(),
+		return utils.NewJSONRPCError(*request.ID, protocol.MethodNotFound,
+			fmt.Sprintf("method not found: %s", request.Method), nil)
 	}
 
 	if err != nil {
-		response.Error = &protocol.Error{
-			Code:    -1,
-			Message: err.Error(),
+		return utils.NewJSONRPCError(*request.ID, protocol.InternalError, err.Error(), nil)
+	}
+
+	return utils.NewJSONRPCResponse(*request.ID, result)
+}
+
+// 初始化请求
+func (s *MCPServer) handleInitialize(ctx context.Context, params json.RawMessage) (*protocol.InitializeResult, error) {
+	var req protocol.InitializeRequest
+	if params != nil {
+		if err := json.Unmarshal(params, &req); err != nil {
+			return nil, fmt.Errorf("invalid initialize params: %w", err)
 		}
-	} else {
-		responseBytes, err := json.Marshal(result)
-		if err != nil {
-			response.Error = &protocol.Error{
-				Code:    -2,
-				Message: fmt.Sprintf("failed to marshal result: %v", err),
-			}
-		} else {
-			response.Result = responseBytes
-		}
 	}
 
-	respBytes, err := json.Marshal(response)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal response: %w", err)
+	// 检查协议版本
+	if req.ProtocolVersion != protocol.MCPVersion {
+		return nil, fmt.Errorf("unsupported protocol version: %s", req.ProtocolVersion)
 	}
 
-	// 记录发送的响应
-	fmt.Fprintf(os.Stderr, "发送响应: %s\n", string(respBytes))
+	s.mu.Lock()
+	s.initialized = true
+	s.clientInfo = &req.ClientInfo
+	s.mu.Unlock()
 
-	return respBytes, nil
+	return &protocol.InitializeResult{
+		ProtocolVersion: protocol.MCPVersion,
+		Capabilities:    s.capabilities,
+		ServerInfo:      s.serverInfo,
+	}, nil
 }
 
-func (h *Handler) handleListTools(ctx context.Context) (*protocol.ToolList, error) {
-	h.server.mu.RLock()
-	defer h.server.mu.RUnlock()
+// 工具列表
+func (s *MCPServer) handleListTools(ctx context.Context, params json.RawMessage) (*protocol.ListToolsResult, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 
-	tools := make([]protocol.Tool, 0, len(h.server.tools))
-	for _, info := range h.server.tools {
-		tools = append(tools, protocol.Tool{
-			Name:        info.Name,
-			Description: info.Description,
-			Parameters:  info.Parameters,
-		})
+	tools := make([]protocol.Tool, 0, len(s.tools))
+	for _, reg := range s.tools {
+		tools = append(tools, reg.Tool)
 	}
 
-	return &protocol.ToolList{Tools: tools}, nil
+	return &protocol.ListToolsResult{
+		Tools: tools,
+	}, nil
 }
 
-func (h *Handler) handleCallTool(ctx context.Context, paramsBytes json.RawMessage) (*protocol.CallToolResult, error) {
-	var params protocol.CallToolParams
-	if err := json.Unmarshal(paramsBytes, &params); err != nil {
-		return nil, fmt.Errorf("invalid tool call parameters: %w", err)
+// 工具调用
+func (s *MCPServer) handleCallTool(ctx context.Context, params json.RawMessage) (*protocol.CallToolResult, error) {
+	var req protocol.CallToolParams
+	if err := json.Unmarshal(params, &req); err != nil {
+		return nil, fmt.Errorf("invalid call tool params: %w", err)
 	}
 
-	h.server.mu.RLock()
-	toolInfo, ok := h.server.tools[params.Name]
-	h.server.mu.RUnlock()
+	s.mu.RLock()
+	registration, exists := s.tools[req.Name]
+	s.mu.RUnlock()
 
-	if !ok {
-		return nil, fmt.Errorf("tool not found: %s", params.Name)
+	if !exists {
+		return protocol.NewToolResultError(fmt.Sprintf("tool not found: %s", req.Name)), nil
 	}
 
-	return toolInfo.Handler(ctx, params.Args)
+	return registration.Handler(ctx, req.Arguments)
 }
 
-func (h *Handler) handleListResources(ctx context.Context) (*protocol.ResourceList, error) {
-	h.server.mu.RLock()
-	defer h.server.mu.RUnlock()
+// 资源列表
+func (s *MCPServer) handleListResources(ctx context.Context, params json.RawMessage) (*protocol.ListResourcesResult, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 
-	resources := make([]protocol.Resource, 0, len(h.server.resources))
-	for _, info := range h.server.resources {
-		resources = append(resources, protocol.Resource{
-			URI:  info.URI,
-			Name: info.Name,
-		})
+	resources := make([]protocol.Resource, 0, len(s.resources))
+	for _, reg := range s.resources {
+		resources = append(resources, reg.Resource)
 	}
 
-	return &protocol.ResourceList{Resources: resources}, nil
+	return &protocol.ListResourcesResult{
+		Resources: resources,
+	}, nil
 }
 
-func (h *Handler) handleReadResource(ctx context.Context, paramsBytes json.RawMessage) (*protocol.ResourceContent, error) {
-	var params protocol.ReadResourceParams
-	if err := json.Unmarshal(paramsBytes, &params); err != nil {
-		return nil, fmt.Errorf("invalid resource parameters: %w", err)
+// 资源读取
+func (s *MCPServer) handleReadResource(ctx context.Context, params json.RawMessage) (*protocol.ReadResourceResult, error) {
+	var req protocol.ReadResourceParams
+	if err := json.Unmarshal(params, &req); err != nil {
+		return nil, fmt.Errorf("invalid read resource params: %w", err)
 	}
 
-	h.server.mu.RLock()
-	resourceInfo, ok := h.server.resources[params.URI]
-	h.server.mu.RUnlock()
+	s.mu.RLock()
+	registration, exists := s.resources[req.URI]
+	s.mu.RUnlock()
 
-	if !ok {
-		return nil, fmt.Errorf("resource not found: %s", params.URI)
+	if !exists {
+		return nil, fmt.Errorf("resource not found: %s", req.URI)
 	}
 
-	return resourceInfo.Handler(ctx)
+	return registration.Handler(ctx)
 }
 
-func (h *Handler) handleListPrompts(ctx context.Context) (*protocol.PromptList, error) {
-	h.server.mu.RLock()
-	defer h.server.mu.RUnlock()
+// 提示模板列表
+func (s *MCPServer) handleListPrompts(ctx context.Context, params json.RawMessage) (*protocol.ListPromptsResult, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 
-	prompts := make([]protocol.Prompt, 0, len(h.server.prompts))
-	for _, info := range h.server.prompts {
-		prompts = append(prompts, protocol.Prompt{
-			Name:        info.Name,
-			Description: info.Description,
-			Arguments:   info.Arguments,
-		})
+	prompts := make([]protocol.Prompt, 0, len(s.prompts))
+	for _, reg := range s.prompts {
+		prompts = append(prompts, reg.Prompt)
 	}
 
-	return &protocol.PromptList{Prompts: prompts}, nil
+	return &protocol.ListPromptsResult{
+		Prompts: prompts,
+	}, nil
 }
 
-func (h *Handler) handleGetPrompt(ctx context.Context, paramsBytes json.RawMessage) (*protocol.GetPromptResult, error) {
-	var params protocol.GetPromptParams
-	if err := json.Unmarshal(paramsBytes, &params); err != nil {
-		return nil, fmt.Errorf("invalid prompt parameters: %w", err)
+// 获取提示模板
+func (s *MCPServer) handleGetPrompt(ctx context.Context, params json.RawMessage) (*protocol.GetPromptResult, error) {
+	var req protocol.GetPromptParams
+	if err := json.Unmarshal(params, &req); err != nil {
+		return nil, fmt.Errorf("invalid get prompt params: %w", err)
 	}
 
-	h.server.mu.RLock()
-	promptInfo, ok := h.server.prompts[params.Name]
-	h.server.mu.RUnlock()
+	s.mu.RLock()
+	registration, exists := s.prompts[req.Name]
+	s.mu.RUnlock()
 
-	if !ok {
-		return nil, fmt.Errorf("prompt not found: %s", params.Name)
+	if !exists {
+		return nil, fmt.Errorf("prompt not found: %s", req.Name)
 	}
 
-	return promptInfo.Handler(ctx, params.Args)
-}
-
-func ServeStdio(ctx context.Context, server *MCPServer) error {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	handler := NewHandler(server)
-	stdioServer := stdio.NewServer(handler)
-	return stdioServer.Serve(ctx)
-}
-
-func ServeSSE(server *MCPServer, addr string) error {
-	handler := NewHandler(server)
-	sseServer := sse.NewServer(addr, handler)
-	return sseServer.Serve(context.Background())
-}
-
-func ServeWebSocket(server *MCPServer, addr string) error {
-	handler := NewHandler(server)
-	wsServer := websocket.NewServer(addr, handler)
-	return wsServer.Serve(context.Background())
-}
-
-func ServeGRPC(server *MCPServer, addr string) error {
-	handler := NewHandler(server)
-	grpcServer := grpc.NewServer(addr, handler)
-	return grpcServer.Serve(context.Background())
+	return registration.Handler(ctx, req.Arguments)
 }
