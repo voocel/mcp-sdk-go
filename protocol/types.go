@@ -68,6 +68,39 @@ type Content interface {
 func (tc TextContent) GetType() ContentType  { return tc.Type }
 func (ic ImageContent) GetType() ContentType { return ic.Type }
 
+// UnmarshalJSON 为 Content 接口实现自定义 JSON 反序列化
+func UnmarshalContent(data []byte) (Content, error) {
+	var temp struct {
+		Type ContentType `json:"type"`
+	}
+	
+	if err := json.Unmarshal(data, &temp); err != nil {
+		return nil, err
+	}
+	
+	switch temp.Type {
+	case ContentTypeText:
+		var tc TextContent
+		if err := json.Unmarshal(data, &tc); err != nil {
+			return nil, err
+		}
+		return tc, nil
+	case ContentTypeImage:
+		var ic ImageContent
+		if err := json.Unmarshal(data, &ic); err != nil {
+			return nil, err
+		}
+		return ic, nil
+	default:
+		// 默认当作文本内容处理
+		var tc TextContent
+		if err := json.Unmarshal(data, &tc); err != nil {
+			return nil, err
+		}
+		return tc, nil
+	}
+}
+
 func NewTextContent(text string) TextContent {
 	return TextContent{Type: ContentTypeText, Text: text}
 }

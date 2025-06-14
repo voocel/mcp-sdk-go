@@ -1,5 +1,7 @@
 package protocol
 
+import "encoding/json"
+
 // PromptArgument 提示模板参数
 type PromptArgument struct {
 	Name        string `json:"name"`
@@ -18,6 +20,28 @@ type Prompt struct {
 type PromptMessage struct {
 	Role    Role    `json:"role"`
 	Content Content `json:"content"`
+}
+
+// UnmarshalJSON 实现自定义JSON反序列化
+func (pm *PromptMessage) UnmarshalJSON(data []byte) error {
+	var temp struct {
+		Role    Role            `json:"role"`
+		Content json.RawMessage `json:"content"`
+	}
+	
+	if err := json.Unmarshal(data, &temp); err != nil {
+		return err
+	}
+	
+	pm.Role = temp.Role
+	
+	content, err := UnmarshalContent(temp.Content)
+	if err != nil {
+		return err
+	}
+	pm.Content = content
+	
+	return nil
 }
 
 // ListPromptsRequest prompts/list 请求和响应

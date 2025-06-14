@@ -33,6 +33,31 @@ type CallToolResult struct {
 	IsError bool      `json:"isError,omitempty"`
 }
 
+// UnmarshalJSON 实现自定义JSON反序列化
+func (ctr *CallToolResult) UnmarshalJSON(data []byte) error {
+	var temp struct {
+		Content []json.RawMessage `json:"content"`
+		IsError bool              `json:"isError,omitempty"`
+	}
+
+	if err := json.Unmarshal(data, &temp); err != nil {
+		return err
+	}
+
+	ctr.IsError = temp.IsError
+	ctr.Content = make([]Content, len(temp.Content))
+
+	for i, raw := range temp.Content {
+		content, err := UnmarshalContent(raw)
+		if err != nil {
+			return err
+		}
+		ctr.Content[i] = content
+	}
+
+	return nil
+}
+
 type ListToolsRequest struct {
 	Cursor string `json:"cursor,omitempty"`
 }

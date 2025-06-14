@@ -12,32 +12,27 @@ import (
 	"github.com/voocel/mcp-sdk-go/transport"
 	"github.com/voocel/mcp-sdk-go/transport/sse"
 	"github.com/voocel/mcp-sdk-go/transport/stdio"
+	"github.com/voocel/mcp-sdk-go/transport/streamable"
 )
 
-// Client 定义了 MCP 客户端接口
 type Client interface {
-	// 初始化和连接
 	Initialize(ctx context.Context, clientInfo protocol.ClientInfo) (*protocol.InitializeResult, error)
 	SendInitialized(ctx context.Context) error
 
-	// 工具相关
 	ListTools(ctx context.Context, cursor string) (*protocol.ListToolsResult, error)
 	CallTool(ctx context.Context, name string, args map[string]interface{}) (*protocol.CallToolResult, error)
 
-	// 资源相关
 	ListResources(ctx context.Context, cursor string) (*protocol.ListResourcesResult, error)
 	ReadResource(ctx context.Context, uri string) (*protocol.ReadResourceResult, error)
 
-	// 提示模板相关
 	ListPrompts(ctx context.Context, cursor string) (*protocol.ListPromptsResult, error)
 	GetPrompt(ctx context.Context, name string, args map[string]string) (*protocol.GetPromptResult, error)
 
-	// 通用
 	SendNotification(ctx context.Context, method string, params interface{}) error
 	Close() error
 }
 
-// MCPClient 实现了 MCP 客户端
+// MCPClient 实现MCP客户端
 type MCPClient struct {
 	transport       transport.Transport
 	clientInfo      protocol.ClientInfo
@@ -62,7 +57,7 @@ func WithTransport(t transport.Transport) Option {
 	}
 }
 
-// WithStdioTransport 配置 STDIO 传输层
+// WithStdioTransport 配置STDIO传输层
 func WithStdioTransport(command string, args []string) Option {
 	return func(c *MCPClient) error {
 		t, err := stdio.NewWithCommand(command, args)
@@ -74,7 +69,7 @@ func WithStdioTransport(command string, args []string) Option {
 	}
 }
 
-// WithSSETransport 配置 SSE 传输层
+// WithSSETransport 配置SSE传输层
 func WithSSETransport(url string) Option {
 	return func(c *MCPClient) error {
 		t := sse.New(url,
@@ -82,6 +77,16 @@ func WithSSETransport(url string) Option {
 		if err := t.Connect(context.Background()); err != nil {
 			return fmt.Errorf("failed to connect SSE transport: %w", err)
 		}
+		c.transport = t
+		return nil
+	}
+}
+
+// WithStreamableHTTPTransport 配置Streamable HTTP传输层
+func WithStreamableHTTPTransport(url string) Option {
+	return func(c *MCPClient) error {
+		t := streamable.New(url,
+			streamable.WithProtocolVersion("2025-03-26"))
 		c.transport = t
 		return nil
 	}
@@ -98,7 +103,7 @@ func WithClientInfo(name, version string) Option {
 	}
 }
 
-// New 创建新的 MCP 客户端
+// New 创建MCP客户端
 func New(options ...Option) (Client, error) {
 	client := &MCPClient{
 		pendingRequests: make(map[string]chan *protocol.JSONRPCMessage),
@@ -226,7 +231,7 @@ func (c *MCPClient) sendRequest(ctx context.Context, method string, params inter
 	}
 }
 
-// Initialize 执行 MCP 初始化握手
+// Initialize MCP初始化握手
 func (c *MCPClient) Initialize(ctx context.Context, clientInfo protocol.ClientInfo) (*protocol.InitializeResult, error) {
 	if c.initialized {
 		return nil, fmt.Errorf("client already initialized")
