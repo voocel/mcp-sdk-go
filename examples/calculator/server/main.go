@@ -10,6 +10,7 @@ import (
 
 	"github.com/voocel/mcp-sdk-go/protocol"
 	"github.com/voocel/mcp-sdk-go/server"
+	"github.com/voocel/mcp-sdk-go/transport/stdio"
 )
 
 func main() {
@@ -20,65 +21,103 @@ func main() {
 	signal.Notify(signalCh, os.Interrupt, syscall.SIGTERM)
 	go func() {
 		<-signalCh
-		log.Println("Received shutdown signal")
+		log.Println("接收到关闭信号")
 		cancel()
 	}()
 
-	mcp := server.New("Calculator Service", "1.0.0")
+	mcp := server.NewFastMCP("计算器服务", "1.0.0")
 
-	mcp.Tool("add", "Add two numbers").
-		WithNumberParam("a", "First number", true).
-		WithNumberParam("b", "Second number", true).
+	mcp.Tool("add", "两个数字相加").
+		WithIntParam("a", "第一个数字", true).
+		WithIntParam("b", "第二个数字", true).
 		Handle(func(ctx context.Context, args map[string]interface{}) (*protocol.CallToolResult, error) {
-			a := args["a"].(float64)
-			b := args["b"].(float64)
-			return protocol.NewToolResultText(fmt.Sprintf("%.2f", a+b)), nil
+			a, ok := args["a"].(float64)
+			if !ok {
+				return protocol.NewToolResultError("参数 'a' 必须是数字"), nil
+			}
+			b, ok := args["b"].(float64)
+			if !ok {
+				return protocol.NewToolResultError("参数 'b' 必须是数字"), nil
+			}
+			
+			result := a + b
+			return protocol.NewToolResultText(fmt.Sprintf("%.2f", result)), nil
 		})
 
-	mcp.Tool("subtract", "Subtract one number from another").
-		WithNumberParam("a", "Minuend", true).
-		WithNumberParam("b", "Subtrahend", true).
+	mcp.Tool("subtract", "一个数字减去另一个数字").
+		WithIntParam("a", "被减数", true).
+		WithIntParam("b", "减数", true).
 		Handle(func(ctx context.Context, args map[string]interface{}) (*protocol.CallToolResult, error) {
-			a := args["a"].(float64)
-			b := args["b"].(float64)
-			return protocol.NewToolResultText(fmt.Sprintf("%.2f", a-b)), nil
+			a, ok := args["a"].(float64)
+			if !ok {
+				return protocol.NewToolResultError("参数 'a' 必须是数字"), nil
+			}
+			b, ok := args["b"].(float64)
+			if !ok {
+				return protocol.NewToolResultError("参数 'b' 必须是数字"), nil
+			}
+			
+			result := a - b
+			return protocol.NewToolResultText(fmt.Sprintf("%.2f", result)), nil
 		})
 
-	mcp.AddTool("multiply", func(a, b float64) float64 {
-		return a * b
-	}, "Multiply two numbers")
-
-	mcp.Tool("divide", "Divide one number by another").
-		WithNumberParam("a", "Dividend", true).
-		WithNumberParam("b", "Divisor", true).
+	mcp.Tool("multiply", "两个数字相乘").
+		WithIntParam("a", "第一个数字", true).
+		WithIntParam("b", "第二个数字", true).
 		Handle(func(ctx context.Context, args map[string]interface{}) (*protocol.CallToolResult, error) {
-			a := args["a"].(float64)
-			b := args["b"].(float64)
+			a, ok := args["a"].(float64)
+			if !ok {
+				return protocol.NewToolResultError("参数 'a' 必须是数字"), nil
+			}
+			b, ok := args["b"].(float64)
+			if !ok {
+				return protocol.NewToolResultError("参数 'b' 必须是数字"), nil
+			}
+			
+			result := a * b
+			return protocol.NewToolResultText(fmt.Sprintf("%.2f", result)), nil
+		})
 
-			if b == 0 {
-				return nil, fmt.Errorf("Cannot divide by zero")
+	mcp.Tool("divide", "一个数字除以另一个数字").
+		WithIntParam("a", "被除数", true).
+		WithIntParam("b", "除数", true).
+		Handle(func(ctx context.Context, args map[string]interface{}) (*protocol.CallToolResult, error) {
+			a, ok := args["a"].(float64)
+			if !ok {
+				return protocol.NewToolResultError("参数 'a' 必须是数字"), nil
+			}
+			b, ok := args["b"].(float64)
+			if !ok {
+				return protocol.NewToolResultError("参数 'b' 必须是数字"), nil
 			}
 
-			return protocol.NewToolResultText(fmt.Sprintf("%.2f", a/b)), nil
+			if b == 0 {
+				return protocol.NewToolResultError("不能除以零"), nil
+			}
+
+			result := a / b
+			return protocol.NewToolResultText(fmt.Sprintf("%.2f", result)), nil
 		})
 
-	mcp.Prompt("calculator_help", "Calculator help information").
+	mcp.Prompt("calculator_help", "计算器帮助信息").
 		Handle(func(ctx context.Context, args map[string]string) (*protocol.GetPromptResult, error) {
 			messages := []protocol.PromptMessage{
 				protocol.NewPromptMessage(protocol.RoleSystem, protocol.NewTextContent(
-					"This is a simple calculator service supporting the four basic operations: addition, subtraction, multiplication, and division.")),
+					"这是一个简单的计算器服务，支持四种基本运算：加法、减法、乘法和除法。")),
 				protocol.NewPromptMessage(protocol.RoleUser, protocol.NewTextContent(
-					"How do I use this calculator?")),
+					"我该如何使用这个计算器？")),
 				protocol.NewPromptMessage(protocol.RoleAssistant, protocol.NewTextContent(
-					"Use the add, subtract, multiply, and divide tools to perform calculations. Each tool accepts two parameters: a and b.")),
+					"使用 add、subtract、multiply 和 divide 工具来执行计算。每个工具都接受两个参数：a 和 b。")),
 			}
-			return protocol.NewGetPromptResult("calculator_help", messages), nil
+			return protocol.NewGetPromptResult("为编程问题提供帮助的提示模板", messages...), nil
 		})
 
-	log.Println("Starting WebSocket server on :8080...")
-	if err := mcp.ServeWebSocket(ctx, ":8080"); err != nil && err != context.Canceled {
-		log.Fatalf("Server error: %v", err)
+	stdioServer := stdio.NewServer(mcp)
+	
+	log.Println("启动计算器 MCP 服务器 (STDIO)...")
+	if err := stdioServer.Serve(ctx); err != nil && err != context.Canceled {
+		log.Fatalf("服务器错误: %v", err)
 	}
 
-	log.Println("Server closed")
+	log.Println("服务器已关闭")
 }

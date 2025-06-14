@@ -5,29 +5,51 @@ import (
 	"fmt"
 	"log"
 	"math/rand"
+	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/voocel/mcp-sdk-go/protocol"
 	"github.com/voocel/mcp-sdk-go/server"
+	"github.com/voocel/mcp-sdk-go/transport/sse"
 )
 
 func main() {
+	// 设置随机种子
 	rand.Seed(time.Now().UnixNano())
 
-	mcp := server.New("Chatbot", "1.0.0")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
-	mcp.Tool("greeting", "Get random greeting").
-		WithStringParam("name", "User name", true).
+	// 处理优雅关闭
+	signalCh := make(chan os.Signal, 1)
+	signal.Notify(signalCh, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		<-signalCh
+		log.Println("接收到关闭信号")
+		cancel()
+	}()
+
+	// 创建 FastMCP 服务器
+	mcp := server.NewFastMCP("聊天机器人", "1.0.0")
+
+	// 注册问候工具
+	mcp.Tool("greeting", "获取随机问候语").
+		WithStringParam("name", "用户名称", true).
 		Handle(func(ctx context.Context, args map[string]interface{}) (*protocol.CallToolResult, error) {
-			name := args["name"].(string)
+			name, ok := args["name"].(string)
+			if !ok {
+				return protocol.NewToolResultError("参数 'name' 必须是字符串"), nil
+			}
 
 			greetings := []string{
-				"Hello, %s! Nice to meet you!",
-				"Hi, %s! How's your day going?",
-				"Great to see you, %s!",
-				"Welcome, %s!",
-				"Hey hey, %s is here!",
+				"你好，%s！很高兴见到你！",
+				"嗨，%s！今天过得怎么样？",
+				"很高兴看到你，%s！",
+				"欢迎，%s！",
+				"嘿嘿，%s 来了！",
 			}
 
 			greeting := greetings[rand.Intn(len(greetings))]
@@ -35,28 +57,40 @@ func main() {
 			return protocol.NewToolResultText(formattedGreeting), nil
 		})
 
-	mcp.Tool("weather", "Get weather for specified city").
-		WithStringParam("city", "City name", true).
+	// 注册天气工具
+	mcp.Tool("weather", "获取指定城市的天气").
+		WithStringParam("city", "城市名称", true).
 		Handle(func(ctx context.Context, args map[string]interface{}) (*protocol.CallToolResult, error) {
-			city := args["city"].(string)
+			city, ok := args["city"].(string)
+			if !ok {
+				return protocol.NewToolResultError("参数 'city' 必须是字符串"), nil
+			}
 
-			weatherTypes := []string{"Sunny", "Cloudy", "Light Rain", "Heavy Rain", "Thunderstorm", "Foggy", "Light Snow", "Heavy Snow"}
+			weatherTypes := []string{"晴天", "多云", "小雨", "大雨", "雷暴", "雾天", "小雪", "大雪"}
 			temperatures := []int{-5, 0, 5, 10, 15, 20, 25, 30, 35}
 
 			weather := weatherTypes[rand.Intn(len(weatherTypes))]
 			temp := temperatures[rand.Intn(len(temperatures))]
 
-			formattedGreeting := fmt.Sprintf("The weather in %s today is %s, temperature %d°C", city, weather, temp)
-			return protocol.NewToolResultText(formattedGreeting), nil
+			formattedWeather := fmt.Sprintf("%s 今天的天气是 %s，温度 %d°C", city, weather, temp)
+			return protocol.NewToolResultText(formattedWeather), nil
 		})
 
-	mcp.Tool("translate", "Simple Chinese-English translation").
-		WithStringParam("text", "Text to translate", true).
-		WithStringParam("target_lang", "Target language (en or zh)", true).
+	// 注册翻译工具
+	mcp.Tool("translate", "简单的中英文翻译").
+		WithStringParam("text", "要翻译的文本", true).
+		WithStringParam("target_lang", "目标语言 (en 或 zh)", true).
 		Handle(func(ctx context.Context, args map[string]interface{}) (*protocol.CallToolResult, error) {
-			text := args["text"].(string)
-			targetLang := args["target_lang"].(string)
+			text, ok := args["text"].(string)
+			if !ok {
+				return protocol.NewToolResultError("参数 'text' 必须是字符串"), nil
+			}
+			targetLang, ok := args["target_lang"].(string)
+			if !ok {
+				return protocol.NewToolResultError("参数 'target_lang' 必须是字符串"), nil
+			}
 
+			// 简单的词典映射
 			enToZh := map[string]string{
 				"hello":   "你好",
 				"world":   "世界",
@@ -64,6 +98,10 @@ func main() {
 				"goodbye": "再见",
 				"book":    "书",
 				"apple":   "苹果",
+				"water":   "水",
+				"food":    "食物",
+				"good":    "好的",
+				"bad":     "坏的",
 			}
 
 			zhToEn := map[string]string{
@@ -71,47 +109,63 @@ func main() {
 				"世界": "world",
 				"谢谢": "thanks",
 				"再见": "goodbye",
-				"书":  "book",
+				"书":   "book",
 				"苹果": "apple",
+				"水":   "water",
+				"食物": "food",
+				"好的": "good",
+				"坏的": "bad",
 			}
 
 			if targetLang == "zh" {
+				// 英译中
 				words := strings.Fields(strings.ToLower(text))
 				for i, word := range words {
-					if translation, ok := enToZh[word]; ok {
+					if translation, exists := enToZh[word]; exists {
 						words[i] = translation
 					}
 				}
 				return protocol.NewToolResultText(strings.Join(words, " ")), nil
 			} else if targetLang == "en" {
+				// 中译英
+				result := text
 				for zh, en := range zhToEn {
-					text = strings.ReplaceAll(text, zh, en)
+					result = strings.ReplaceAll(result, zh, en)
 				}
-				return protocol.NewToolResultText(text), nil
+				return protocol.NewToolResultText(result), nil
+			} else {
+				return protocol.NewToolResultError(fmt.Sprintf("不支持的目标语言: %s", targetLang)), nil
 			}
-
-			return nil, fmt.Errorf("Unsupported target language: %s", targetLang)
 		})
 
-	mcp.Prompt("chat_template", "Chat template").
-		WithArgument("username", "User name", true).
+	// 注册聊天模板提示
+	mcp.Prompt("chat_template", "聊天模板").
+		WithArgument("username", "用户名", true).
 		Handle(func(ctx context.Context, args map[string]string) (*protocol.GetPromptResult, error) {
 			username := args["username"]
+			if username == "" {
+				username = "朋友"
+			}
 
 			messages := []protocol.PromptMessage{
 				protocol.NewPromptMessage(protocol.RoleSystem, protocol.NewTextContent(
-					"You are a friendly chatbot assistant who can provide weather information, translation services, and friendly greetings.")),
+					"你是一个友好的聊天机器人助手，可以提供天气信息、翻译服务和友好的问候。")),
 				protocol.NewPromptMessage(protocol.RoleUser, protocol.NewTextContent(
-					fmt.Sprintf("Hello, I'm %s", username))),
+					fmt.Sprintf("你好，我是 %s", username))),
 				protocol.NewPromptMessage(protocol.RoleAssistant, protocol.NewTextContent(
-					fmt.Sprintf("Hello, %s! Nice to meet you. I can help you check the weather, translate simple Chinese-English texts, or just chat. How can I assist you today?", username))),
+					fmt.Sprintf("你好，%s！很高兴认识你。我可以帮你查看天气、翻译简单的中英文，或者只是聊天。今天我可以为你做些什么吗？", username))),
 			}
 
-			return protocol.NewGetPromptResult("chat_template", messages), nil
+			return protocol.NewGetPromptResult("聊天机器人对话模板", messages...), nil
 		})
 
-	log.Println("Starting WebSocket server on :8082...")
-	if err := mcp.ServeWebSocket(context.Background(), ":8082"); err != nil {
-		log.Fatalf("Server error: %v", err)
+	// 创建SSE传输服务器
+	sseServer := sse.NewServer(":8082", mcp)
+
+	log.Println("启动聊天机器人 MCP 服务器 (SSE) 在端口 :8082...")
+	if err := sseServer.Serve(ctx); err != nil && err != context.Canceled {
+		log.Fatalf("服务器错误: %v", err)
 	}
+
+	log.Println("服务器已关闭")
 }

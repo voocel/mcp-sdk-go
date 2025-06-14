@@ -127,7 +127,7 @@ func main() {
 				protocol.NewPromptMessage(protocol.RoleUser, protocol.NewTextContent(
 					fmt.Sprintf("请告诉我更多关于 %s 的信息。", topic))),
 				protocol.NewPromptMessage(protocol.RoleAssistant, protocol.NewTextContent(
-					"我很乐意为您详细解释 Streamable HTTP 传输协议的相关内容。")),
+					"让我来解释一下 Streamable HTTP 传输协议的相关内容。")),
 			}
 			return protocol.NewGetPromptResult("Streamable HTTP 帮助提示", messages...), nil
 		})
