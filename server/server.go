@@ -208,10 +208,14 @@ func (s *MCPServer) SendNotification(method string, params interface{}) error {
 // HandleMessage 处理JSON-RPC消息
 func (s *MCPServer) HandleMessage(ctx context.Context, message *protocol.JSONRPCMessage) (*protocol.JSONRPCMessage, error) {
 	if err := utils.ValidateJSONRPCMessage(message); err != nil {
+		// 如果是通知消息，不返回错误响应
+		if message.ID == nil {
+			return nil, err
+		}
 		return utils.NewJSONRPCError("", protocol.InvalidRequest, err.Error(), nil)
 	}
 
-	// 处理请求
+	// 处理请求或通知
 	if message.Method != "" {
 		return s.handleRequest(ctx, message)
 	}
@@ -227,6 +231,12 @@ func (s *MCPServer) handleRequest(ctx context.Context, request *protocol.JSONRPC
 	switch request.Method {
 	case "initialize":
 		result, err = s.handleInitialize(ctx, request.Params)
+	case "notifications/initialized":
+		// 处理初始化完成通知
+		err = s.handleInitialized(ctx, request.Params)
+		if err == nil {
+			return nil, nil // 通知消息不需要响应
+		}
 	case "tools/list":
 		result, err = s.handleListTools(ctx, request.Params)
 	case "tools/call":
@@ -240,10 +250,24 @@ func (s *MCPServer) handleRequest(ctx context.Context, request *protocol.JSONRPC
 	case "prompts/get":
 		result, err = s.handleGetPrompt(ctx, request.Params)
 	default:
+		// 对于通知消息，不返回错误响应
+		if request.ID == nil {
+			return nil, fmt.Errorf("unknown notification method: %s", request.Method)
+		}
 		return utils.NewJSONRPCError(*request.ID, protocol.MethodNotFound,
 			fmt.Sprintf("method not found: %s", request.Method), nil)
 	}
 
+	// 如果是通知消息，不返回响应
+	if request.ID == nil {
+		if err != nil {
+			// 对于通知消息的错误，只记录日志，不返回响应
+			return nil, err
+		}
+		return nil, nil
+	}
+
+	// 对于请求消息，返回响应
 	if err != nil {
 		return utils.NewJSONRPCError(*request.ID, protocol.InternalError, err.Error(), nil)
 	}
@@ -275,6 +299,13 @@ func (s *MCPServer) handleInitialize(ctx context.Context, params json.RawMessage
 		Capabilities:    s.capabilities,
 		ServerInfo:      s.serverInfo,
 	}, nil
+}
+
+// 处理初始化完成通知
+func (s *MCPServer) handleInitialized(ctx context.Context, params json.RawMessage) error {
+	// 初始化完成通知，客户端表示已准备好接收通知
+	// 这里可以进行一些后初始化的操作
+	return nil
 }
 
 // 工具列表

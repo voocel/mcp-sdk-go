@@ -43,7 +43,8 @@ type MCPClient struct {
 	pendingRequests map[string]chan *protocol.JSONRPCMessage
 	mu              sync.RWMutex
 
-	initialized bool
+	initialized    bool
+	requestTimeout time.Duration // 添加可配置的超时时间
 }
 
 // Option 定义客户端配置选项
@@ -103,6 +104,14 @@ func WithClientInfo(name, version string) Option {
 	}
 }
 
+// WithTimeout 设置请求超时时间
+func WithTimeout(timeout time.Duration) Option {
+	return func(c *MCPClient) error {
+		c.requestTimeout = timeout
+		return nil
+	}
+}
+
 // New 创建MCP客户端
 func New(options ...Option) (Client, error) {
 	client := &MCPClient{
@@ -112,6 +121,7 @@ func New(options ...Option) (Client, error) {
 			Name:    "mcp-go-client",
 			Version: "1.0.0",
 		},
+		requestTimeout: 30 * time.Second, // 默认30秒超时
 	}
 
 	for _, option := range options {
@@ -139,12 +149,19 @@ func (c *MCPClient) receiveLoop(ctx context.Context) {
 		default:
 			data, err := c.transport.Receive(ctx)
 			if err != nil {
-				// TODO: 添加错误处理和重连逻辑
+				// 如果是context取消，正常退出
+				if ctx.Err() != nil {
+					return
+				}
+				// 其他错误，暂时返回（未来可以添加重连逻辑）
+				// fmt.Printf("接收消息错误: %v\n", err)
 				return
 			}
 
 			var message protocol.JSONRPCMessage
 			if err := json.Unmarshal(data, &message); err != nil {
+				// JSON解析错误，跳过这条消息
+				// fmt.Printf("JSON解析错误: %v\n", err)
 				continue
 			}
 
@@ -173,8 +190,24 @@ func (c *MCPClient) receiveLoop(ctx context.Context) {
 
 // handleNotification 处理服务端通知
 func (c *MCPClient) handleNotification(message *protocol.JSONRPCMessage) {
-	// TODO: 实现通知处理逻辑
-	// 例如：tools/list_changed, resources/list_changed, prompts/list_changed 等
+	switch message.Method {
+	case "notifications/tools/list_changed":
+		// 工具列表变更通知
+		// 客户端可以选择重新获取工具列表
+		// 这里可以触发回调或事件
+	case "notifications/resources/list_changed":
+		// 资源列表变更通知
+		// 客户端可以选择重新获取资源列表
+	case "notifications/prompts/list_changed":
+		// 提示模板列表变更通知
+		// 客户端可以选择重新获取提示模板列表
+	case "notifications/progress":
+		// 进度通知（如果服务器支持）
+		// 可以用于长时间运行的操作
+	default:
+		// 未知通知，记录但不报错
+		// fmt.Printf("收到未知通知: %s\n", message.Method)
+	}
 }
 
 // sendRequest 发送请求并等待响应
@@ -226,7 +259,7 @@ func (c *MCPClient) sendRequest(ctx context.Context, method string, params inter
 			return nil, fmt.Errorf("server error [%d]: %s", resp.Error.Code, resp.Error.Message)
 		}
 		return resp, nil
-	case <-time.After(30 * time.Second):
+	case <-time.After(c.requestTimeout):
 		return nil, fmt.Errorf("request timeout")
 	}
 }

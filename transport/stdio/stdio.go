@@ -130,15 +130,20 @@ func (s *Server) Serve(ctx context.Context) error {
 
 			response, err := s.handler.HandleMessage(ctx, data)
 			if err != nil {
-				errorResp := struct {
-					Error string `json:"error"`
-				}{
-					Error: err.Error(),
+				if response != nil {
+					errorResp := struct {
+						Error string `json:"error"`
+					}{
+						Error: err.Error(),
+					}
+					response, _ = json.Marshal(errorResp)
 				}
-				response, _ = json.Marshal(errorResp)
 			}
-			if err := t.Send(ctx, response); err != nil {
-				return err
+			
+			if response != nil {
+				if err := t.Send(ctx, response); err != nil {
+					return err
+				}
 			}
 		}
 	}

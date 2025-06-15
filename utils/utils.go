@@ -4,10 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/google/uuid"
-	"github.com/voocel/mcp-sdk-go/protocol"
 	"reflect"
 	"strings"
+
+	"github.com/google/uuid"
+	"github.com/voocel/mcp-sdk-go/protocol"
 )
 
 func NewJSONRPCRequest(method string, params interface{}) (*protocol.JSONRPCMessage, error) {
@@ -207,12 +208,19 @@ func ValidateJSONRPCMessage(msg *protocol.JSONRPCMessage) error {
 		return fmt.Errorf("invalid jsonrpc version: %s", msg.JSONRPC)
 	}
 
-	// 请求必须有method和id
+	// 通知消息：有method但没有id（这是合法的）
 	if msg.Method != "" && msg.ID == nil {
-		return fmt.Errorf("request must have an id")
+		// 这是通知消息，不需要验证更多
+		return nil
 	}
 
-	// 响应必须有id和result或error
+	// 请求消息：有method和id
+	if msg.Method != "" && msg.ID != nil {
+		// 这是请求消息，合法
+		return nil
+	}
+
+	// 响应消息：没有method，但有id和result或error
 	if msg.Method == "" {
 		if msg.ID == nil {
 			return fmt.Errorf("response must have an id")

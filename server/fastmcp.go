@@ -123,6 +123,27 @@ func (tb *ToolBuilder) WithBoolParam(name, description string, required bool) *T
 	return tb
 }
 
+// WithNumberParam 添加数字参数（支持整数和浮点数）
+func (tb *ToolBuilder) WithNumberParam(name, description string, required bool) *ToolBuilder {
+	properties := tb.inputSchema["properties"].(map[string]interface{})
+	properties[name] = map[string]interface{}{
+		"type":        "number",
+		"description": description,
+	}
+
+	if required {
+		if reqList, ok := tb.inputSchema["required"]; ok {
+			if reqArray, ok := reqList.([]string); ok {
+				tb.inputSchema["required"] = append(reqArray, name)
+			}
+		} else {
+			tb.inputSchema["required"] = []string{name}
+		}
+	}
+
+	return tb
+}
+
 // WithInputSchema 设置自定义输入schema
 func (tb *ToolBuilder) WithInputSchema(schema protocol.JSONSchema) *ToolBuilder {
 	tb.inputSchema = schema
