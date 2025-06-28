@@ -28,8 +28,8 @@ func main() {
 	mcp := server.NewFastMCP("计算器服务", "1.0.0")
 
 	mcp.Tool("add", "两个数字相加").
-		WithIntParam("a", "第一个数字", true).
-		WithIntParam("b", "第二个数字", true).
+		WithNumberParam("a", "第一个数字", true).
+		WithNumberParam("b", "第二个数字", true).
 		Handle(func(ctx context.Context, args map[string]interface{}) (*protocol.CallToolResult, error) {
 			a, ok := args["a"].(float64)
 			if !ok {
@@ -39,14 +39,14 @@ func main() {
 			if !ok {
 				return protocol.NewToolResultError("参数 'b' 必须是数字"), nil
 			}
-			
+
 			result := a + b
 			return protocol.NewToolResultText(fmt.Sprintf("%.2f", result)), nil
 		})
 
 	mcp.Tool("subtract", "一个数字减去另一个数字").
-		WithIntParam("a", "被减数", true).
-		WithIntParam("b", "减数", true).
+		WithNumberParam("a", "被减数", true).
+		WithNumberParam("b", "减数", true).
 		Handle(func(ctx context.Context, args map[string]interface{}) (*protocol.CallToolResult, error) {
 			a, ok := args["a"].(float64)
 			if !ok {
@@ -56,14 +56,14 @@ func main() {
 			if !ok {
 				return protocol.NewToolResultError("参数 'b' 必须是数字"), nil
 			}
-			
+
 			result := a - b
 			return protocol.NewToolResultText(fmt.Sprintf("%.2f", result)), nil
 		})
 
 	mcp.Tool("multiply", "两个数字相乘").
-		WithIntParam("a", "第一个数字", true).
-		WithIntParam("b", "第二个数字", true).
+		WithNumberParam("a", "第一个数字", true).
+		WithNumberParam("b", "第二个数字", true).
 		Handle(func(ctx context.Context, args map[string]interface{}) (*protocol.CallToolResult, error) {
 			a, ok := args["a"].(float64)
 			if !ok {
@@ -73,14 +73,14 @@ func main() {
 			if !ok {
 				return protocol.NewToolResultError("参数 'b' 必须是数字"), nil
 			}
-			
+
 			result := a * b
 			return protocol.NewToolResultText(fmt.Sprintf("%.2f", result)), nil
 		})
 
 	mcp.Tool("divide", "一个数字除以另一个数字").
-		WithIntParam("a", "被除数", true).
-		WithIntParam("b", "除数", true).
+		WithNumberParam("a", "被除数", true).
+		WithNumberParam("b", "除数", true).
 		Handle(func(ctx context.Context, args map[string]interface{}) (*protocol.CallToolResult, error) {
 			a, ok := args["a"].(float64)
 			if !ok {
@@ -113,7 +113,7 @@ func main() {
 		})
 
 	stdioServer := stdio.NewServer(mcp)
-	
+
 	log.Println("启动计算器 MCP 服务器 (STDIO)...")
 	if err := stdioServer.Serve(ctx); err != nil && err != context.Canceled {
 		log.Fatalf("服务器错误: %v", err)
