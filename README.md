@@ -16,11 +16,11 @@
 
 ## 介绍
 
-MCP Go SDK是模型上下文协议（Model Context Protocol）的Go语言实现，同时支持 MCP 2024-11-05 和最新的 MCP 2025-03-26 规范，提供了与大语言模型交互的标准化接口。
+MCP Go SDK是模型上下文协议（Model Context Protocol）的Go语言实现，完全支持最新的 MCP 2025-06-18 规范，同时保持与 MCP 2024-11-05 的向后兼容性，提供了与大语言模型交互的标准化接口。
 
 ## 🌟 功能特点
 
-- ✅ **完全符合 MCP 标准** - 支持 MCP 2024-11-05 和 2025-03-26 规范
+- ✅ **完全符合 MCP 标准** - 支持最新的 MCP 2025-06-18 规范，向后兼容 2024-11-05
 - 🔧 **工具管理** - 注册和调用各种工具
 - 📁 **资源访问** - 读取和管理各种资源
 - 💬 **提示模板** - 支持参数化提示模板
@@ -236,7 +236,7 @@ cd examples/file-server/client && go run main.go
 ```
 
 ### 4. 🌐 [Streamable HTTP Demo](./examples/streamable-demo/) - Streamable HTTP 传输演示
-展示最新 MCP 2025-03-26 规范中的 Streamable HTTP 传输协议。
+展示最新 MCP 2025-06-18 规范中的 Streamable HTTP 传输协议。
 
 **功能特性:**
 - 🌐 **单一端点** - 统一的 HTTP 端点处理所有通信
@@ -244,7 +244,7 @@ cd examples/file-server/client && go run main.go
 - 🔄 **动态升级** - 根据需要自动升级到 SSE 流
 - 🛡️ **安全防护** - DNS rebinding 攻击防护
 - 🔄 **可恢复连接** - 支持连接中断后的恢复
-- 🔌 **传输**: Streamable HTTP (MCP 2025-03-26)
+- 🔌 **传输**: Streamable HTTP (MCP 2025-06-18)
 
 **运行方式:**
 ```bash
@@ -355,7 +355,7 @@ prompt, err := client.GetPrompt(ctx, "prompt_name", map[string]string{
 ## 🔧 技术特性
 
 ### MCP 标准合规性
-完全符合 MCP 2024-11-05 规范：
+完全符合 MCP 2025-06-18 规范：
 
 - ✅ **JSON-RPC 2.0** 消息格式
 - ✅ **标准方法名称** (`tools/list`, `tools/call`, `resources/list`, `resources/read`, `prompts/list`, `prompts/get`)
@@ -365,9 +365,9 @@ prompt, err := client.GetPrompt(ctx, "prompt_name", map[string]string{
 - ✅ **类型安全的参数处理**
 
 ### 支持的传输方式
-- 📡 **STDIO** - 适合子进程通信，官方标准 (MCP 2024-11-05)
-- 🌐 **SSE (Server-Sent Events)** - 适合 Web 集成，官方标准 (MCP 2024-11-05)
-- 🚀 **Streamable HTTP** - 下一代传输协议，官方标准 (MCP 2025-03-26)
+- 📡 **STDIO** - 适合子进程通信，官方标准 (MCP 2024-11-05+)
+- 🌐 **SSE (Server-Sent Events)** - 适合 Web 集成，官方标准 (MCP 2024-11-05+)
+- 🚀 **Streamable HTTP** - 下一代传输协议，官方标准 (MCP 2025-06-18)
 - ❌ ~~WebSocket~~ - 已移除（非官方标准）
 - ❌ ~~gRPC~~ - 已移除（非官方标准）
 
@@ -429,9 +429,9 @@ if result.IsError {
 
 | 传输方式 | 使用场景 | 优点 | 缺点 | 官方支持 | 协议版本 |
 |---------|---------|------|------|----------|----------|
-| **STDIO** | 子进程通信 | 简单、可靠 | 单向通信 | ✅ 官方标准 | 2024-11-05 |
-| **SSE** | Web 应用 | 实时推送、HTTP 兼容 | 需要两个端点 | ✅ 官方标准 | 2024-11-05 |
-| **Streamable HTTP** | 现代 Web 应用 | 单一端点、会话管理、可恢复 | 较新，客户端支持有限 | ✅ 官方标准 | 2025-03-26 |
+| **STDIO** | 子进程通信 | 简单、可靠 | 单向通信 | ✅ 官方标准 | 2024-11-05+ |
+| **SSE** | Web 应用 | 实时推送、HTTP 兼容 | 需要两个端点 | ✅ 官方标准 | 2024-11-05+ |
+| **Streamable HTTP** | 现代 Web 应用 | 单一端点、会话管理、可恢复 | 成熟稳定 | ✅ 官方标准 | 2025-06-18 |
 | ~~WebSocket~~ | ~~实时应用~~ | ~~双向通信~~ | ~~非标准~~ | ❌ 已移除 | - |
 | ~~gRPC~~ | ~~微服务~~ | ~~高性能~~ | ~~非标准~~ | ❌ 已移除 | - |
 

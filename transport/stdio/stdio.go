@@ -49,8 +49,8 @@ func NewWithCommand(command string, args []string) (*Transport, error) {
 func NewWithStdio() *Transport {
 	return &Transport{
 		cmd:     nil,
-		stdin:   os.Stdin,
-		stdout:  os.Stdout,
+		stdin:   os.Stdout, // 服务器写入到 stdout
+		stdout:  os.Stdin,  // 服务器从 stdin 读取
 		scanner: bufio.NewScanner(os.Stdin),
 	}
 }
@@ -130,16 +130,26 @@ func (s *Server) Serve(ctx context.Context) error {
 
 			response, err := s.handler.HandleMessage(ctx, data)
 			if err != nil {
-				if response != nil {
-					errorResp := struct {
-						Error string `json:"error"`
-					}{
-						Error: err.Error(),
+				// 如果处理出错但没有响应，尝试解析原始消息获取 ID
+				if response == nil {
+					var msg map[string]interface{}
+					if json.Unmarshal(data, &msg) == nil {
+						if id, ok := msg["id"]; ok {
+							// 创建标准 JSON-RPC 错误响应
+							errorResp := map[string]interface{}{
+								"jsonrpc": "2.0",
+								"id":      id,
+								"error": map[string]interface{}{
+									"code":    -32603, // Internal error
+									"message": err.Error(),
+								},
+							}
+							response, _ = json.Marshal(errorResp)
+						}
 					}
-					response, _ = json.Marshal(errorResp)
 				}
 			}
-			
+
 			if response != nil {
 				if err := t.Send(ctx, response); err != nil {
 					return err

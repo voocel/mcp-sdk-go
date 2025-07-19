@@ -66,7 +66,8 @@ type ListResourceTemplatesResult struct {
 type ResourcesListChangedNotification struct{}
 
 type ResourcesUpdatedNotification struct {
-	URI string `json:"uri"`
+	URI   string `json:"uri"`
+	Title string `json:"title,omitempty"` // 2025-06-18 新增：可选的资源标题
 }
 
 func NewResource(uri, name, description, mimeType string) Resource {
@@ -98,4 +99,13 @@ func NewReadResourceResult(contents ...ResourceContents) *ReadResourceResult {
 	return &ReadResourceResult{
 		Contents: contents,
 	}
+}
+
+// NewResourcesUpdatedNotification 创建资源更新通知
+func NewResourcesUpdatedNotification(uri string, title ...string) ResourcesUpdatedNotification {
+	notification := ResourcesUpdatedNotification{URI: uri}
+	if len(title) > 0 && title[0] != "" {
+		notification.Title = title[0]
+	}
+	return notification
 }

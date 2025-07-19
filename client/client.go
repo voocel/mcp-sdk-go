@@ -166,9 +166,10 @@ func (c *MCPClient) receiveLoop(ctx context.Context) {
 			}
 
 			// 处理响应消息
-			if message.ID != nil {
+			if !message.IsNotification() {
+				idStr := message.GetIDString()
 				c.mu.RLock()
-				ch, ok := c.pendingRequests[*message.ID]
+				ch, ok := c.pendingRequests[idStr]
 				c.mu.RUnlock()
 
 				if ok {
@@ -181,7 +182,7 @@ func (c *MCPClient) receiveLoop(ctx context.Context) {
 			}
 
 			// 处理通知消息
-			if message.Method != "" && message.ID == nil {
+			if message.Method != "" && message.IsNotification() {
 				c.handleNotification(&message)
 			}
 		}
@@ -225,7 +226,7 @@ func (c *MCPClient) sendRequest(ctx context.Context, method string, params inter
 
 	message := protocol.JSONRPCMessage{
 		JSONRPC: protocol.JSONRPCVersion,
-		ID:      &id,
+		ID:      protocol.StringToID(id),
 		Method:  method,
 		Params:  paramsJSON,
 	}

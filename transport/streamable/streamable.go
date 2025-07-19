@@ -20,7 +20,7 @@ import (
 const (
 	MCPProtocolVersionHeader = "MCP-Protocol-Version"
 	MCPSessionIDHeader       = "Mcp-Session-Id"
-	DefaultProtocolVersion   = "2025-03-26"
+	DefaultProtocolVersion   = "2025-06-18"
 	LastEventIDHeader        = "Last-Event-ID"
 )
 

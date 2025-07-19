@@ -25,7 +25,7 @@ func NewJSONRPCRequest(method string, params interface{}) (*protocol.JSONRPCMess
 
 	return &protocol.JSONRPCMessage{
 		JSONRPC: protocol.JSONRPCVersion,
-		ID:      &id,
+		ID:      protocol.StringToID(id),
 		Method:  method,
 		Params:  paramsBytes,
 	}, nil
@@ -43,7 +43,7 @@ func NewJSONRPCResponse(id string, result interface{}) (*protocol.JSONRPCMessage
 
 	return &protocol.JSONRPCMessage{
 		JSONRPC: protocol.JSONRPCVersion,
-		ID:      &id,
+		ID:      protocol.StringToID(id),
 		Result:  resultBytes,
 	}, nil
 }
@@ -51,7 +51,7 @@ func NewJSONRPCResponse(id string, result interface{}) (*protocol.JSONRPCMessage
 func NewJSONRPCError(id string, code int, message string, data interface{}) (*protocol.JSONRPCMessage, error) {
 	return &protocol.JSONRPCMessage{
 		JSONRPC: protocol.JSONRPCVersion,
-		ID:      &id,
+		ID:      protocol.StringToID(id),
 		Error: &protocol.JSONRPCError{
 			Code:    code,
 			Message: message,

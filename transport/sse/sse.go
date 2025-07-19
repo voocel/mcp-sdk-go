@@ -21,7 +21,7 @@ import (
 const (
 	MCPProtocolVersionHeader = "MCP-Protocol-Version"
 	MCPSessionIDHeader       = "MCP-Session-Id"
-	DefaultProtocolVersion   = "2024-11-05"
+	DefaultProtocolVersion   = "2025-06-18"
 )
 
 type Transport struct {
@@ -121,7 +121,6 @@ func (t *Transport) Send(ctx context.Context, data []byte) error {
 		t.closeFunc = resp.Body.Close
 		go t.processEvents(ctx, resp.Body)
 	} else if strings.Contains(contentType, "application/json") {
-		// 单个JSON响应
 		body, err := io.ReadAll(resp.Body)
 		if err != nil {
 			return fmt.Errorf("failed to read response: %w", err)
@@ -428,21 +427,21 @@ func (s *Server) handleMessage(w http.ResponseWriter, r *http.Request) {
 
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
-		s.sendJSONRPCError(w, nil, protocol.ParseError, "Failed to read request body", nil)
+		s.sendJSONRPCError(w, "", protocol.ParseError, "Failed to read request body", nil)
 		return
 	}
 
 	// 验证JSON-RPC格式
 	var message protocol.JSONRPCMessage
 	if err := json.Unmarshal(body, &message); err != nil {
-		s.sendJSONRPCError(w, nil, protocol.ParseError, "Invalid JSON-RPC format", nil)
+		s.sendJSONRPCError(w, "", protocol.ParseError, "Invalid JSON-RPC format", nil)
 		return
 	}
 
 	// 处理消息
 	response, err := s.handler.HandleMessage(r.Context(), body)
 	if err != nil {
-		s.sendJSONRPCError(w, message.ID, protocol.InternalError, err.Error(), nil)
+		s.sendJSONRPCError(w, message.GetIDString(), protocol.InternalError, err.Error(), nil)
 		return
 	}
 
@@ -467,7 +466,6 @@ func (s *Server) handleMessage(w http.ResponseWriter, r *http.Request) {
 			// 如果缓冲区满，直接返回HTTP响应
 		}
 
-		// 启动SSE流
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.Header().Set("Cache-Control", "no-cache")
 		w.Header().Set("Connection", "keep-alive")
@@ -478,23 +476,21 @@ func (s *Server) handleMessage(w http.ResponseWriter, r *http.Request) {
 			flusher.Flush()
 		}
 	} else {
-		// 直接返回JSON响应
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set(MCPSessionIDHeader, session.ID)
 		w.WriteHeader(http.StatusOK)
 		w.Write(response)
 	}
 
-	// 更新会话活动时间
 	session.mu.Lock()
 	session.LastActive = time.Now()
 	session.mu.Unlock()
 }
 
-func (s *Server) sendJSONRPCError(w http.ResponseWriter, id *string, code int, message string, data interface{}) {
+func (s *Server) sendJSONRPCError(w http.ResponseWriter, id string, code int, message string, data interface{}) {
 	errorResp := protocol.JSONRPCMessage{
 		JSONRPC: "2.0",
-		ID:      id,
+		ID:      protocol.StringToID(id),
 		Error: &protocol.JSONRPCError{
 			Code:    code,
 			Message: message,
@@ -521,7 +517,6 @@ func (s *Server) Serve(ctx context.Context) error {
 }
 
 func (s *Server) Shutdown(ctx context.Context) error {
-	// 关闭所有会话
 	s.mu.Lock()
 	for _, session := range s.sessions {
 		close(session.Client)

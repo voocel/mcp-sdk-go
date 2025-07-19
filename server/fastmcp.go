@@ -229,6 +229,11 @@ func (f *FastMCP) HandleMessage(ctx context.Context, data []byte) ([]byte, error
 		return nil, err
 	}
 
+	// 不返回任何数据
+	if response == nil {
+		return nil, nil
+	}
+
 	return json.Marshal(response)
 }
 

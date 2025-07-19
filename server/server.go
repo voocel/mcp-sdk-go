@@ -251,15 +251,15 @@ func (s *MCPServer) handleRequest(ctx context.Context, request *protocol.JSONRPC
 		result, err = s.handleGetPrompt(ctx, request.Params)
 	default:
 		// 对于通知消息，不返回错误响应
-		if request.ID == nil {
+		if request.IsNotification() {
 			return nil, fmt.Errorf("unknown notification method: %s", request.Method)
 		}
-		return utils.NewJSONRPCError(*request.ID, protocol.MethodNotFound,
+		return utils.NewJSONRPCError(request.GetIDString(), protocol.MethodNotFound,
 			fmt.Sprintf("method not found: %s", request.Method), nil)
 	}
 
 	// 如果是通知消息，不返回响应
-	if request.ID == nil {
+	if request.IsNotification() {
 		if err != nil {
 			// 对于通知消息的错误，只记录日志，不返回响应
 			return nil, err
@@ -269,10 +269,10 @@ func (s *MCPServer) handleRequest(ctx context.Context, request *protocol.JSONRPC
 
 	// 对于请求消息，返回响应
 	if err != nil {
-		return utils.NewJSONRPCError(*request.ID, protocol.InternalError, err.Error(), nil)
+		return utils.NewJSONRPCError(request.GetIDString(), protocol.InternalError, err.Error(), nil)
 	}
 
-	return utils.NewJSONRPCResponse(*request.ID, result)
+	return utils.NewJSONRPCResponse(request.GetIDString(), result)
 }
 
 // 初始化请求
@@ -284,10 +284,14 @@ func (s *MCPServer) handleInitialize(ctx context.Context, params json.RawMessage
 		}
 	}
 
-	// 检查协议版本
-	if req.ProtocolVersion != protocol.MCPVersion {
-		return nil, fmt.Errorf("unsupported protocol version: %s", req.ProtocolVersion)
+	// 检查协议版本兼容性并选择合适的版本
+	if !protocol.IsVersionSupported(req.ProtocolVersion) {
+		return nil, fmt.Errorf("unsupported protocol version: %s, supported versions: %v",
+			req.ProtocolVersion, protocol.GetSupportedVersions())
 	}
+
+	// 使用客户端请求的版本
+	negotiatedVersion := req.ProtocolVersion
 
 	s.mu.Lock()
 	s.initialized = true
@@ -295,7 +299,7 @@ func (s *MCPServer) handleInitialize(ctx context.Context, params json.RawMessage
 	s.mu.Unlock()
 
 	return &protocol.InitializeResult{
-		ProtocolVersion: protocol.MCPVersion,
+		ProtocolVersion: negotiatedVersion,
 		Capabilities:    s.capabilities,
 		ServerInfo:      s.serverInfo,
 	}, nil
@@ -304,7 +308,6 @@ func (s *MCPServer) handleInitialize(ctx context.Context, params json.RawMessage
 // 处理初始化完成通知
 func (s *MCPServer) handleInitialized(ctx context.Context, params json.RawMessage) error {
 	// 初始化完成通知，客户端表示已准备好接收通知
-	// 这里可以进行一些后初始化的操作
 	return nil
 }
 
