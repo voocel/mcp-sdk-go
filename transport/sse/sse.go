@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -25,15 +26,18 @@ const (
 )
 
 type Transport struct {
-	url             string
+	baseURL         *url.URL
+	endpoint        *url.URL
 	client          *http.Client
 	messageBuffer   chan []byte
 	closeOnce       sync.Once
 	closeFunc       func() error
-	mu              sync.Mutex
+	mu              sync.RWMutex
 	sessionID       string
 	protocolVersion string
 	closed          bool
+	endpointChan    chan struct{}
+	started         bool
 }
 
 type Option func(*Transport)
@@ -50,12 +54,19 @@ func WithSessionID(sessionID string) Option {
 	}
 }
 
-func New(url string, options ...Option) *Transport {
+func New(urlStr string, options ...Option) *Transport {
+	parsedURL, err := url.Parse(urlStr)
+	if err != nil {
+		// 如果解析失败，使用原始字符串作为fallback
+		parsedURL = &url.URL{Scheme: "http", Host: "localhost", Path: urlStr}
+	}
+
 	t := &Transport{
-		url:             url,
+		baseURL:         parsedURL,
 		client:          &http.Client{},
 		messageBuffer:   make(chan []byte, 100),
 		protocolVersion: DefaultProtocolVersion,
+		endpointChan:    make(chan struct{}),
 	}
 
 	for _, option := range options {
@@ -77,17 +88,21 @@ func generateSessionID() string {
 }
 
 func (t *Transport) Send(ctx context.Context, data []byte) error {
-	t.mu.Lock()
-	defer t.mu.Unlock()
+	t.mu.RLock()
+	endpoint := t.endpoint
+	t.mu.RUnlock()
 
-	req, err := http.NewRequestWithContext(ctx, "POST", t.url, bytes.NewReader(data))
+	if endpoint == nil {
+		return fmt.Errorf("endpoint not received, call Connect first")
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "POST", endpoint.String(), bytes.NewReader(data))
 	if err != nil {
 		return fmt.Errorf("failed to create request: %w", err)
 	}
 
 	// 添加MCP标准头部
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json, text/event-stream")
 	req.Header.Set(MCPProtocolVersionHeader, t.protocolVersion)
 	req.Header.Set(MCPSessionIDHeader, t.sessionID)
 
@@ -97,40 +112,27 @@ func (t *Transport) Send(ctx context.Context, data []byte) error {
 	}
 	defer resp.Body.Close()
 
-	// 处理不同类型的响应
-	contentType := resp.Header.Get("Content-Type")
-
+	// 检查响应状态
 	if resp.StatusCode == http.StatusAccepted {
-		// 202 Accepted for notifications/responses
+		// 202 Accepted - 消息已接收，响应将通过SSE发送
 		return nil
-	} else if resp.StatusCode != http.StatusOK {
-		// 处理错误响应
+	}
+
+	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-
-		// 尝试解析JSON-RPC错误
-		var errorResp protocol.JSONRPCMessage
-		if err := json.Unmarshal(body, &errorResp); err == nil && errorResp.Error != nil {
-			return fmt.Errorf("MCP error %d: %s", errorResp.Error.Code, errorResp.Error.Message)
-		}
-
 		return fmt.Errorf("server returned status %d: %s", resp.StatusCode, body)
 	}
 
-	if strings.Contains(contentType, "text/event-stream") {
-		// 服务器开始SSE流，启动事件处理
-		t.closeFunc = resp.Body.Close
-		go t.processEvents(ctx, resp.Body)
-	} else if strings.Contains(contentType, "application/json") {
-		body, err := io.ReadAll(resp.Body)
-		if err != nil {
-			return fmt.Errorf("failed to read response: %w", err)
-		}
+	// 对于同步响应，读取并缓存
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("failed to read response: %w", err)
+	}
 
-		select {
-		case t.messageBuffer <- body:
-		case <-ctx.Done():
-			return ctx.Err()
-		}
+	select {
+	case t.messageBuffer <- body:
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 
 	return nil
@@ -149,12 +151,12 @@ func (t *Transport) Receive(ctx context.Context) ([]byte, error) {
 }
 
 func (t *Transport) startEventStream(ctx context.Context) error {
-	req, err := http.NewRequestWithContext(ctx, "GET", t.url, nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", t.baseURL.String(), nil)
 	if err != nil {
 		return fmt.Errorf("failed to create request: %w", err)
 	}
 
-	// 添加MCP标准头部
+	// 添加SSE标准头部
 	req.Header.Set("Accept", "text/event-stream")
 	req.Header.Set("Cache-Control", "no-cache")
 	req.Header.Set("Connection", "keep-alive")
@@ -166,11 +168,6 @@ func (t *Transport) startEventStream(ctx context.Context) error {
 		return fmt.Errorf("failed to start event stream: %w", err)
 	}
 
-	if resp.StatusCode == http.StatusMethodNotAllowed {
-		resp.Body.Close()
-		return fmt.Errorf("server does not support SSE streams")
-	}
-
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
@@ -180,7 +177,7 @@ func (t *Transport) startEventStream(ctx context.Context) error {
 	// 检查协议版本兼容性
 	serverVersion := resp.Header.Get(MCPProtocolVersionHeader)
 	if serverVersion != "" && serverVersion != t.protocolVersion {
-		// 可以记录警告，但不阻止连接
+		// 记录警告，但不阻止连接
 		fmt.Printf("Warning: Protocol version mismatch. Client: %s, Server: %s\n",
 			t.protocolVersion, serverVersion)
 	}
@@ -203,46 +200,114 @@ func (t *Transport) processEvents(ctx context.Context, body io.ReadCloser) {
 	}()
 
 	scanner := bufio.NewScanner(body)
-	var buffer strings.Builder
+	var event, data string
 
 	for scanner.Scan() {
-		line := scanner.Text()
+		line := strings.TrimRight(scanner.Text(), "\r\n")
 
+		// 空行表示事件结束
 		if line == "" {
-			if buffer.Len() > 0 {
-				eventData := buffer.String()
-
-				if strings.HasPrefix(eventData, "data:") {
-					data := strings.TrimPrefix(eventData, "data:")
-					data = strings.TrimSpace(data)
-
-					// 验证JSON格式
-					var msg protocol.JSONRPCMessage
-					if err := json.Unmarshal([]byte(data), &msg); err == nil {
-						select {
-						case t.messageBuffer <- []byte(data):
-						case <-ctx.Done():
-							return
-						}
-					}
+			if data != "" {
+				// 如果没有指定事件类型，默认为message
+				if event == "" {
+					event = "message"
 				}
-
-				buffer.Reset()
+				t.handleSSEEvent(event, data)
+				event = ""
+				data = ""
 			}
 			continue
 		}
 
-		buffer.WriteString(line)
-		buffer.WriteString("\n")
+		// 解析SSE字段
+		if strings.HasPrefix(line, "event:") {
+			event = strings.TrimSpace(strings.TrimPrefix(line, "event:"))
+		} else if strings.HasPrefix(line, "data:") {
+			data = strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+		}
+		// 忽略其他字段如id:, retry:等
 	}
 
-	if err := scanner.Err(); err != nil {
+	// 处理最后一个事件（如果没有以空行结尾）
+	if data != "" {
+		if event == "" {
+			event = "message"
+		}
+		t.handleSSEEvent(event, data)
+	}
+
+	if err := scanner.Err(); err != nil && !t.closed {
 		fmt.Printf("SSE scanner error: %v\n", err)
 	}
 }
 
+func (t *Transport) handleSSEEvent(event, data string) {
+	switch event {
+	case "endpoint":
+		// 解析endpoint URL
+		endpoint, err := t.baseURL.Parse(data)
+		if err != nil {
+			fmt.Printf("Error parsing endpoint URL: %v\n", err)
+			return
+		}
+		// 安全检查：确保endpoint与baseURL同源
+		if endpoint.Host != t.baseURL.Host {
+			fmt.Printf("Endpoint origin does not match connection origin\n")
+			return
+		}
+
+		t.mu.Lock()
+		t.endpoint = endpoint
+		t.mu.Unlock()
+
+		// 通知endpoint已接收
+		select {
+		case <-t.endpointChan:
+			// 已经关闭
+		default:
+			close(t.endpointChan)
+		}
+
+	case "message":
+		// 验证JSON格式并缓存消息
+		var msg protocol.JSONRPCMessage
+		if err := json.Unmarshal([]byte(data), &msg); err == nil {
+			select {
+			case t.messageBuffer <- []byte(data):
+			default:
+				// 缓冲区满，丢弃消息
+				fmt.Printf("Message buffer full, dropping message\n")
+			}
+		} else {
+			fmt.Printf("Invalid JSON-RPC message: %v\n", err)
+		}
+	}
+}
+
 func (t *Transport) Connect(ctx context.Context) error {
-	return t.startEventStream(ctx)
+	if t.started {
+		return fmt.Errorf("transport already started")
+	}
+
+	// 启动SSE流
+	if err := t.startEventStream(ctx); err != nil {
+		return err
+	}
+
+	// 等待endpoint接收
+	timeout := time.NewTimer(30 * time.Second)
+	defer timeout.Stop()
+
+	select {
+	case <-t.endpointChan:
+		// endpoint已接收
+		t.started = true
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timeout.C:
+		return fmt.Errorf("timeout waiting for endpoint")
+	}
 }
 
 func (t *Transport) Close() error {
@@ -290,7 +355,10 @@ func NewServer(addr string, handler transport.Handler) *Server {
 	}
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/", s.handleRequest)
+	// SSE连接端点 - 支持根路径和/sse路径
+	mux.HandleFunc("/", s.handleSSE)
+	mux.HandleFunc("/sse", s.handleSSE)
+	mux.HandleFunc("/message", s.handleMessage)
 
 	s.httpServer = &http.Server{
 		Addr:    addr,
@@ -319,30 +387,6 @@ func (s *Server) cleanupSessions() {
 			session.mu.RUnlock()
 		}
 		s.mu.Unlock()
-	}
-}
-
-func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
-	// 验证协议版本
-	clientVersion := r.Header.Get(MCPProtocolVersionHeader)
-	if clientVersion != "" && clientVersion != s.protocolVersion {
-		if clientVersion == "2025-03-26" || clientVersion == "2024-11-05" {
-			// 兼容支持的版本
-		} else {
-			http.Error(w, "Unsupported protocol version", http.StatusBadRequest)
-			return
-		}
-	}
-
-	// 添加协议版本响应头
-	w.Header().Set(MCPProtocolVersionHeader, s.protocolVersion)
-
-	if r.Method == "GET" {
-		s.handleSSE(w, r)
-	} else if r.Method == "POST" {
-		s.handleMessage(w, r)
-	} else {
-		w.WriteHeader(http.StatusMethodNotAllowed)
 	}
 }
 
@@ -389,19 +433,16 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 发送初始flush
+	// 发送endpoint事件 - 统一使用/message端点
+	endpointURL := fmt.Sprintf("/message?sessionId=%s", session.ID)
+
+	fmt.Fprintf(w, "event: endpoint\ndata: %s\n\n", endpointURL)
 	flusher.Flush()
 
-	ctx, cancel := context.WithCancel(r.Context())
-	defer cancel()
-
-	// 监听客户端断开连接
-	closeNotify := w.(http.CloseNotifier).CloseNotify()
+	ctx := r.Context()
 
 	for {
 		select {
-		case <-closeNotify:
-			return
 		case <-ctx.Done():
 			return
 		case msg, ok := <-session.Client:
@@ -409,8 +450,8 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 
-			// 发送SSE格式的数据
-			fmt.Fprintf(w, "data: %s\n\n", msg)
+			// 发送SSE格式的消息事件
+			fmt.Fprintf(w, "event: message\ndata: %s\n\n", msg)
 			flusher.Flush()
 
 			// 更新会话活动时间
@@ -422,8 +463,21 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleMessage(w http.ResponseWriter, r *http.Request) {
-	sessionID := r.Header.Get(MCPSessionIDHeader)
-	session := s.getOrCreateSession(sessionID)
+	// 从查询参数获取sessionId
+	sessionID := r.URL.Query().Get("sessionId")
+	if sessionID == "" {
+		s.sendJSONRPCError(w, "", protocol.InvalidParams, "Missing sessionId parameter", nil)
+		return
+	}
+
+	s.mu.RLock()
+	session, exists := s.sessions[sessionID]
+	s.mu.RUnlock()
+
+	if !exists {
+		s.sendJSONRPCError(w, "", protocol.InvalidParams, "Invalid session ID", nil)
+		return
+	}
 
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
@@ -438,53 +492,42 @@ func (s *Server) handleMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 处理消息
-	response, err := s.handler.HandleMessage(r.Context(), body)
-	if err != nil {
-		s.sendJSONRPCError(w, message.GetIDString(), protocol.InternalError, err.Error(), nil)
-		return
-	}
+	// 立即返回202 Accepted，响应将通过SSE发送
+	w.Header().Set(MCPSessionIDHeader, session.ID)
+	w.WriteHeader(http.StatusAccepted)
 
-	// 确定响应类型
-	var responseMessage protocol.JSONRPCMessage
-	if err := json.Unmarshal(response, &responseMessage); err == nil {
-		if responseMessage.Method != "" && responseMessage.ID == nil {
-			// 这是一个通知，返回202 Accepted
-			w.Header().Set(MCPSessionIDHeader, session.ID)
-			w.WriteHeader(http.StatusAccepted)
-			return
-		}
-	}
-
-	// 检查是否应该通过SSE发送响应
-	accept := r.Header.Get("Accept")
-	if strings.Contains(accept, "text/event-stream") && message.Method != "" && message.ID != nil {
-		// 通过SSE发送响应
-		select {
-		case session.Client <- response:
-		default:
-			// 如果缓冲区满，直接返回HTTP响应
+	// 在goroutine中处理消息，避免阻塞HTTP响应
+	go func() {
+		response, err := s.handler.HandleMessage(r.Context(), body)
+		if err != nil {
+			errorResp := protocol.JSONRPCMessage{
+				JSONRPC: "2.0",
+				ID:      message.ID,
+				Error: &protocol.JSONRPCError{
+					Code:    protocol.InternalError,
+					Message: err.Error(),
+				},
+			}
+			if errorData, err := json.Marshal(errorResp); err == nil {
+				response = errorData
+			}
 		}
 
-		w.Header().Set("Content-Type", "text/event-stream")
-		w.Header().Set("Cache-Control", "no-cache")
-		w.Header().Set("Connection", "keep-alive")
-		w.Header().Set(MCPSessionIDHeader, session.ID)
-
-		flusher, ok := w.(http.Flusher)
-		if ok {
-			flusher.Flush()
+		// 只有非通知消息才发送响应
+		if response != nil {
+			select {
+			case session.Client <- response:
+				// 响应已发送
+			default:
+				// 缓冲区满，记录错误
+				fmt.Printf("Session %s buffer full, dropping response\n", sessionID)
+			}
 		}
-	} else {
-		w.Header().Set("Content-Type", "application/json")
-		w.Header().Set(MCPSessionIDHeader, session.ID)
-		w.WriteHeader(http.StatusOK)
-		w.Write(response)
-	}
 
-	session.mu.Lock()
-	session.LastActive = time.Now()
-	session.mu.Unlock()
+		session.mu.Lock()
+		session.LastActive = time.Now()
+		session.mu.Unlock()
+	}()
 }
 
 func (s *Server) sendJSONRPCError(w http.ResponseWriter, id string, code int, message string, data interface{}) {
