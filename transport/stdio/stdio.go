@@ -17,8 +17,10 @@ type Transport struct {
 	cmd     *exec.Cmd
 	stdin   io.WriteCloser
 	stdout  io.ReadCloser
+	stderr  io.ReadCloser
 	scanner *bufio.Scanner
 	mu      sync.Mutex
+	closed  bool
 }
 
 func NewWithCommand(command string, args []string) (*Transport, error) {
@@ -34,6 +36,11 @@ func NewWithCommand(command string, args []string) (*Transport, error) {
 		return nil, fmt.Errorf("failed to get stdout pipe: %w", err)
 	}
 
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get stderr pipe: %w", err)
+	}
+
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("failed to start command: %w", err)
 	}
@@ -42,6 +49,7 @@ func NewWithCommand(command string, args []string) (*Transport, error) {
 		cmd:     cmd,
 		stdin:   stdin,
 		stdout:  stdout,
+		stderr:  stderr,
 		scanner: bufio.NewScanner(stdout),
 	}, nil
 }
@@ -58,6 +66,10 @@ func NewWithStdio() *Transport {
 func (t *Transport) Send(ctx context.Context, data []byte) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+
+	if t.closed {
+		return fmt.Errorf("transport is closed")
+	}
 
 	_, err := fmt.Fprintf(t.stdin, "%s\n", data)
 	return err
@@ -89,16 +101,45 @@ func (t *Transport) Receive(ctx context.Context) ([]byte, error) {
 }
 
 func (t *Transport) Close() error {
-	var err error
+	t.mu.Lock()
+	defer t.mu.Unlock()
 
-	if t.cmd != nil {
-		if t.stdin != nil {
-			t.stdin.Close()
+	if t.closed {
+		return nil
+	}
+	t.closed = true
+
+	var errs []error
+
+	if t.stdin != nil {
+		if err := t.stdin.Close(); err != nil {
+			errs = append(errs, fmt.Errorf("failed to close stdin: %w", err))
 		}
-		err = t.cmd.Wait()
+	}
+	if t.stdout != nil {
+		if err := t.stdout.Close(); err != nil {
+			errs = append(errs, fmt.Errorf("failed to close stdout: %w", err))
+		}
+	}
+	if t.stderr != nil {
+		if err := t.stderr.Close(); err != nil {
+			errs = append(errs, fmt.Errorf("failed to close stderr: %w", err))
+		}
+	}
+	if t.cmd != nil {
+		if err := t.cmd.Wait(); err != nil {
+			errs = append(errs, fmt.Errorf("command wait failed: %w", err))
+		}
 	}
 
-	return err
+	if len(errs) > 0 {
+		return fmt.Errorf("close errors: %v", errs)
+	}
+	return nil
+}
+
+func (t *Transport) Stderr() io.ReadCloser {
+	return t.stderr
 }
 
 type Server struct {
