@@ -29,15 +29,17 @@ type ListToolsParams struct {
 }
 
 type CallToolResult struct {
-	Content []Content `json:"content"`
-	IsError bool      `json:"isError,omitempty"`
+	Content           []Content   `json:"content"`
+	IsError           bool        `json:"isError,omitempty"`
+	StructuredContent interface{} `json:"structuredContent,omitempty"` // MCP 2025-06-18 新增
 }
 
 // UnmarshalJSON 实现自定义JSON反序列化
 func (ctr *CallToolResult) UnmarshalJSON(data []byte) error {
 	var temp struct {
-		Content []json.RawMessage `json:"content"`
-		IsError bool              `json:"isError,omitempty"`
+		Content           []json.RawMessage `json:"content"`
+		IsError           bool              `json:"isError,omitempty"`
+		StructuredContent interface{}       `json:"structuredContent,omitempty"`
 	}
 
 	if err := json.Unmarshal(data, &temp); err != nil {
@@ -45,6 +47,7 @@ func (ctr *CallToolResult) UnmarshalJSON(data []byte) error {
 	}
 
 	ctr.IsError = temp.IsError
+	ctr.StructuredContent = temp.StructuredContent
 	ctr.Content = make([]Content, len(temp.Content))
 
 	for i, raw := range temp.Content {
@@ -100,6 +103,24 @@ func NewToolResultError(errorMsg string) *CallToolResult {
 	return &CallToolResult{
 		Content: []Content{NewTextContent(errorMsg)},
 		IsError: true,
+	}
+}
+
+// NewToolResultWithStructured 创建带有结构化内容的工具结果 (MCP 2025-06-18)
+func NewToolResultWithStructured(content []Content, structuredContent interface{}) *CallToolResult {
+	return &CallToolResult{
+		Content:           content,
+		StructuredContent: structuredContent,
+		IsError:           false,
+	}
+}
+
+// NewToolResultTextWithStructured 创建带有文本和结构化内容的工具结果
+func NewToolResultTextWithStructured(text string, structuredContent interface{}) *CallToolResult {
+	return &CallToolResult{
+		Content:           []Content{NewTextContent(text)},
+		StructuredContent: structuredContent,
+		IsError:           false,
 	}
 }
 

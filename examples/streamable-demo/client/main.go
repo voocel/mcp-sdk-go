@@ -24,7 +24,7 @@ func main() {
 	}
 	defer mcpClient.Close()
 
-	log.Println("🌐 正在连接到 Streamable HTTP MCP 服务器...")
+	log.Println("正在连接到 Streamable HTTP MCP 服务器...")
 
 	// 初始化连接
 	initResult, err := mcpClient.Initialize(ctx, protocol.ClientInfo{
@@ -35,9 +35,9 @@ func main() {
 		log.Fatalf("初始化失败: %v", err)
 	}
 
-	fmt.Printf("✅ 连接成功！\n")
-	fmt.Printf("📡 服务器: %s v%s\n", initResult.ServerInfo.Name, initResult.ServerInfo.Version)
-	fmt.Printf("🔗 协议版本: %s\n", initResult.ProtocolVersion)
+	fmt.Printf("连接成功！\n")
+	fmt.Printf("服务器: %s v%s\n", initResult.ServerInfo.Name, initResult.ServerInfo.Version)
+	fmt.Printf("协议版本: %s\n", initResult.ProtocolVersion)
 
 	// 发送初始化完成通知
 	if err := mcpClient.SendInitialized(ctx); err != nil {
@@ -45,20 +45,20 @@ func main() {
 	}
 
 	// 列出可用工具
-	log.Println("\n🔧 获取可用工具...")
+	log.Println("\n获取可用工具...")
 	tools, err := mcpClient.ListTools(ctx, "")
 	if err != nil {
 		log.Fatalf("获取工具列表失败: %v", err)
 	}
 
-	fmt.Printf("📋 发现 %d 个工具:\n", len(tools.Tools))
+	fmt.Printf("发现 %d 个工具:\n", len(tools.Tools))
 	for i, tool := range tools.Tools {
 		fmt.Printf("  %d. %s - %s\n", i+1, tool.Name, tool.Description)
 	}
 
 	// 测试问候工具
-	log.Println("\n👋 测试问候工具...")
-	greetResult, err := mcpClient.CallTool(ctx, "greet", map[string]interface{}{
+	log.Println("\n测试问候工具...")
+	greetResult, err := mcpClient.CallTool(ctx, "greet", map[string]any{
 		"name":     "Go 开发者",
 		"language": "zh",
 	})
@@ -68,13 +68,13 @@ func main() {
 
 	if len(greetResult.Content) > 0 {
 		if textContent, ok := greetResult.Content[0].(protocol.TextContent); ok {
-			fmt.Printf("🎉 %s\n", textContent.Text)
+			fmt.Printf("%s\n", textContent.Text)
 		}
 	}
 
 	// 测试计算工具
-	log.Println("\n🧮 测试计算工具...")
-	calcResult, err := mcpClient.CallTool(ctx, "calculate", map[string]interface{}{
+	log.Println("\n测试计算工具...")
+	calcResult, err := mcpClient.CallTool(ctx, "calculate", map[string]any{
 		"expression": "2 + 3 * 4",
 	})
 	if err != nil {
@@ -83,47 +83,47 @@ func main() {
 
 	if len(calcResult.Content) > 0 {
 		if textContent, ok := calcResult.Content[0].(protocol.TextContent); ok {
-			fmt.Printf("📊 %s\n", textContent.Text)
+			fmt.Printf("%s\n", textContent.Text)
 		}
 	}
 
 	// 列出可用资源
-	log.Println("\n📁 获取可用资源...")
+	log.Println("\n获取可用资源...")
 	resources, err := mcpClient.ListResources(ctx, "")
 	if err != nil {
 		log.Fatalf("获取资源列表失败: %v", err)
 	}
 
-	fmt.Printf("📚 发现 %d 个资源:\n", len(resources.Resources))
+	fmt.Printf("发现 %d 个资源:\n", len(resources.Resources))
 	for i, resource := range resources.Resources {
 		fmt.Printf("  %d. %s - %s\n", i+1, resource.Name, resource.Description)
 	}
 
 	// 读取服务器信息资源
-	log.Println("\n📖 读取服务器信息...")
+	log.Println("\n读取服务器信息...")
 	serverInfo, err := mcpClient.ReadResource(ctx, "info://server")
 	if err != nil {
 		log.Fatalf("读取服务器信息失败: %v", err)
 	}
 
 	if len(serverInfo.Contents) > 0 {
-		fmt.Printf("ℹ️ 服务器信息:\n%s\n", serverInfo.Contents[0].Text)
+		fmt.Printf("服务器信息:\n%s\n", serverInfo.Contents[0].Text)
 	}
 
 	// 列出可用提示模板
-	log.Println("\n💬 获取可用提示模板...")
+	log.Println("\n获取可用提示模板...")
 	prompts, err := mcpClient.ListPrompts(ctx, "")
 	if err != nil {
 		log.Fatalf("获取提示模板列表失败: %v", err)
 	}
 
-	fmt.Printf("🎯 发现 %d 个提示模板:\n", len(prompts.Prompts))
+	fmt.Printf("发现 %d 个提示模板:\n", len(prompts.Prompts))
 	for i, prompt := range prompts.Prompts {
 		fmt.Printf("  %d. %s - %s\n", i+1, prompt.Name, prompt.Description)
 	}
 
 	// 获取帮助提示模板
-	log.Println("\n🆘 获取帮助信息...")
+	log.Println("\n获取帮助信息...")
 	helpPrompt, err := mcpClient.GetPrompt(ctx, "streamable_help", map[string]string{
 		"topic": "transport",
 	})
@@ -131,16 +131,16 @@ func main() {
 		log.Fatalf("获取帮助提示失败: %v", err)
 	}
 
-	fmt.Printf("💡 帮助信息:\n")
+	fmt.Printf("帮助信息:\n")
 	for i, message := range helpPrompt.Messages {
 		fmt.Printf("  %d. [%s] %s\n", i+1, message.Role,
 			message.Content.(protocol.TextContent).Text)
 	}
 
 	// 测试会话功能
-	log.Println("\n🔄 测试多轮对话...")
+	log.Println("\n测试多轮对话...")
 	for i := 0; i < 3; i++ {
-		result, err := mcpClient.CallTool(ctx, "greet", map[string]interface{}{
+		result, err := mcpClient.CallTool(ctx, "greet", map[string]any{
 			"name":     fmt.Sprintf("用户-%d", i+1),
 			"language": "en",
 		})
@@ -158,8 +158,8 @@ func main() {
 		time.Sleep(500 * time.Millisecond)
 	}
 
-	log.Println("\n✅ Streamable HTTP 传输协议演示完成！")
-	log.Println("🎯 主要特性已验证:")
+	log.Println("\nStreamable HTTP 传输协议演示完成！")
+	log.Println("主要特性已验证:")
 	log.Println("   ✓ 单一端点通信")
 	log.Println("   ✓ 会话管理")
 	log.Println("   ✓ 工具调用")

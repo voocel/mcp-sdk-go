@@ -28,7 +28,7 @@ func main() {
 	defer mcpClient.Close()
 
 	// 执行MCP初始化握手
-	fmt.Println("🔄 连接到文件服务器...")
+	fmt.Println("连接到文件服务器...")
 	initResult, err := mcpClient.Initialize(ctx, protocol.ClientInfo{
 		Name:    "文件服务器客户端",
 		Version: "1.0.0",
@@ -37,7 +37,7 @@ func main() {
 		log.Fatalf("初始化失败: %v", err)
 	}
 
-	fmt.Printf("✅ 连接成功！服务器: %s v%s\n",
+	fmt.Printf("连接成功！服务器: %s v%s\n",
 		initResult.ServerInfo.Name, initResult.ServerInfo.Version)
 
 	// 发送初始化完成通知
@@ -46,7 +46,7 @@ func main() {
 	}
 
 	// 获取当前目录资源
-	fmt.Println("\n📁 获取当前工作目录...")
+	fmt.Println("\n获取当前工作目录...")
 	resourceResult, err := mcpClient.ReadResource(ctx, "file://current")
 	if err != nil {
 		log.Fatalf("读取资源失败: %v", err)
@@ -63,8 +63,8 @@ func main() {
 	}
 
 	// 列出当前目录内容
-	fmt.Println("\n📂 当前目录内容:")
-	result, err := mcpClient.CallTool(ctx, "list_directory", map[string]interface{}{
+	fmt.Println("\n当前目录内容:")
+	result, err := mcpClient.CallTool(ctx, "list_directory", map[string]any{
 		"path": currentDir,
 	})
 	if err != nil {
@@ -78,9 +78,9 @@ func main() {
 	}
 
 	// 读取当前文件内容的前100个字符
-	fmt.Println("\n📄 读取当前文件内容预览:")
+	fmt.Println("\n读取当前文件内容预览:")
 	_, currentFilePath, _, _ := runtime.Caller(0)
-	result, err = mcpClient.CallTool(ctx, "read_file", map[string]interface{}{
+	result, err = mcpClient.CallTool(ctx, "read_file", map[string]any{
 		"path": currentFilePath,
 	})
 	if err != nil {
@@ -96,14 +96,14 @@ func main() {
 	}
 
 	// 搜索包含 "MCP" 的文件
-	fmt.Println("\n🔍 搜索包含 'MCP' 的文件:")
+	fmt.Println("\n搜索包含 'MCP' 的文件:")
 	searchDir := filepath.Dir(currentDir)
-	result, err = mcpClient.CallTool(ctx, "search_files", map[string]interface{}{
+	result, err = mcpClient.CallTool(ctx, "search_files", map[string]any{
 		"directory": searchDir,
 		"pattern":   "MCP",
 	})
 	if err != nil {
-		fmt.Printf("❌ 调用 search_files 工具失败: %v\n", err)
+		fmt.Printf("调用 search_files 工具失败: %v\n", err)
 	} else if len(result.Content) > 0 {
 		if textContent, ok := result.Content[0].(protocol.TextContent); ok {
 			fmt.Printf("%s\n", textContent.Text)
@@ -111,10 +111,10 @@ func main() {
 	}
 
 	// 获取文件操作帮助
-	fmt.Println("\n💡 获取文件操作帮助:")
+	fmt.Println("\n获取文件操作帮助:")
 	promptResult, err := mcpClient.GetPrompt(ctx, "file_help", nil)
 	if err != nil {
-		fmt.Printf("❌ 获取帮助提示失败: %v\n", err)
+		fmt.Printf("获取帮助提示失败: %v\n", err)
 	} else {
 		fmt.Printf("描述: %s\n", promptResult.Description)
 		fmt.Println("帮助信息:")
@@ -126,8 +126,8 @@ func main() {
 	}
 
 	// 演示错误处理 - 尝试访问不存在的目录
-	fmt.Println("\n⚠️  演示错误处理 - 尝试访问不存在的目录:")
-	result, err = mcpClient.CallTool(ctx, "list_directory", map[string]interface{}{
+	fmt.Println("\n演示错误处理 - 尝试访问不存在的目录:")
+	result, err = mcpClient.CallTool(ctx, "list_directory", map[string]any{
 		"path": "/nonexistent/directory",
 	})
 	if err != nil {
@@ -139,8 +139,8 @@ func main() {
 	}
 
 	// 演示安全检查 - 尝试路径遍历攻击
-	fmt.Println("\n🛡️  演示安全检查 - 尝试路径遍历:")
-	result, err = mcpClient.CallTool(ctx, "read_file", map[string]interface{}{
+	fmt.Println("\n演示安全检查 - 尝试路径遍历:")
+	result, err = mcpClient.CallTool(ctx, "read_file", map[string]any{
 		"path": "../../../etc/passwd",
 	})
 	if err != nil {
@@ -151,5 +151,5 @@ func main() {
 		}
 	}
 
-	fmt.Println("\n✨ 文件服务器演示完成！")
+	fmt.Println("\n end!")
 }

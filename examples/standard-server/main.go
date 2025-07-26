@@ -21,7 +21,7 @@ func main() {
 		WithStringParam("operation", "运算类型 (add, subtract, multiply, divide)", true).
 		WithIntParam("a", "第一个数字", true).
 		WithIntParam("b", "第二个数字", true).
-		Handle(func(ctx context.Context, args map[string]interface{}) (*protocol.CallToolResult, error) {
+		Handle(func(ctx context.Context, args map[string]any) (*protocol.CallToolResult, error) {
 			operation := args["operation"].(string)
 			a := int(args["a"].(float64))
 			b := int(args["b"].(float64))
@@ -61,7 +61,7 @@ func main() {
 
 	err = mcp.Tool("greet", "生成个性化问候语").
 		WithStructSchema(GreetArgs{}).
-		HandleWithValidation(func(ctx context.Context, args map[string]interface{}) (*protocol.CallToolResult, error) {
+		HandleWithValidation(func(ctx context.Context, args map[string]any) (*protocol.CallToolResult, error) {
 			var greetArgs GreetArgs
 			jsonData, err := utils.StructToJSON(args)
 			if err != nil {
@@ -169,7 +169,7 @@ func main() {
 	}
 
 	// 设置通知处理器
-	mcp.SetNotificationHandler(func(method string, params interface{}) error {
+	mcp.SetNotificationHandler(func(method string, params any) error {
 		log.Printf("发送通知: %s, 参数: %+v", method, params)
 		return nil
 	})
@@ -209,7 +209,7 @@ func main() {
 	// 调用工具
 	callMsg, _ := utils.NewJSONRPCRequest("tools/call", protocol.CallToolRequest{
 		Name: "calculate",
-		Arguments: map[string]interface{}{
+		Arguments: map[string]any{
 			"operation": "add",
 			"a":         10,
 			"b":         5,

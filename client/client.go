@@ -87,7 +87,7 @@ func WithSSETransport(url string) Option {
 func WithStreamableHTTPTransport(url string) Option {
 	return func(c *MCPClient) error {
 		t := streamable.New(url,
-			streamable.WithProtocolVersion("2025-03-26"))
+			streamable.WithProtocolVersion(protocol.MCPVersion))
 		c.transport = t
 		return nil
 	}
@@ -181,11 +181,58 @@ func (c *MCPClient) receiveLoop(ctx context.Context) {
 				}
 			}
 
+			// 处理服务器发起的请求
+			if message.Method != "" && !message.IsNotification() {
+				c.handleServerRequest(ctx, &message)
+			}
+
 			// 处理通知消息
 			if message.Method != "" && message.IsNotification() {
 				c.handleNotification(&message)
 			}
 		}
+	}
+}
+
+// handleServerRequest 处理服务器发起的请求
+func (c *MCPClient) handleServerRequest(ctx context.Context, message *protocol.JSONRPCMessage) {
+	var response *protocol.JSONRPCMessage
+	var err error
+
+	switch message.Method {
+	case "sampling/createMessage":
+		// 处理 LLM 采样请求
+		response, err = c.handleSamplingRequest(ctx, message)
+	case "roots/list":
+		// 处理根目录列表请求
+		response, err = c.handleRootsListRequest(ctx, message)
+	default:
+		// 未知方法，返回方法未找到错误
+		response = &protocol.JSONRPCMessage{
+			JSONRPC: protocol.JSONRPCVersion,
+			ID:      message.ID,
+			Error: &protocol.JSONRPCError{
+				Code:    protocol.MethodNotFound,
+				Message: fmt.Sprintf("method not found: %s", message.Method),
+			},
+		}
+	}
+
+	if err != nil {
+		response = &protocol.JSONRPCMessage{
+			JSONRPC: protocol.JSONRPCVersion,
+			ID:      message.ID,
+			Error: &protocol.JSONRPCError{
+				Code:    protocol.InternalError,
+				Message: err.Error(),
+			},
+		}
+	}
+
+	// 发送响应
+	if response != nil {
+		responseBytes, _ := json.Marshal(response)
+		c.transport.Send(ctx, responseBytes)
 	}
 }
 
@@ -209,6 +256,40 @@ func (c *MCPClient) handleNotification(message *protocol.JSONRPCMessage) {
 		// 未知通知，记录但不报错
 		// fmt.Printf("收到未知通知: %s\n", message.Method)
 	}
+}
+
+// handleRootsListRequest 处理根目录列表请求
+func (c *MCPClient) handleRootsListRequest(ctx context.Context, message *protocol.JSONRPCMessage) (*protocol.JSONRPCMessage, error) {
+	// 默认返回空的根目录列表
+	// 实际应用中，客户端应该返回其暴露的文件系统根目录
+	result := map[string]interface{}{
+		"roots": []interface{}{},
+	}
+
+	resultBytes, err := json.Marshal(result)
+	if err != nil {
+		return nil, err
+	}
+
+	return &protocol.JSONRPCMessage{
+		JSONRPC: protocol.JSONRPCVersion,
+		ID:      message.ID,
+		Result:  json.RawMessage(resultBytes),
+	}, nil
+}
+
+// handleSamplingRequest 处理 LLM 采样请求
+func (c *MCPClient) handleSamplingRequest(ctx context.Context, message *protocol.JSONRPCMessage) (*protocol.JSONRPCMessage, error) {
+	// 默认返回不支持采样的错误
+	// 实际应用中，客户端应该将请求转发给 LLM 并返回结果
+	return &protocol.JSONRPCMessage{
+		JSONRPC: protocol.JSONRPCVersion,
+		ID:      message.ID,
+		Error: &protocol.JSONRPCError{
+			Code:    protocol.MethodNotFound,
+			Message: "sampling not implemented",
+		},
+	}, nil
 }
 
 // sendRequest 发送请求并等待响应
@@ -277,7 +358,11 @@ func (c *MCPClient) Initialize(ctx context.Context, clientInfo protocol.ClientIn
 	initRequest := protocol.InitializeRequest{
 		ProtocolVersion: c.protocolVersion,
 		Capabilities: protocol.ClientCapabilities{
-			// 客户端能力可以根据需要扩展
+			// 根据 MCP 规范声明客户端能力
+			Roots: &protocol.RootsCapability{
+				ListChanged: true, // 支持根目录变更通知
+			},
+			Sampling:     &protocol.SamplingCapability{}, // 支持 LLM 采样
 			Experimental: make(map[string]interface{}),
 		},
 		ClientInfo: c.clientInfo,

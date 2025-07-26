@@ -1,4 +1,4 @@
-# MCP Go SDK 🚀
+# MCP Go SDK
 
 <div align="center">
 
@@ -14,32 +14,37 @@
 
 </div>
 
+<div align="center">
+
+**构建更智能的应用，连接更强大的模型**
+
+*使用 MCP Go SDK，轻松集成大语言模型能力*
+
+</div>
+
 ## 介绍
 
-MCP Go SDK是模型上下文协议（Model Context Protocol）的Go语言实现，完全支持最新的 MCP 2025-06-18 规范，同时保持与 MCP 2024-11-05 的向后兼容性，提供了与大语言模型交互的标准化接口。
+MCP Go SDK 是模型上下文协议（Model Context Protocol）的 Go 语言实现，完全支持最新的 **MCP 2025-06-18** 规范，同时向后兼容 **MCP 2025-03-26** 和 **MCP 2024-11-05**。
 
-## 🌟 功能特点
+## 核心特性
 
-- ✅ **完全符合 MCP 标准** - 支持最新的 MCP 2025-06-18 规范，向后兼容 2024-11-05
-- 🔧 **工具管理** - 注册和调用各种工具
-- 📁 **资源访问** - 读取和管理各种资源
-- 💬 **提示模板** - 支持参数化提示模板
-- 🌐 **多种传输** - STDIO、SSE、Streamable HTTP传输支持
-- 🛡️ **类型安全** - 完整的类型定义和验证
-- ⚡ **高性能** - 优化的并发处理
-- 🔒 **安全性** - 内置安全检查和防护
-- 🎯 **易于使用** - 简洁的链式 API
-- 🚀 **面向未来** - 支持最新的Streamable HTTP传输协议
+- **完全符合 MCP 标准** - 支持最新 MCP 2025-06-18 规范，向后兼容 2025-03-26, 2024-11-05
+- **服务器 SDK** - 快速构建 MCP 服务器，支持工具、资源、提示模板
+- **客户端 SDK** - 连接任何 MCP 兼容服务器的客户端实现
+- **多种传输协议** - STDIO、SSE、Streamable HTTP (官方标准)
+- **类型安全** - 完整的类型定义和参数验证
+- **高性能** - 并发安全，优化的消息处理
+- **安全防护** - 内置输入验证、路径遍历保护、资源限制
 
-## 📦 安装
+## 安装
 
 ```bash
 go get github.com/voocel/mcp-sdk-go
 ```
 
-## 🚀 快速开始
+## 快速开始
 
-### 基础服务器示例
+### 服务器端 (主要功能)
 
 ```go
 package main
@@ -96,14 +101,14 @@ func main() {
     // 创建 SSE 传输服务器 (也可以使用 Streamable HTTP)
     sseServer := sse.NewServer(":8080", mcp)
     
-    log.Println("🚀 服务器启动在 http://localhost:8080")
+    log.Println("服务器启动在 http://localhost:8080")
     if err := sseServer.Serve(ctx); err != nil && err != context.Canceled {
         log.Fatalf("服务器错误: %v", err)
     }
 }
 ```
 
-### 基础客户端示例
+### 客户端 (连接 MCP 服务器)
 
 ```go
 package main
@@ -141,7 +146,7 @@ func main() {
         log.Fatalf("初始化失败: %v", err)
     }
 
-    fmt.Printf("✅ 连接成功！服务器: %s v%s\n", 
+    fmt.Printf("连接成功！服务器: %s v%s\n",
         initResult.ServerInfo.Name, initResult.ServerInfo.Version)
 
     // 发送初始化完成通知
@@ -159,7 +164,7 @@ func main() {
     
     if len(result.Content) > 0 {
         if textContent, ok := result.Content[0].(protocol.TextContent); ok {
-            fmt.Printf("🎉 %s\n", textContent.Text)
+            fmt.Printf("结果: %s\n", textContent.Text)
         }
     }
 
@@ -170,107 +175,26 @@ func main() {
     }
     
     if len(resource.Contents) > 0 {
-        fmt.Printf("📋 服务器信息: %s\n", resource.Contents[0].Text)
+        fmt.Printf("服务器信息: %s\n", resource.Contents[0].Text)
     }
 }
 ```
 
-## 📁 完整示例项目
+## 示例项目
 
-### 1. 🧮 [Calculator](./examples/calculator/) - 计算器服务
-一个简单的数学计算器服务，支持基本的四则运算。
+| 示例 | 描述 | 传输协议 | 运行方式 |
+|------|------|----------|----------|
+| [Calculator](./examples/calculator/) | 数学计算器服务 | STDIO | `cd examples/calculator/server && go run main.go` |
+| [SSE Demo](./examples/sse-demo/) | SSE 传输演示 | SSE | `cd examples/sse-demo/server && go run main.go` |
+| [Chatbot](./examples/chatbot/) | 聊天机器人服务 | SSE | `cd examples/chatbot/server && go run main.go` |
+| [File Server](./examples/file-server/) | 文件操作服务 | SSE | `cd examples/file-server/server && go run main.go` |
+| [Streamable Demo](./examples/streamable-demo/) | Streamable HTTP 演示 (MCP 2025-06-18) | Streamable HTTP | `cd examples/streamable-demo/server && go run main.go` |
 
-**功能特性:**
-- ✅ 加法、减法、乘法、除法工具
-- ✅ 错误处理（除零检查）
-- ✅ 参数验证
-- ✅ 提示模板支持
-- 🔌 **传输**: STDIO
+**运行示例**: 每个示例都包含服务器和客户端，需要在不同终端中分别运行。
 
-**运行方式:**
-```bash
-# 服务器
-cd examples/calculator/server && go run main.go
+## 核心架构
 
-# 客户端（需要另一个终端）
-cd examples/calculator/client && go run main.go
-```
-
-### 2. 💬 [Chatbot](./examples/chatbot/) - 聊天机器人服务
-一个友好的聊天机器人，提供问候、天气查询和翻译服务。
-
-**功能特性:**
-- 👋 随机问候语生成
-- 🌤️ 模拟天气查询
-- 🔤 简单中英文翻译
-- 💬 交互式聊天界面
-- 🔌 **传输**: SSE (Server-Sent Events)
-
-**运行方式:**
-```bash
-# 服务器
-cd examples/chatbot/server && go run main.go
-
-# 客户端（需要另一个终端）
-cd examples/chatbot/client && go run main.go
-```
-
-### 3. 📁 [File Server](./examples/file-server/) - 文件服务器
-一个安全的文件操作服务，支持目录浏览、文件读取和内容搜索。
-
-**功能特性:**
-- 📂 目录内容列表
-- 📄 文件内容读取
-- 🔍 文件内容搜索
-- 🛡️ 路径遍历保护
-- 📏 文件大小限制
-- 🔌 **传输**: SSE (Server-Sent Events)
-
-**运行方式:**
-```bash
-# 服务器
-cd examples/file-server/server && go run main.go
-
-# 客户端
-cd examples/file-server/client && go run main.go
-```
-
-### 4. 🌐 [Streamable HTTP Demo](./examples/streamable-demo/) - Streamable HTTP 传输演示
-展示最新 MCP 2025-06-18 规范中的 Streamable HTTP 传输协议。
-
-**功能特性:**
-- 🌐 **单一端点** - 统一的 HTTP 端点处理所有通信
-- 📱 **会话管理** - 支持有状态的会话
-- 🔄 **动态升级** - 根据需要自动升级到 SSE 流
-- 🛡️ **安全防护** - DNS rebinding 攻击防护
-- 🔄 **可恢复连接** - 支持连接中断后的恢复
-- 🔌 **传输**: Streamable HTTP (MCP 2025-06-18)
-
-**运行方式:**
-```bash
-# 服务器
-cd examples/streamable-demo/server && go run main.go
-
-# 客户端（需要另一个终端）
-cd examples/streamable-demo/client && go run main.go
-```
-
-### 编译所有示例
-```bash
-# 从项目根目录运行
-cd examples
-for dir in calculator chatbot file-server streamable-demo; do
-  echo "编译 $dir..."
-  cd $dir && go mod tidy
-  cd server && go build -v && cd ..
-  cd client && go build -v && cd ..
-  cd ..
-done
-```
-
-## 🏗️ 核心架构
-
-### 服务器端架构模式
+### 服务器端 (主要功能)
 
 ```go
 // 创建FastMCP服务器
@@ -311,157 +235,76 @@ sseTransport.Serve(ctx)
 // streamableTransport.Serve(ctx)
 ```
 
-### 客户端架构模式
+### 客户端 (连接 MCP 服务器)
 
 ```go
-// 创建客户端 (SSE 传输)
+// 创建客户端
 client, err := client.New(
     client.WithSSETransport("http://localhost:8080"),
     client.WithClientInfo("client-name", "1.0.0"),
 )
 
-// 或者使用 Streamable HTTP 传输 (推荐用于新项目)
-// client, err := client.New(
-//     client.WithStreamableHTTPTransport("http://localhost:8080"),
-//     client.WithClientInfo("client-name", "1.0.0"),
-// )
-
-// 初始化连接
-initResult, err := client.Initialize(ctx, protocol.ClientInfo{
-    Name:    "客户端名称",
-    Version: "1.0.0",
-})
-
-// 发送初始化完成通知
-err = client.SendInitialized(ctx)
-
-// 列出工具
-toolsResult, err := client.ListTools(ctx, "")
-
-// 调用工具
-result, err := client.CallTool(ctx, "tool_name", map[string]interface{}{
-    "param": "value",
-})
-
-// 读取资源
-resource, err := client.ReadResource(ctx, "resource://uri")
-
-// 获取提示模板
-prompt, err := client.GetPrompt(ctx, "prompt_name", map[string]string{
-    "arg": "value",
-})
+// 初始化并调用工具
+initResult, err := client.Initialize(ctx, protocol.ClientInfo{...})
+client.SendInitialized(ctx)
+result, err := client.CallTool(ctx, "tool_name", map[string]interface{}{"param": "value"})
 ```
 
-## 🔧 技术特性
+## 协议支持
 
 ### MCP 标准合规性
-完全符合 MCP 2025-06-18 规范：
+✅ **完全符合 MCP 2025-06-18 规范**，向后兼容 MCP 2025-03-26, 2024-11-05
 
-- ✅ **JSON-RPC 2.0** 消息格式
-- ✅ **标准方法名称** (`tools/list`, `tools/call`, `resources/list`, `resources/read`, `prompts/list`, `prompts/get`)
-- ✅ **正确的初始化流程** (initialize → initialized)
-- ✅ **Capabilities 协商**
-- ✅ **错误处理和超时**
-- ✅ **类型安全的参数处理**
+### 传输协议
+| 协议 | 使用场景 | 官方支持 | 协议版本 |
+|------|----------|----------|----------|
+| **STDIO** | 子进程通信 | ✅ 官方标准 | 2024-11-05+ |
+| **SSE** | Web 应用 | ✅ 官方标准 | 2024-11-05+ |
+| **Streamable HTTP** | 现代 Web 应用 | ✅ 官方标准 | 2025-06-18 |
+| ~~**WebSocket**~~ | ~~实时应用~~ | ❌ 非官方标准 | - |
+| ~~**gRPC**~~ | ~~微服务~~ | ❌ 非官方标准 | - |
 
-### 支持的传输方式
-- 📡 **STDIO** - 适合子进程通信，官方标准 (MCP 2024-11-05+)
-- 🌐 **SSE (Server-Sent Events)** - 适合 Web 集成，官方标准 (MCP 2024-11-05+)
-- 🚀 **Streamable HTTP** - 下一代传输协议，官方标准 (MCP 2025-06-18)
-- ❌ ~~WebSocket~~ - 已移除（非官方标准）
-- ❌ ~~gRPC~~ - 已移除（非官方标准）
+**支持的协议版本**: 2025-06-18, 2025-03-26, 2024-11-05
 
-### 安全特性
-- 🛡️ **输入验证** - 所有参数都经过类型检查
-- 🔒 **路径遍历保护** - 防止 `../` 攻击
-- 📏 **资源限制** - 文件大小和搜索范围限制
-- ⏱️ **超时控制** - 防止长时间阻塞
-- 🔐 **类型安全** - 强类型检查和转换
+## 开发指南
 
-## 🐛 错误处理
-
-SDK 提供了完善的错误处理机制：
-
+### 错误处理
 ```go
-// 服务器端错误处理
-mcp.Tool("risky_operation", "可能失败的操作").
-    WithStringParam("input", "输入参数", true).
-    Handle(func(ctx context.Context, args map[string]interface{}) (*protocol.CallToolResult, error) {
-        input, ok := args["input"].(string)
-        if !ok {
-            return protocol.NewToolResultError("参数类型错误"), nil
-        }
-        
-        if input == "" {
-            return protocol.NewToolResultError("输入不能为空"), nil
-        }
-        
-        // 业务逻辑...
-        return protocol.NewToolResultText("操作成功"), nil
-    })
+// 服务器端
+return protocol.NewToolResultError("参数错误"), nil  // 业务错误
+return nil, fmt.Errorf("系统错误")                    // 系统错误
 
-// 客户端错误处理
-result, err := client.CallTool(ctx, "risky_operation", map[string]interface{}{
-    "input": "test",
-})
-if err != nil {
-    log.Printf("网络或协议错误: %v", err)
-    return
-}
-
+// 客户端
 if result.IsError {
-    log.Printf("业务逻辑错误: %s", result.Content[0].(protocol.TextContent).Text)
-    return
+    // 处理业务错误
 }
-
-// 处理成功结果
 ```
 
-## 📚 学习路径
+### 学习路径
+1. 快速开始示例 → 基本概念
+2. [Calculator](./examples/calculator/) → 工具注册和调用
+3. [SSE Demo](./examples/sse-demo/) → SSE 传输
+4. [Streamable Demo](./examples/streamable-demo/) → 最新传输协议
 
-1. **🔰 新手** - 从上面的快速开始示例了解基本概念
-2. **📊 初级** - 学习 [Calculator 示例](./examples/calculator/)，掌握工具注册和调用
-3. **💬 中级** - 研究 [Chatbot 示例](./examples/chatbot/)，理解交互式应用
-4. **📁 高级** - 深入 [File Server 示例](./examples/file-server/)，学习资源管理和安全防护
-5. **🌐 专家** - 查看 [Standard Server](./examples/standard-server/)，了解完整的 MCP 实现
-
-## 🔄 传输协议对比
-
-| 传输方式 | 使用场景 | 优点 | 缺点 | 官方支持 | 协议版本 |
-|---------|---------|------|------|----------|----------|
-| **STDIO** | 子进程通信 | 简单、可靠 | 单向通信 | ✅ 官方标准 | 2024-11-05+ |
-| **SSE** | Web 应用 | 实时推送、HTTP 兼容 | 需要两个端点 | ✅ 官方标准 | 2024-11-05+ |
-| **Streamable HTTP** | 现代 Web 应用 | 单一端点、会话管理、可恢复 | 成熟稳定 | ✅ 官方标准 | 2025-06-18 |
-| ~~WebSocket~~ | ~~实时应用~~ | ~~双向通信~~ | ~~非标准~~ | ❌ 已移除 | - |
-| ~~gRPC~~ | ~~微服务~~ | ~~高性能~~ | ~~非标准~~ | ❌ 已移除 | - |
-
-## 🤝 贡献
+## 贡献
 
 我们欢迎各种形式的贡献！
 
-1. 🐛 **报告 Bug** - 提交 Issue 描述问题
-2. 💡 **功能建议** - 提出新功能想法
-3. 📝 **改进文档** - 完善文档和示例
-4. 🔧 **代码贡献** - 提交 Pull Request
+1. **报告 Bug** - 提交 Issue 描述问题
+2. **功能建议** - 提出新功能想法
+3. **改进文档** - 完善文档和示例
+4. **代码贡献** - 提交 Pull Request
 
 请查看 [贡献指南](CONTRIBUTING.md) 了解详细信息。
 
-## 📄 许可证
+## 许可证
 
 MIT License - 详见 [LICENSE](LICENSE) 文件
 
-## 🔗 相关项目
+## 相关项目
 
 - [MCP 官方规范](https://github.com/anthropics/model-context-protocol) - 协议规范定义
 - [MCP Python SDK](https://github.com/anthropics/model-context-protocol/tree/main/src/mcp) - Python 实现
 - [MCP TypeScript SDK](https://github.com/anthropics/model-context-protocol/tree/main/src/mcp) - TypeScript 实现
 
 ---
-
-<div align="center">
-
-**🚀 构建更智能的应用，连接更强大的模型 🚀**
-
-*使用 MCP Go SDK，轻松集成大语言模型能力*
-
-</div>

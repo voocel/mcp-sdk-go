@@ -38,7 +38,7 @@ func main() {
 	// 注册一个简单的回声工具
 	mcp.Tool("echo", "回声工具，返回输入的文本").
 		WithStringParam("message", "要回声的消息", true).
-		Handle(func(ctx context.Context, args map[string]interface{}) (*protocol.CallToolResult, error) {
+		Handle(func(ctx context.Context, args map[string]any) (*protocol.CallToolResult, error) {
 			message, ok := args["message"].(string)
 			if !ok {
 				return protocol.NewToolResultError("参数 'message' 必须是字符串"), nil
@@ -52,7 +52,7 @@ func main() {
 	mcp.Tool("random", "生成指定范围内的随机数").
 		WithIntParam("min", "最小值", true).
 		WithIntParam("max", "最大值", true).
-		Handle(func(ctx context.Context, args map[string]interface{}) (*protocol.CallToolResult, error) {
+		Handle(func(ctx context.Context, args map[string]any) (*protocol.CallToolResult, error) {
 			min, ok := args["min"].(float64)
 			if !ok {
 				return protocol.NewToolResultError("参数 'min' 必须是整数"), nil
@@ -77,7 +77,7 @@ func main() {
 	// 注册一个时间工具
 	mcp.Tool("time", "获取当前时间").
 		WithStringParam("format", "时间格式 (iso, unix, readable)", false).
-		Handle(func(ctx context.Context, args map[string]interface{}) (*protocol.CallToolResult, error) {
+		Handle(func(ctx context.Context, args map[string]any) (*protocol.CallToolResult, error) {
 			format, ok := args["format"].(string)
 			if !ok {
 				format = "readable"
@@ -105,7 +105,7 @@ func main() {
 	mcp.Tool("text_transform", "文本转换工具").
 		WithStringParam("text", "要转换的文本", true).
 		WithStringParam("operation", "操作类型 (upper, lower, reverse, length)", true).
-		Handle(func(ctx context.Context, args map[string]interface{}) (*protocol.CallToolResult, error) {
+		Handle(func(ctx context.Context, args map[string]any) (*protocol.CallToolResult, error) {
 			text, ok := args["text"].(string)
 			if !ok {
 				return protocol.NewToolResultError("参数 'text' 必须是字符串"), nil
@@ -191,7 +191,7 @@ func main() {
 		})
 
 	// 设置通知处理器
-	mcp.SetNotificationHandler(func(method string, params interface{}) error {
+	mcp.SetNotificationHandler(func(method string, params any) error {
 		log.Printf("发送通知: %s", method)
 		return nil
 	})

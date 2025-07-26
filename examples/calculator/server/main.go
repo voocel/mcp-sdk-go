@@ -30,7 +30,7 @@ func main() {
 	mcp.Tool("add", "两个数字相加").
 		WithNumberParam("a", "第一个数字", true).
 		WithNumberParam("b", "第二个数字", true).
-		Handle(func(ctx context.Context, args map[string]interface{}) (*protocol.CallToolResult, error) {
+		Handle(func(ctx context.Context, args map[string]any) (*protocol.CallToolResult, error) {
 			a, ok := args["a"].(float64)
 			if !ok {
 				return protocol.NewToolResultError("参数 'a' 必须是数字"), nil
@@ -47,7 +47,7 @@ func main() {
 	mcp.Tool("subtract", "一个数字减去另一个数字").
 		WithNumberParam("a", "被减数", true).
 		WithNumberParam("b", "减数", true).
-		Handle(func(ctx context.Context, args map[string]interface{}) (*protocol.CallToolResult, error) {
+		Handle(func(ctx context.Context, args map[string]any) (*protocol.CallToolResult, error) {
 			a, ok := args["a"].(float64)
 			if !ok {
 				return protocol.NewToolResultError("参数 'a' 必须是数字"), nil
@@ -64,7 +64,7 @@ func main() {
 	mcp.Tool("multiply", "两个数字相乘").
 		WithNumberParam("a", "第一个数字", true).
 		WithNumberParam("b", "第二个数字", true).
-		Handle(func(ctx context.Context, args map[string]interface{}) (*protocol.CallToolResult, error) {
+		Handle(func(ctx context.Context, args map[string]any) (*protocol.CallToolResult, error) {
 			a, ok := args["a"].(float64)
 			if !ok {
 				return protocol.NewToolResultError("参数 'a' 必须是数字"), nil
@@ -81,7 +81,7 @@ func main() {
 	mcp.Tool("divide", "一个数字除以另一个数字").
 		WithNumberParam("a", "被除数", true).
 		WithNumberParam("b", "除数", true).
-		Handle(func(ctx context.Context, args map[string]interface{}) (*protocol.CallToolResult, error) {
+		Handle(func(ctx context.Context, args map[string]any) (*protocol.CallToolResult, error) {
 			a, ok := args["a"].(float64)
 			if !ok {
 				return protocol.NewToolResultError("参数 'a' 必须是数字"), nil

@@ -17,7 +17,7 @@ func main() {
 
 	err := mcp.Tool("greet", "问候用户").
 		WithStringParam("name", "用户名称", true).
-		Handle(func(ctx context.Context, args map[string]interface{}) (*protocol.CallToolResult, error) {
+		Handle(func(ctx context.Context, args map[string]any) (*protocol.CallToolResult, error) {
 			name := args["name"].(string)
 			greeting := "Hello, " + name + "! Welcome to MCP STDIO Server!"
 			return protocol.NewToolResultText(greeting), nil
@@ -32,7 +32,7 @@ func main() {
 		WithStringParam("operation", "运算类型 (add, subtract, multiply, divide)", true).
 		WithIntParam("a", "第一个数字", true).
 		WithIntParam("b", "第二个数字", true).
-		Handle(func(ctx context.Context, args map[string]interface{}) (*protocol.CallToolResult, error) {
+		Handle(func(ctx context.Context, args map[string]any) (*protocol.CallToolResult, error) {
 			operation := args["operation"].(string)
 			a := int(args["a"].(float64))
 			b := int(args["b"].(float64))

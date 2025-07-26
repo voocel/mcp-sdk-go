@@ -25,7 +25,7 @@ func main() {
 	defer mcpClient.Close()
 
 	// 初始化握手
-	fmt.Println("🔄 连接到计算器服务...")
+	fmt.Println("连接到计算器服务...")
 	initResult, err := mcpClient.Initialize(ctx, protocol.ClientInfo{
 		Name:    "计算器客户端",
 		Version: "1.0.0",
@@ -34,7 +34,7 @@ func main() {
 		log.Fatalf("初始化失败: %v", err)
 	}
 
-	fmt.Printf("✅ 连接成功！服务器: %s v%s\n",
+	fmt.Printf("连接成功！服务器: %s v%s\n",
 		initResult.ServerInfo.Name, initResult.ServerInfo.Version)
 
 	// 发送初始化完成通知
@@ -48,15 +48,15 @@ func main() {
 		log.Fatalf("获取工具列表失败: %v", err)
 	}
 
-	fmt.Println("\n🔧 可用工具:")
+	fmt.Println("\n可用工具:")
 	for _, tool := range toolsResult.Tools {
 		fmt.Printf("  - %s: %s\n", tool.Name, tool.Description)
 	}
 	fmt.Println()
 
 	// 测试加法
-	fmt.Println("🧮 测试计算功能:")
-	result, err := mcpClient.CallTool(ctx, "add", map[string]interface{}{
+	fmt.Println("测试计算功能:")
+	result, err := mcpClient.CallTool(ctx, "add", map[string]any{
 		"a": 5.0,
 		"b": 3.0,
 	})
@@ -71,7 +71,7 @@ func main() {
 	}
 
 	// 测试减法
-	result, err = mcpClient.CallTool(ctx, "subtract", map[string]interface{}{
+	result, err = mcpClient.CallTool(ctx, "subtract", map[string]any{
 		"a": 10.0,
 		"b": 4.0,
 	})
@@ -86,7 +86,7 @@ func main() {
 	}
 
 	// 测试乘法
-	result, err = mcpClient.CallTool(ctx, "multiply", map[string]interface{}{
+	result, err = mcpClient.CallTool(ctx, "multiply", map[string]any{
 		"a": 6.0,
 		"b": 7.0,
 	})
@@ -101,7 +101,7 @@ func main() {
 	}
 
 	// 测试除法
-	result, err = mcpClient.CallTool(ctx, "divide", map[string]interface{}{
+	result, err = mcpClient.CallTool(ctx, "divide", map[string]any{
 		"a": 20.0,
 		"b": 5.0,
 	})
@@ -116,7 +116,7 @@ func main() {
 	}
 
 	// 测试除零错误
-	result, err = mcpClient.CallTool(ctx, "divide", map[string]interface{}{
+	result, err = mcpClient.CallTool(ctx, "divide", map[string]any{
 		"a": 20.0,
 		"b": 0.0,
 	})
@@ -129,7 +129,7 @@ func main() {
 	}
 
 	// 获取帮助提示模板
-	fmt.Println("\n💡 获取帮助信息:")
+	fmt.Println("\n获取帮助信息:")
 	promptResult, err := mcpClient.GetPrompt(ctx, "calculator_help", nil)
 	if err != nil {
 		log.Fatalf("获取提示模板失败: %v", err)
@@ -143,5 +143,5 @@ func main() {
 		}
 	}
 
-	fmt.Println("\n✨ 计算器演示完成！")
+	fmt.Println("\n end!")
 }

@@ -26,7 +26,7 @@ func main() {
 	defer mcpClient.Close()
 
 	// 执行 MCP 初始化握手
-	fmt.Println("🔄 连接到聊天机器人服务...")
+	fmt.Println("连接到聊天机器人服务...")
 	initResult, err := mcpClient.Initialize(ctx, protocol.ClientInfo{
 		Name:    "聊天机器人客户端",
 		Version: "1.0.0",
@@ -35,7 +35,7 @@ func main() {
 		log.Fatalf("初始化失败: %v", err)
 	}
 
-	fmt.Printf("✅ 连接成功！服务器: %s v%s\n",
+	fmt.Printf("连接成功！服务器: %s v%s\n",
 		initResult.ServerInfo.Name, initResult.ServerInfo.Version)
 
 	// 发送初始化完成通知
@@ -52,7 +52,7 @@ func main() {
 	}
 
 	// 获取问候语
-	result, err := mcpClient.CallTool(ctx, "greeting", map[string]interface{}{
+	result, err := mcpClient.CallTool(ctx, "greeting", map[string]any{
 		"name": username,
 	})
 	if err != nil {
@@ -88,7 +88,7 @@ func main() {
 	fmt.Println()
 
 	for {
-		fmt.Print("💬 > ")
+		fmt.Print("> ")
 		scanner.Scan()
 		input := strings.TrimSpace(scanner.Text())
 
@@ -111,28 +111,28 @@ func main() {
 
 			city = strings.TrimSpace(city)
 			if city == "" {
-				fmt.Println("❌ 请指定城市名称")
+				fmt.Println("请指定城市名称")
 				continue
 			}
 
-			result, err := mcpClient.CallTool(ctx, "weather", map[string]interface{}{
+			result, err := mcpClient.CallTool(ctx, "weather", map[string]any{
 				"city": city,
 			})
 			if err != nil {
-				fmt.Printf("❌ 错误: %v\n", err)
+				fmt.Printf("错误: %v\n", err)
 				continue
 			}
 
 			if len(result.Content) > 0 {
 				if textContent, ok := result.Content[0].(protocol.TextContent); ok {
-					fmt.Printf("🌤️  %s\n", textContent.Text)
+					fmt.Printf(" %s\n", textContent.Text)
 				}
 			}
 		} else if strings.Contains(input, " to ") {
 			// 处理翻译请求
 			parts := strings.Split(input, " to ")
 			if len(parts) != 2 || !strings.HasPrefix(parts[0], "translate ") {
-				fmt.Println("❌ 格式错误。请使用: translate [文本] to [zh/en]")
+				fmt.Println("格式错误。请使用: translate [文本] to [zh/en]")
 				continue
 			}
 
@@ -140,46 +140,46 @@ func main() {
 			targetLang := strings.TrimSpace(parts[1])
 
 			if text == "" {
-				fmt.Println("❌ 请提供要翻译的文本")
+				fmt.Println("请提供要翻译的文本")
 				continue
 			}
 
 			if targetLang != "zh" && targetLang != "en" {
-				fmt.Println("❌ 目标语言必须是 'zh' 或 'en'")
+				fmt.Println("目标语言必须是 'zh' 或 'en'")
 				continue
 			}
 
-			result, err := mcpClient.CallTool(ctx, "translate", map[string]interface{}{
+			result, err := mcpClient.CallTool(ctx, "translate", map[string]any{
 				"text":        text,
 				"target_lang": targetLang,
 			})
 			if err != nil {
-				fmt.Printf("❌ 错误: %v\n", err)
+				fmt.Printf("错误: %v\n", err)
 				continue
 			}
 
 			if result.IsError && len(result.Content) > 0 {
 				if textContent, ok := result.Content[0].(protocol.TextContent); ok {
-					fmt.Printf("❌ %s\n", textContent.Text)
+					fmt.Printf("%s\n", textContent.Text)
 				}
 			} else if len(result.Content) > 0 {
 				if textContent, ok := result.Content[0].(protocol.TextContent); ok {
-					fmt.Printf("🔤 翻译结果: %s\n", textContent.Text)
+					fmt.Printf("翻译结果: %s\n", textContent.Text)
 				}
 			}
 		} else if input == "help" || input == "帮助" {
 			// 显示帮助信息
-			fmt.Println("📖 可用命令:")
+			fmt.Println("可用命令:")
 			fmt.Println("  - weather [城市] 或 天气 [城市] - 查看指定城市的天气")
 			fmt.Println("  - translate [文本] to [zh/en] - 翻译中英文")
 			fmt.Println("  - help 或 帮助 - 显示此帮助信息")
 			fmt.Println("  - exit 或 退出 - 退出程序")
 		} else {
 			// 未识别的命令
-			fmt.Printf("❓ 我不理解这个命令: '%s'\n", input)
-			fmt.Println("💡 请尝试 'weather [城市]'、'translate [文本] to [zh/en]'、'help' 或 'exit'")
+			fmt.Printf("未知命令: '%s'\n", input)
+			fmt.Println("请尝试 'weather [城市]'、'translate [文本] to [zh/en]'、'help' 或 'exit'")
 		}
 	}
 
-	fmt.Println("\n👋 再见！感谢使用聊天机器人！")
+	fmt.Println("\n end!")
 }

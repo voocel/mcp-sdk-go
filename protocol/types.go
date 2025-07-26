@@ -26,12 +26,12 @@ const (
 
 // MCP 特定错误代码
 const (
-	ToolNotFound     = -32000
-	ResourceNotFound = -32001
-	PromptNotFound   = -32002
-	InvalidTool      = -32003
-	InvalidResource  = -32004
-	InvalidPrompt    = -32005
+	ToolNotFound     = -32000 // 工具未找到
+	ResourceNotFound = -32002 // 资源未找到
+	PromptNotFound   = -32001 // 提示模板未找到
+	InvalidTool      = -32003 // 无效工具
+	InvalidResource  = -32004 // 无效资源
+	InvalidPrompt    = -32005 // 无效提示模板
 )
 
 type JSONRPCMessage struct {

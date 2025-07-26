@@ -103,6 +103,7 @@ func (t *Transport) Send(ctx context.Context, data []byte) error {
 
 	// 添加MCP标准头部
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json, text/event-stream")
 	req.Header.Set(MCPProtocolVersionHeader, t.protocolVersion)
 	req.Header.Set(MCPSessionIDHeader, t.sessionID)
 

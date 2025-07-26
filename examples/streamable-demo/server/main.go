@@ -33,7 +33,7 @@ func main() {
 	mcp.Tool("greet", "问候用户").
 		WithStringParam("name", "用户名称", true).
 		WithStringParam("language", "语言（可选）", false).
-		Handle(func(ctx context.Context, args map[string]interface{}) (*protocol.CallToolResult, error) {
+		Handle(func(ctx context.Context, args map[string]any) (*protocol.CallToolResult, error) {
 			name, ok := args["name"].(string)
 			if !ok {
 				return protocol.NewToolResultError("参数 'name' 必须是字符串"), nil
@@ -57,7 +57,7 @@ func main() {
 	// 注册一个数学计算工具
 	mcp.Tool("calculate", "执行数学计算").
 		WithStringParam("expression", "数学表达式", true).
-		Handle(func(ctx context.Context, args map[string]interface{}) (*protocol.CallToolResult, error) {
+		Handle(func(ctx context.Context, args map[string]any) (*protocol.CallToolResult, error) {
 			expr, ok := args["expression"].(string)
 			if !ok {
 				return protocol.NewToolResultError("参数 'expression' 必须是字符串"), nil
@@ -77,11 +77,11 @@ func main() {
 
 ## 特性
 
-- 🌐 **单一端点**：所有通信通过一个 HTTP 端点
-- 🔄 **动态升级**：根据需要自动升级到 SSE 流
-- 📱 **会话管理**：支持有状态的会话
-- 🔄 **可恢复连接**：支持连接中断后的恢复
-- 🛡️ **安全防护**：内置 DNS rebinding 攻击防护
+- **单一端点**：所有通信通过一个 HTTP 端点
+- **动态升级**：根据需要自动升级到 SSE 流
+- **会话管理**：支持有状态的会话
+- **可恢复连接**：支持连接中断后的恢复
+- **安全防护**：内置 DNS rebinding 攻击防护
 
 ## 协议版本
 
@@ -135,14 +135,13 @@ func main() {
 	// 创建Streamable HTTP传输服务器
 	streamableServer := streamable.NewServer(":8081", mcp)
 
-	log.Println("🚀 启动 Streamable HTTP MCP 服务器")
-	log.Println("📡 监听地址: http://localhost:8081")
-	log.Println("🔗 协议版本: MCP 2025-03-26")
-	log.Println("⚡ 传输协议: Streamable HTTP")
+	log.Println("启动 Streamable HTTP MCP 服务器")
+	log.Println("监听地址: http://localhost:8081")
+	log.Println("传输协议: Streamable HTTP")
 
 	if err := streamableServer.Serve(ctx); err != nil && err != context.Canceled {
 		log.Fatalf("服务器错误: %v", err)
 	}
 
-	log.Println("✅ 服务器已优雅关闭")
+	log.Println("服务器已优雅关闭")
 }

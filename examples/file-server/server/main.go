@@ -35,7 +35,7 @@ func main() {
 	// 注册文件列表工具
 	mcp.Tool("list_directory", "列出指定目录中的文件").
 		WithStringParam("path", "目录路径", true).
-		Handle(func(ctx context.Context, args map[string]interface{}) (*protocol.CallToolResult, error) {
+		Handle(func(ctx context.Context, args map[string]any) (*protocol.CallToolResult, error) {
 			path, ok := args["path"].(string)
 			if !ok {
 				return protocol.NewToolResultError("参数 'path' 必须是字符串"), nil
@@ -79,7 +79,7 @@ func main() {
 	// 注册文件读取工具
 	mcp.Tool("read_file", "读取文件内容").
 		WithStringParam("path", "文件路径", true).
-		Handle(func(ctx context.Context, args map[string]interface{}) (*protocol.CallToolResult, error) {
+		Handle(func(ctx context.Context, args map[string]any) (*protocol.CallToolResult, error) {
 			path, ok := args["path"].(string)
 			if !ok {
 				return protocol.NewToolResultError("参数 'path' 必须是字符串"), nil
@@ -109,7 +109,7 @@ func main() {
 	mcp.Tool("search_files", "搜索包含特定内容的文件").
 		WithStringParam("directory", "搜索目录", true).
 		WithStringParam("pattern", "搜索内容", true).
-		Handle(func(ctx context.Context, args map[string]interface{}) (*protocol.CallToolResult, error) {
+		Handle(func(ctx context.Context, args map[string]any) (*protocol.CallToolResult, error) {
 			directory, ok := args["directory"].(string)
 			if !ok {
 				return protocol.NewToolResultError("参数 'directory' 必须是字符串"), nil

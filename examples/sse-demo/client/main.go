@@ -69,7 +69,7 @@ func main() {
 
 	// echo工具
 	fmt.Println("\n测试echo工具:")
-	result, err := mcpClient.CallTool(ctx, "echo", map[string]interface{}{
+	result, err := mcpClient.CallTool(ctx, "echo", map[string]any{
 		"message": "Hello, SSE Demo!",
 	})
 	if err != nil {
@@ -82,7 +82,7 @@ func main() {
 
 	// 随机数工具
 	fmt.Println("\n测试随机数工具:")
-	result, err = mcpClient.CallTool(ctx, "random", map[string]interface{}{
+	result, err = mcpClient.CallTool(ctx, "random", map[string]any{
 		"min": 1,
 		"max": 100,
 	})
@@ -98,7 +98,7 @@ func main() {
 	fmt.Println("\n测试时间工具:")
 	timeFormats := []string{"readable", "iso", "unix"}
 	for _, format := range timeFormats {
-		result, err = mcpClient.CallTool(ctx, "time", map[string]interface{}{
+		result, err = mcpClient.CallTool(ctx, "time", map[string]any{
 			"format": format,
 		})
 		if err != nil {
@@ -115,7 +115,7 @@ func main() {
 	testText := "Hello World"
 	operations := []string{"upper", "lower", "reverse", "length"}
 	for _, op := range operations {
-		result, err = mcpClient.CallTool(ctx, "text_transform", map[string]interface{}{
+		result, err = mcpClient.CallTool(ctx, "text_transform", map[string]any{
 			"text":      testText,
 			"operation": op,
 		})
@@ -187,7 +187,7 @@ func main() {
 
 func showHelp() {
 	fmt.Println(`
-📖 可用命令:
+  可用命令:
   echo <message>              - 回声工具
   random <min> <max>          - 生成随机数
   time [format]               - 获取当前时间 (format: readable/iso/unix)
@@ -214,7 +214,7 @@ func handleInteractiveCommand(ctx context.Context, client client.Client, input s
 			return
 		}
 		message := strings.Join(parts[1:], " ")
-		callTool(ctx, client, "echo", map[string]interface{}{"message": message})
+		callTool(ctx, client, "echo", map[string]any{"message": message})
 		
 	case "random":
 		if len(parts) < 3 {
@@ -227,14 +227,14 @@ func handleInteractiveCommand(ctx context.Context, client client.Client, input s
 			fmt.Println("min和max必须是整数")
 			return
 		}
-		callTool(ctx, client, "random", map[string]interface{}{"min": min, "max": max})
+		callTool(ctx, client, "random", map[string]any{"min": min, "max": max})
 		
 	case "time":
 		format := "readable"
 		if len(parts) > 1 {
 			format = parts[1]
 		}
-		callTool(ctx, client, "time", map[string]interface{}{"format": format})
+		callTool(ctx, client, "time", map[string]any{"format": format})
 		
 	case "transform":
 		if len(parts) < 3 {
@@ -243,7 +243,7 @@ func handleInteractiveCommand(ctx context.Context, client client.Client, input s
 		}
 		text := parts[1]
 		operation := parts[2]
-		callTool(ctx, client, "text_transform", map[string]interface{}{
+		callTool(ctx, client, "text_transform", map[string]any{
 			"text": text, "operation": operation})
 		
 	case "info":
@@ -260,7 +260,7 @@ func handleInteractiveCommand(ctx context.Context, client client.Client, input s
 	}
 }
 
-func callTool(ctx context.Context, client client.Client, name string, args map[string]interface{}) {
+func callTool(ctx context.Context, client client.Client, name string, args map[string]any) {
 	result, err := client.CallTool(ctx, name, args)
 	if err != nil {
 		fmt.Printf("调用工具失败: %v\n", err)
@@ -286,7 +286,7 @@ func readResource(ctx context.Context, client client.Client, uri string) {
 	}
 	
 	if len(resource.Contents) > 0 {
-		fmt.Printf("📄 %s\n", resource.Contents[0].Text)
+		fmt.Printf("%s\n", resource.Contents[0].Text)
 	}
 }
 
