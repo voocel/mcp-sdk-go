@@ -372,6 +372,32 @@ func NewServer(addr string, handler transport.Handler) *Server {
 	return s
 }
 
+// validateProtocolVersion 验证协议版本头部
+func (s *Server) validateProtocolVersion(r *http.Request) error {
+	clientVersion := r.Header.Get(MCPProtocolVersionHeader)
+
+	// 如果没有头部，根据规范假设为最新版本 (这是允许的)
+	if clientVersion == "" {
+		return nil // 服务器应假设为 2025-06-18
+	}
+
+	// 只有当客户端明确发送了版本头部时，才验证其有效性
+	supportedVersions := []string{
+		"2025-06-18",
+		"2025-03-26",
+		"2024-11-05",
+	}
+
+	for _, version := range supportedVersions {
+		if clientVersion == version {
+			return nil
+		}
+	}
+
+	// 只有明确不支持的版本才返回错误
+	return fmt.Errorf("unsupported protocol version: %s", clientVersion)
+}
+
 func (s *Server) cleanupSessions() {
 	ticker := time.NewTicker(time.Minute * 5)
 	defer ticker.Stop()
@@ -417,6 +443,11 @@ func (s *Server) getOrCreateSession(sessionID string) *Session {
 }
 
 func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
+	if err := s.validateProtocolVersion(r); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
 	sessionID := r.Header.Get(MCPSessionIDHeader)
 	session := s.getOrCreateSession(sessionID)
 
@@ -464,6 +495,11 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleMessage(w http.ResponseWriter, r *http.Request) {
+	if err := s.validateProtocolVersion(r); err != nil {
+		s.sendJSONRPCError(w, "", protocol.InvalidParams, err.Error(), nil)
+		return
+	}
+
 	// 从查询参数获取sessionId
 	sessionID := r.URL.Query().Get("sessionId")
 	if sessionID == "" {

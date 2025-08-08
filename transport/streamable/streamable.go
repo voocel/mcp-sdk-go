@@ -378,6 +378,31 @@ func (s *Server) cleanupSessions(ctx context.Context) {
 	}
 }
 
+// validateProtocolVersion 验证协议版本头部
+func (s *Server) validateProtocolVersion(r *http.Request) error {
+	clientVersion := r.Header.Get(MCPProtocolVersionHeader)
+	// 如果没有头部，根据规范假设为最新版本
+	if clientVersion == "" {
+		return nil // 服务器应假设为 2025-06-18
+	}
+
+	// 只有当客户端明确发送了版本头部时，才验证其有效性
+	supportedVersions := []string{
+		"2025-06-18",
+		"2025-03-26",
+		"2024-11-05",
+	}
+
+	for _, version := range supportedVersions {
+		if clientVersion == version {
+			return nil
+		}
+	}
+
+	// 只有明确不支持的版本才返回错误
+	return fmt.Errorf("unsupported protocol version: %s", clientVersion)
+}
+
 // handleRequest 处理HTTP请求
 func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 	// 安全检查：验证Origin头
@@ -402,6 +427,11 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 
 // handlePOST 处理POST请求
 func (s *Server) handlePOST(w http.ResponseWriter, r *http.Request) {
+	if err := s.validateProtocolVersion(r); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
 	// 检查Accept头
 	accept := r.Header.Get("Accept")
 	if !strings.Contains(accept, "application/json") && !strings.Contains(accept, "text/event-stream") {
@@ -457,6 +487,11 @@ func (s *Server) handlePOST(w http.ResponseWriter, r *http.Request) {
 
 // handleGET 处理GET请求
 func (s *Server) handleGET(w http.ResponseWriter, r *http.Request) {
+	if err := s.validateProtocolVersion(r); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
 	accept := r.Header.Get("Accept")
 	if !strings.Contains(accept, "text/event-stream") {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -478,6 +513,11 @@ func (s *Server) handleGET(w http.ResponseWriter, r *http.Request) {
 
 // handleDELETE 处理DELETE请求
 func (s *Server) handleDELETE(w http.ResponseWriter, r *http.Request) {
+	if err := s.validateProtocolVersion(r); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
 	sessionID := r.Header.Get(MCPSessionIDHeader)
 	if sessionID == "" {
 		http.Error(w, "Session ID required", http.StatusBadRequest)
