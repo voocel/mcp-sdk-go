@@ -14,10 +14,11 @@ type FastMCP struct {
 }
 
 type ToolBuilder struct {
-	fastmcp     *FastMCP
-	name        string
-	description string
-	inputSchema protocol.JSONSchema
+	fastmcp      *FastMCP
+	name         string
+	description  string
+	inputSchema  protocol.JSONSchema
+	outputSchema protocol.JSONSchema // MCP 2025-06-18 新增
 }
 
 type ResourceBuilder struct {
@@ -159,8 +160,28 @@ func (tb *ToolBuilder) WithStructSchema(v interface{}) *ToolBuilder {
 	return tb
 }
 
+// WithOutputSchema 设置输出模式 (MCP 2025-06-18)
+func (tb *ToolBuilder) WithOutputSchema(schema protocol.JSONSchema) *ToolBuilder {
+	tb.outputSchema = schema
+	return tb
+}
+
+// WithStructOutputSchema 使用结构体自动生成输出模式
+func (tb *ToolBuilder) WithStructOutputSchema(v interface{}) *ToolBuilder {
+	schema, err := utils.StructToJSONSchema(v)
+	if err == nil {
+		tb.outputSchema = schema
+	}
+	return tb
+}
+
 // Handle 注册工具处理器
 func (tb *ToolBuilder) Handle(handler ToolHandler) error {
+	if len(tb.outputSchema) > 0 {
+		return tb.fastmcp.server.RegisterTool(tb.name, tb.description, tb.inputSchema, handler, ToolOptions{
+			OutputSchema: tb.outputSchema,
+		})
+	}
 	return tb.fastmcp.server.RegisterTool(tb.name, tb.description, tb.inputSchema, handler)
 }
 
@@ -170,7 +191,20 @@ func (tb *ToolBuilder) HandleWithValidation(handler ToolHandler) error {
 		if err := validateToolArguments(args, tb.inputSchema); err != nil {
 			return protocol.NewToolResultError(err.Error()), nil
 		}
-		return handler(ctx, args)
+
+		result, err := handler(ctx, args)
+		if err != nil {
+			return nil, err
+		}
+
+		// 验证结构化输出
+		if result.StructuredContent != nil && tb.outputSchema != nil {
+			if err := protocol.ValidateStructuredOutput(result.StructuredContent, tb.outputSchema); err != nil {
+				return protocol.NewToolResultError(fmt.Sprintf("output validation failed: %v", err)), nil
+			}
+		}
+
+		return result, nil
 	}
 	return tb.Handle(wrappedHandler)
 }
@@ -284,6 +318,35 @@ func (f *FastMCP) SimpleTextPrompt(name, description string, handler func(ctx co
 		}
 		return protocol.NewGetPromptResult(description, messages...), nil
 	})
+}
+
+// SimpleStructuredTool 创建返回结构化数据的简单工具 (MCP 2025-06-18)
+func (f *FastMCP) SimpleStructuredTool(name, description string, outputSchema protocol.JSONSchema, handler func(ctx context.Context, args map[string]interface{}) (interface{}, error)) error {
+	return f.Tool(name, description).
+		WithOutputSchema(outputSchema).
+		HandleWithValidation(func(ctx context.Context, args map[string]interface{}) (*protocol.CallToolResult, error) {
+			data, err := handler(ctx, args)
+			if err != nil {
+				return protocol.NewToolResultError(err.Error()), nil
+			}
+			return protocol.NewToolResultWithStructured(
+				[]protocol.Content{protocol.NewTextContent("Operation completed successfully")},
+				data,
+			), nil
+		})
+}
+
+// SimpleStructuredToolWithText 创建返回文本和结构化数据的工具
+func (f *FastMCP) SimpleStructuredToolWithText(name, description string, outputSchema protocol.JSONSchema, handler func(ctx context.Context, args map[string]interface{}) (string, interface{}, error)) error {
+	return f.Tool(name, description).
+		WithOutputSchema(outputSchema).
+		HandleWithValidation(func(ctx context.Context, args map[string]interface{}) (*protocol.CallToolResult, error) {
+			text, data, err := handler(ctx, args)
+			if err != nil {
+				return protocol.NewToolResultError(err.Error()), nil
+			}
+			return protocol.NewToolResultTextWithStructured(text, data), nil
+		})
 }
 
 func validateToolArguments(args map[string]interface{}, schema protocol.JSONSchema) error {

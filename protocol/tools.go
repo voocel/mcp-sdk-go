@@ -1,6 +1,12 @@
 package protocol
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"fmt"
+	"sync"
+
+	"github.com/santhosh-tekuri/jsonschema/v6"
+)
 
 type ToolParameter struct {
 	Name        string     `json:"name"`
@@ -10,9 +16,10 @@ type ToolParameter struct {
 }
 
 type Tool struct {
-	Name        string     `json:"name"`
-	Description string     `json:"description,omitempty"`
-	InputSchema JSONSchema `json:"inputSchema"`
+	Name         string     `json:"name"`
+	Description  string     `json:"description,omitempty"`
+	InputSchema  JSONSchema `json:"inputSchema"`
+	OutputSchema JSONSchema `json:"outputSchema,omitempty"` // MCP 2025-06-18 新增
 }
 
 type ToolList struct {
@@ -85,6 +92,16 @@ func NewTool(name, description string, inputSchema JSONSchema) Tool {
 	}
 }
 
+// NewToolWithOutput 创建带有输出模式的工具 (MCP 2025-06-18)
+func NewToolWithOutput(name, description string, inputSchema, outputSchema JSONSchema) Tool {
+	return Tool{
+		Name:         name,
+		Description:  description,
+		InputSchema:  inputSchema,
+		OutputSchema: outputSchema,
+	}
+}
+
 func NewToolResult(content []Content, isError bool) *CallToolResult {
 	return &CallToolResult{
 		Content: content,
@@ -122,6 +139,64 @@ func NewToolResultTextWithStructured(text string, structuredContent interface{})
 		StructuredContent: structuredContent,
 		IsError:           false,
 	}
+}
+
+// 缓存编译后的schema以提高性能
+var (
+	schemaCache = make(map[string]*jsonschema.Schema)
+	cacheMutex  sync.RWMutex
+)
+
+// ValidateStructuredOutput 验证结构化输出是否符合模式
+func ValidateStructuredOutput(data interface{}, schema JSONSchema) error {
+	if len(schema) == 0 {
+		return nil
+	}
+
+	return validateWithJSONSchema(data, schema)
+}
+
+// validateWithJSONSchema 使用jsonschema库进行验证
+func validateWithJSONSchema(data interface{}, schema JSONSchema) error {
+	schemaBytes, err := json.Marshal(schema)
+	if err != nil {
+		return fmt.Errorf("failed to marshal schema: %v", err)
+	}
+	schemaKey := string(schemaBytes)
+
+	// 检查缓存
+	cacheMutex.RLock()
+	compiledSchema, exists := schemaCache[schemaKey]
+	cacheMutex.RUnlock()
+
+	if !exists {
+		compiler := jsonschema.NewCompiler()
+
+		var schemaInterface interface{}
+		if err := json.Unmarshal(schemaBytes, &schemaInterface); err != nil {
+			return fmt.Errorf("failed to convert schema: %v", err)
+		}
+
+		if err := compiler.AddResource("schema.json", schemaInterface); err != nil {
+			return fmt.Errorf("failed to add schema resource: %v", err)
+		}
+
+		compiledSchema, err = compiler.Compile("schema.json")
+		if err != nil {
+			return fmt.Errorf("failed to compile schema: %v", err)
+		}
+
+		// 缓存编译后的schema
+		cacheMutex.Lock()
+		schemaCache[schemaKey] = compiledSchema
+		cacheMutex.Unlock()
+	}
+
+	if err := compiledSchema.Validate(data); err != nil {
+		return fmt.Errorf("validation failed: %v", err)
+	}
+
+	return nil
 }
 
 func ContentToJSON(content []Content) ([]json.RawMessage, error) {

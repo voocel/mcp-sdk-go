@@ -80,12 +80,28 @@ func NewServer(name, version string) *MCPServer {
 	}
 }
 
-// RegisterTool 注册工具
-func (s *MCPServer) RegisterTool(name, description string, inputSchema protocol.JSONSchema, handler ToolHandler) error {
+// ToolOptions 工具注册选项
+type ToolOptions struct {
+	OutputSchema protocol.JSONSchema // 可选的输出模式 (MCP 2025-06-18)
+}
+
+// RegisterTool 注册工具，支持可选的输出模式
+func (s *MCPServer) RegisterTool(name, description string, inputSchema protocol.JSONSchema, handler ToolHandler, opts ...ToolOptions) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	tool := protocol.NewTool(name, description, inputSchema)
+	var outputSchema protocol.JSONSchema
+	if len(opts) > 0 && len(opts[0].OutputSchema) > 0 {
+		outputSchema = opts[0].OutputSchema
+	}
+
+	var tool protocol.Tool
+	if len(outputSchema) > 0 {
+		tool = protocol.NewToolWithOutput(name, description, inputSchema, outputSchema)
+	} else {
+		tool = protocol.NewTool(name, description, inputSchema)
+	}
+
 	s.tools[name] = &ToolRegistration{
 		Tool:    tool,
 		Handler: handler,
