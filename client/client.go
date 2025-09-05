@@ -15,6 +15,9 @@ import (
 	"github.com/voocel/mcp-sdk-go/transport/streamable"
 )
 
+// ElicitationHandler 定义处理 elicitation 请求的接口
+type ElicitationHandler func(ctx context.Context, params *protocol.ElicitationCreateParams) (*protocol.ElicitationResult, error)
+
 type Client interface {
 	Initialize(ctx context.Context, clientInfo protocol.ClientInfo) (*protocol.InitializeResult, error)
 	SendInitialized(ctx context.Context) error
@@ -29,6 +32,9 @@ type Client interface {
 	GetPrompt(ctx context.Context, name string, args map[string]string) (*protocol.GetPromptResult, error)
 
 	SendNotification(ctx context.Context, method string, params interface{}) error
+
+	SetElicitationHandler(handler ElicitationHandler)
+
 	Close() error
 }
 
@@ -40,8 +46,9 @@ type MCPClient struct {
 	capabilities    *protocol.ServerCapabilities
 	protocolVersion string
 
-	pendingRequests map[string]chan *protocol.JSONRPCMessage
-	mu              sync.RWMutex
+	pendingRequests    map[string]chan *protocol.JSONRPCMessage
+	elicitationHandler ElicitationHandler
+	mu                 sync.RWMutex
 
 	initialized    bool
 	requestTimeout time.Duration // 添加可配置的超时时间
@@ -108,6 +115,14 @@ func WithClientInfo(name, version string) Option {
 func WithTimeout(timeout time.Duration) Option {
 	return func(c *MCPClient) error {
 		c.requestTimeout = timeout
+		return nil
+	}
+}
+
+// WithElicitationHandler 设置elicitation处理器
+func WithElicitationHandler(handler ElicitationHandler) Option {
+	return func(c *MCPClient) error {
+		c.elicitationHandler = handler
 		return nil
 	}
 }
@@ -206,6 +221,9 @@ func (c *MCPClient) handleServerRequest(ctx context.Context, message *protocol.J
 	case "roots/list":
 		// 处理根目录列表请求
 		response, err = c.handleRootsListRequest(ctx, message)
+	case "elicitation/create":
+		// 处理 elicitation 请求
+		response, err = c.handleElicitationRequest(ctx, message)
 	default:
 		// 未知方法，返回方法未找到错误
 		response = &protocol.JSONRPCMessage{
@@ -292,6 +310,56 @@ func (c *MCPClient) handleSamplingRequest(ctx context.Context, message *protocol
 	}, nil
 }
 
+// handleElicitationRequest 处理 elicitation 请求
+func (c *MCPClient) handleElicitationRequest(ctx context.Context, message *protocol.JSONRPCMessage) (*protocol.JSONRPCMessage, error) {
+	c.mu.RLock()
+	handler := c.elicitationHandler
+	c.mu.RUnlock()
+
+	if handler == nil {
+		// 如果没有设置处理器，返回取消响应
+		result := protocol.NewElicitationCancel()
+		resultBytes, _ := json.Marshal(result)
+
+		return &protocol.JSONRPCMessage{
+			JSONRPC: protocol.JSONRPCVersion,
+			ID:      message.ID,
+			Result:  resultBytes,
+		}, nil
+	}
+
+	var params protocol.ElicitationCreateParams
+	if message.Params != nil {
+		if err := json.Unmarshal(message.Params, &params); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal elicitation params: %w", err)
+		}
+	}
+
+	result, err := handler(ctx, &params)
+	if err != nil {
+		return nil, fmt.Errorf("elicitation handler failed: %w", err)
+	}
+
+	if result == nil {
+		result = protocol.NewElicitationCancel()
+	}
+
+	if err := result.Validate(); err != nil {
+		return nil, fmt.Errorf("invalid elicitation result: %w", err)
+	}
+
+	resultBytes, err := json.Marshal(result)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal elicitation result: %w", err)
+	}
+
+	return &protocol.JSONRPCMessage{
+		JSONRPC: protocol.JSONRPCVersion,
+		ID:      message.ID,
+		Result:  resultBytes,
+	}, nil
+}
+
 // sendRequest 发送请求并等待响应
 func (c *MCPClient) sendRequest(ctx context.Context, method string, params interface{}) (*protocol.JSONRPCMessage, error) {
 	id := uuid.New().String()
@@ -362,7 +430,8 @@ func (c *MCPClient) Initialize(ctx context.Context, clientInfo protocol.ClientIn
 			Roots: &protocol.RootsCapability{
 				ListChanged: true, // 支持根目录变更通知
 			},
-			Sampling:     &protocol.SamplingCapability{}, // 支持 LLM 采样
+			Sampling:     &protocol.SamplingCapability{},    // 支持 LLM 采样
+			Elicitation:  &protocol.ElicitationCapability{}, // 支持 elicitation
 			Experimental: make(map[string]interface{}),
 		},
 		ClientInfo: c.clientInfo,
@@ -567,6 +636,13 @@ func (c *MCPClient) SendNotification(ctx context.Context, method string, params 
 	}
 
 	return c.transport.Send(ctx, msgBytes)
+}
+
+// SetElicitationHandler 设置 elicitation 处理器
+func (c *MCPClient) SetElicitationHandler(handler ElicitationHandler) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.elicitationHandler = handler
 }
 
 // Close 关闭客户端连接

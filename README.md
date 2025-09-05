@@ -32,6 +32,7 @@ MCP Go SDK 是模型上下文协议（Model Context Protocol）的 Go 语言实�
 - **服务器 SDK** - 快速构建 MCP 服务器，支持工具、资源、提示模板
 - **客户端 SDK** - 连接任何 MCP 兼容服务器的客户端实现
 - **多种传输协议** - STDIO、SSE、Streamable HTTP (官方标准)
+- **🆕 Elicitation 支持** - 交互式用户输入，支持字符串、数字、布尔值、枚举选择
 - **类型安全** - 完整的类型定义和参数验证
 - **高性能** - 并发安全，优化的消息处理
 - **安全防护** - 内置输入验证、路径遍历保护、资源限制
@@ -44,7 +45,7 @@ MCP Go SDK 是模型上下文协议（Model Context Protocol）的 Go 语言实�
 
 | 版本 | 发布时间 | 主要特性 | 支持状态 |
 |------|----------|----------|----------|
-| **2025-06-18** | 2025年6月 | 结构化工具输出、工具注解、用户交互请求 | **完全支持** |
+| **2025-06-18** | 2025年6月 | 结构化工具输出、工具注解、**Elicitation 用户交互** | **完全支持** |
 | **2025-03-26** | 2025年3月 | OAuth 2.1授权、Streamable HTTP、JSON-RPC批处理 | **完全支持** |
 | **2024-11-05** | 2024年11月 | HTTP+SSE传输、基础工具和资源 | **完全支持** |
 
@@ -262,6 +263,25 @@ mcp.Prompt("prompt_name", "提示描述").
         return protocol.NewGetPromptResult("描述", messages...), nil
     })
 
+// 注册支持 Elicitation 的交互式工具
+mcp.Tool("user_profile", "创建用户档案").
+    HandleWithElicitation(func(ctx *server.MCPContext, args map[string]interface{}) (*protocol.CallToolResult, error) {
+        // 请求用户输入姓名
+        name, err := ctx.ElicitString("请输入你的姓名", "name", "你的全名", true)
+        if err != nil {
+            return protocol.NewToolResultError(err.Error()), nil
+        }
+
+        // 请求用户选择颜色
+        color, err := ctx.ElicitChoice("请选择你喜欢的颜色", "color", "你最喜欢的颜色",
+            []string{"red", "green", "blue"}, []string{"红色", "绿色", "蓝色"}, true)
+        if err != nil {
+            return protocol.NewToolResultError(err.Error()), nil
+        }
+
+        return protocol.NewToolResultText(fmt.Sprintf("用户档案: %s 喜欢 %s", name, color)), nil
+    })
+
 // 启动服务器 (SSE 传输)
 sseTransport := sse.NewServer(":8080", mcp)
 sseTransport.Serve(ctx)
@@ -274,10 +294,20 @@ sseTransport.Serve(ctx)
 ### 客户端 (连接 MCP 服务器)
 
 ```go
+// 🆕 Elicitation 处理器
+func handleElicitation(ctx context.Context, params *protocol.ElicitationCreateParams) (*protocol.ElicitationResult, error) {
+    fmt.Println(params.Message) // 显示服务器请求
+    // 获取用户输入并返回结果
+    return protocol.NewElicitationAccept(map[string]interface{}{
+        "name": "用户输入的姓名",
+    }), nil
+}
+
 // 创建客户端
 client, err := client.New(
     client.WithSSETransport("http://localhost:8080"),
     client.WithClientInfo("client-name", "1.0.0"),
+    client.WithElicitationHandler(handleElicitation), // 🆕 设置 elicitation 处理器
 )
 
 // 初始化并调用工具
@@ -343,6 +373,9 @@ MIT License - 详见 [LICENSE](LICENSE) 文件
 - [ ] **基础会话管理** - 支持每客户端独立状态管理
 - [ ] **简单中间件系统** - 提供基本的请求/响应拦截能力
 - [ ] **用户交互请求 (Elicitation)** - 服务器可在交互过程中请求用户输入 (MCP 2025-06-18)
+- [ ] **资源模板 (Resource Templates)** - 支持动态资源模板和URI模板
+- [ ] **进度报告 (Progress Reporting)** - 长时间运行工具的实时进度反馈
+- [ ] **CLI工具** - 开发、测试和调试MCP服务器的命令行工具
 - [ ] **OAuth 2.1授权支持** - 企业级安全认证机制
 - [ ] **高级工具过滤** - 基于用户角色的工具访问控制
 

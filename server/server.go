@@ -31,6 +31,10 @@ type ToolHandler func(ctx context.Context, arguments map[string]interface{}) (*p
 type ResourceHandler func(ctx context.Context) (*protocol.ReadResourceResult, error)
 type PromptHandler func(ctx context.Context, arguments map[string]string) (*protocol.GetPromptResult, error)
 
+type ToolHandlerWithElicitation func(ctx *MCPContext, arguments map[string]interface{}) (*protocol.CallToolResult, error)
+type ResourceHandlerWithElicitation func(ctx *MCPContext) (*protocol.ReadResourceResult, error)
+type PromptHandlerWithElicitation func(ctx *MCPContext, arguments map[string]string) (*protocol.GetPromptResult, error)
+
 type MCPServer struct {
 	serverInfo   protocol.ServerInfo
 	capabilities protocol.ServerCapabilities
@@ -43,6 +47,7 @@ type MCPServer struct {
 	clientInfo  *protocol.ClientInfo
 
 	notificationHandler func(method string, params interface{}) error
+	elicitor            Elicitor
 
 	mu sync.RWMutex
 }
@@ -62,7 +67,7 @@ type PromptRegistration struct {
 	Handler PromptHandler
 }
 
-// NewServer 创建MCP服务端
+// NewServer creates MCP server
 func NewServer(name, version string) *MCPServer {
 	return &MCPServer{
 		serverInfo: protocol.ServerInfo{
@@ -80,12 +85,12 @@ func NewServer(name, version string) *MCPServer {
 	}
 }
 
-// ToolOptions 工具注册选项
+// ToolOptions tool registration options
 type ToolOptions struct {
-	OutputSchema protocol.JSONSchema // 可选的输出模式 (MCP 2025-06-18)
+	OutputSchema protocol.JSONSchema // optional output schema (MCP 2025-06-18)
 }
 
-// RegisterTool 注册工具，支持可选的输出模式
+// RegisterTool registers tool with optional output schema support
 func (s *MCPServer) RegisterTool(name, description string, inputSchema protocol.JSONSchema, handler ToolHandler, opts ...ToolOptions) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -107,7 +112,7 @@ func (s *MCPServer) RegisterTool(name, description string, inputSchema protocol.
 		Handler: handler,
 	}
 
-	// 发送变更通知
+	// send change notification
 	if s.initialized {
 		go s.SendNotification("notifications/tools/list_changed", &protocol.ToolsListChangedNotification{})
 	}
@@ -115,14 +120,14 @@ func (s *MCPServer) RegisterTool(name, description string, inputSchema protocol.
 	return nil
 }
 
-// UnregisterTool 注销工具
+// UnregisterTool unregisters tool
 func (s *MCPServer) UnregisterTool(name string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	delete(s.tools, name)
 
-	// 发送变更通知
+	// send change notification
 	if s.initialized {
 		go s.SendNotification("notifications/tools/list_changed", &protocol.ToolsListChangedNotification{})
 	}
@@ -130,7 +135,7 @@ func (s *MCPServer) UnregisterTool(name string) error {
 	return nil
 }
 
-// RegisterResource 注册资源
+// RegisterResource registers resource
 func (s *MCPServer) RegisterResource(uri, name, description, mimeType string, handler ResourceHandler) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -141,7 +146,7 @@ func (s *MCPServer) RegisterResource(uri, name, description, mimeType string, ha
 		Handler:  handler,
 	}
 
-	// 发送变更通知
+	// send change notification
 	if s.initialized {
 		go s.SendNotification("notifications/resources/list_changed", &protocol.ResourcesListChangedNotification{})
 	}
@@ -149,14 +154,14 @@ func (s *MCPServer) RegisterResource(uri, name, description, mimeType string, ha
 	return nil
 }
 
-// UnregisterResource 注销资源
+// UnregisterResource unregisters resource
 func (s *MCPServer) UnregisterResource(uri string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	delete(s.resources, uri)
 
-	// 发送变更通知
+	// send change notification
 	if s.initialized {
 		go s.SendNotification("notifications/resources/list_changed", &protocol.ResourcesListChangedNotification{})
 	}
@@ -164,7 +169,7 @@ func (s *MCPServer) UnregisterResource(uri string) error {
 	return nil
 }
 
-// RegisterPrompt 注册提示模板
+// RegisterPrompt registers prompt template
 func (s *MCPServer) RegisterPrompt(name, description string, arguments []protocol.PromptArgument, handler PromptHandler) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -175,7 +180,7 @@ func (s *MCPServer) RegisterPrompt(name, description string, arguments []protoco
 		Handler: handler,
 	}
 
-	// 发送变更通知
+	// send change notification
 	if s.initialized {
 		go s.SendNotification("notifications/prompts/list_changed", &protocol.PromptsListChangedNotification{})
 	}
@@ -183,14 +188,14 @@ func (s *MCPServer) RegisterPrompt(name, description string, arguments []protoco
 	return nil
 }
 
-// UnregisterPrompt 注销提示模板
+// UnregisterPrompt unregisters prompt template
 func (s *MCPServer) UnregisterPrompt(name string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	delete(s.prompts, name)
 
-	// 发送变更通知
+	// send change notification
 	if s.initialized {
 		go s.SendNotification("notifications/prompts/list_changed", &protocol.PromptsListChangedNotification{})
 	}
@@ -198,22 +203,34 @@ func (s *MCPServer) UnregisterPrompt(name string) error {
 	return nil
 }
 
-// GetServerInfo 获取服务器信息
+// GetServerInfo gets server information
 func (s *MCPServer) GetServerInfo() protocol.ServerInfo {
 	return s.serverInfo
 }
 
-// GetCapabilities 获取服务器能力
+// GetCapabilities gets server capabilities
 func (s *MCPServer) GetCapabilities() protocol.ServerCapabilities {
 	return s.capabilities
 }
 
-// SetNotificationHandler 设置通知处理器
+// SetElicitor sets elicitation handler
+func (s *MCPServer) SetElicitor(elicitor Elicitor) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.elicitor = elicitor
+}
+
+// CreateMCPContext creates MCP context with elicitation support
+func (s *MCPServer) CreateMCPContext(ctx context.Context) *MCPContext {
+	return NewMCPContext(ctx, s, s.elicitor)
+}
+
+// SetNotificationHandler sets notification handler
 func (s *MCPServer) SetNotificationHandler(handler func(method string, params interface{}) error) {
 	s.notificationHandler = handler
 }
 
-// SendNotification 发送通知
+// SendNotification sends notification
 func (s *MCPServer) SendNotification(method string, params interface{}) error {
 	if s.notificationHandler != nil {
 		return s.notificationHandler(method, params)
@@ -221,17 +238,17 @@ func (s *MCPServer) SendNotification(method string, params interface{}) error {
 	return nil
 }
 
-// HandleMessage 处理JSON-RPC消息
+// HandleMessage handles JSON-RPC messages
 func (s *MCPServer) HandleMessage(ctx context.Context, message *protocol.JSONRPCMessage) (*protocol.JSONRPCMessage, error) {
 	if err := utils.ValidateJSONRPCMessage(message); err != nil {
-		// 如果是通知消息，不返回错误响应
+		// if it's a notification message, don't return error response
 		if message.ID == nil {
 			return nil, err
 		}
 		return utils.NewJSONRPCError("", protocol.InvalidRequest, err.Error(), nil)
 	}
 
-	// 处理请求或通知
+	// handle request or notification
 	if message.Method != "" {
 		return s.handleRequest(ctx, message)
 	}
@@ -239,7 +256,7 @@ func (s *MCPServer) HandleMessage(ctx context.Context, message *protocol.JSONRPC
 	return nil, fmt.Errorf("unsupported message type")
 }
 
-// 处理请求
+// handle request
 func (s *MCPServer) handleRequest(ctx context.Context, request *protocol.JSONRPCMessage) (*protocol.JSONRPCMessage, error) {
 	var result interface{}
 	var err error
@@ -248,10 +265,10 @@ func (s *MCPServer) handleRequest(ctx context.Context, request *protocol.JSONRPC
 	case "initialize":
 		result, err = s.handleInitialize(ctx, request.Params)
 	case "notifications/initialized":
-		// 处理初始化完成通知
+		// handle initialization completed notification
 		err = s.handleInitialized(ctx, request.Params)
 		if err == nil {
-			return nil, nil // 通知消息不需要响应
+			return nil, nil // notification messages don't need response
 		}
 	case "tools/list":
 		result, err = s.handleListTools(ctx, request.Params)
@@ -266,7 +283,7 @@ func (s *MCPServer) handleRequest(ctx context.Context, request *protocol.JSONRPC
 	case "prompts/get":
 		result, err = s.handleGetPrompt(ctx, request.Params)
 	default:
-		// 对于通知消息，不返回错误响应
+		// for notification messages, don't return error response
 		if request.IsNotification() {
 			return nil, fmt.Errorf("unknown notification method: %s", request.Method)
 		}
@@ -274,16 +291,16 @@ func (s *MCPServer) handleRequest(ctx context.Context, request *protocol.JSONRPC
 			fmt.Sprintf("method not found: %s", request.Method), nil)
 	}
 
-	// 如果是通知消息，不返回响应
+	// if it's a notification message, don't return response
 	if request.IsNotification() {
 		if err != nil {
-			// 对于通知消息的错误，只记录日志，不返回响应
+			// for notification message errors, only log, don't return response
 			return nil, err
 		}
 		return nil, nil
 	}
 
-	// 对于请求消息，返回响应
+	// for request messages, return response
 	if err != nil {
 		return utils.NewJSONRPCError(request.GetIDString(), protocol.InternalError, err.Error(), nil)
 	}
@@ -291,7 +308,7 @@ func (s *MCPServer) handleRequest(ctx context.Context, request *protocol.JSONRPC
 	return utils.NewJSONRPCResponse(request.GetIDString(), result)
 }
 
-// 初始化请求
+// initialization request
 func (s *MCPServer) handleInitialize(ctx context.Context, params json.RawMessage) (*protocol.InitializeResult, error) {
 	var req protocol.InitializeRequest
 	if params != nil {
@@ -300,13 +317,13 @@ func (s *MCPServer) handleInitialize(ctx context.Context, params json.RawMessage
 		}
 	}
 
-	// 检查协议版本兼容性并选择合适的版本
+	// check protocol version compatibility and select appropriate version
 	if !protocol.IsVersionSupported(req.ProtocolVersion) {
 		return nil, fmt.Errorf("unsupported protocol version: %s, supported versions: %v",
 			req.ProtocolVersion, protocol.GetSupportedVersions())
 	}
 
-	// 使用客户端请求的版本
+	// use the version requested by client
 	negotiatedVersion := req.ProtocolVersion
 
 	s.mu.Lock()
@@ -321,13 +338,13 @@ func (s *MCPServer) handleInitialize(ctx context.Context, params json.RawMessage
 	}, nil
 }
 
-// 处理初始化完成通知
+// handle initialization completed notification
 func (s *MCPServer) handleInitialized(ctx context.Context, params json.RawMessage) error {
-	// 初始化完成通知，客户端表示已准备好接收通知
+	// initialization completed notification, client indicates ready to receive notifications
 	return nil
 }
 
-// 工具列表
+// tool list
 func (s *MCPServer) handleListTools(ctx context.Context, params json.RawMessage) (*protocol.ListToolsResult, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -342,7 +359,7 @@ func (s *MCPServer) handleListTools(ctx context.Context, params json.RawMessage)
 	}, nil
 }
 
-// 工具调用
+// tool call
 func (s *MCPServer) handleCallTool(ctx context.Context, params json.RawMessage) (*protocol.CallToolResult, error) {
 	var req protocol.CallToolParams
 	if err := json.Unmarshal(params, &req); err != nil {
@@ -360,7 +377,7 @@ func (s *MCPServer) handleCallTool(ctx context.Context, params json.RawMessage) 
 	return registration.Handler(ctx, req.Arguments)
 }
 
-// 资源列表
+// resource list
 func (s *MCPServer) handleListResources(ctx context.Context, params json.RawMessage) (*protocol.ListResourcesResult, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -375,7 +392,7 @@ func (s *MCPServer) handleListResources(ctx context.Context, params json.RawMess
 	}, nil
 }
 
-// 资源读取
+// resource read
 func (s *MCPServer) handleReadResource(ctx context.Context, params json.RawMessage) (*protocol.ReadResourceResult, error) {
 	var req protocol.ReadResourceParams
 	if err := json.Unmarshal(params, &req); err != nil {
@@ -393,7 +410,7 @@ func (s *MCPServer) handleReadResource(ctx context.Context, params json.RawMessa
 	return registration.Handler(ctx)
 }
 
-// 提示模板列表
+// prompt template list
 func (s *MCPServer) handleListPrompts(ctx context.Context, params json.RawMessage) (*protocol.ListPromptsResult, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -408,7 +425,7 @@ func (s *MCPServer) handleListPrompts(ctx context.Context, params json.RawMessag
 	}, nil
 }
 
-// 获取提示模板
+// get prompt template
 func (s *MCPServer) handleGetPrompt(ctx context.Context, params json.RawMessage) (*protocol.GetPromptResult, error) {
 	var req protocol.GetPromptParams
 	if err := json.Unmarshal(params, &req); err != nil {

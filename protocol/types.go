@@ -74,7 +74,6 @@ type Content interface {
 func (tc TextContent) GetType() ContentType  { return tc.Type }
 func (ic ImageContent) GetType() ContentType { return ic.Type }
 
-// UnmarshalJSON 为 Content 接口实现自定义 JSON 反序列化
 func UnmarshalContent(data []byte) (Content, error) {
 	var temp struct {
 		Type ContentType `json:"type"`
@@ -126,6 +125,7 @@ const (
 type ClientCapabilities struct {
 	Roots        *RootsCapability       `json:"roots,omitempty"`
 	Sampling     *SamplingCapability    `json:"sampling,omitempty"`
+	Elicitation  *ElicitationCapability `json:"elicitation,omitempty"`
 	Experimental map[string]interface{} `json:"experimental,omitempty"`
 }
 
@@ -157,6 +157,9 @@ type PromptsCapability struct {
 }
 
 type LoggingCapability struct{}
+
+// Elicitation 能力声明
+type ElicitationCapability struct{}
 
 type ClientInfo struct {
 	Name    string `json:"name"`
@@ -252,7 +255,7 @@ func StringToID(id string) json.RawMessage {
 	}
 
 	idBytes, _ := json.Marshal(id)
-	return json.RawMessage(idBytes)
+	return idBytes
 }
 
 // IsNotification 检查消息是否为通知（没有 ID）

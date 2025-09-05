@@ -18,7 +18,7 @@ type ToolBuilder struct {
 	name         string
 	description  string
 	inputSchema  protocol.JSONSchema
-	outputSchema protocol.JSONSchema // MCP 2025-06-18 新增
+	outputSchema protocol.JSONSchema // MCP 2025-06-18 added
 }
 
 type ResourceBuilder struct {
@@ -82,7 +82,7 @@ func (tb *ToolBuilder) WithStringParam(name, description string, required bool) 
 	return tb
 }
 
-// WithIntParam 添加整数参数
+// WithIntParam adds integer parameter
 func (tb *ToolBuilder) WithIntParam(name, description string, required bool) *ToolBuilder {
 	properties := tb.inputSchema["properties"].(map[string]interface{})
 	properties[name] = map[string]interface{}{
@@ -103,7 +103,7 @@ func (tb *ToolBuilder) WithIntParam(name, description string, required bool) *To
 	return tb
 }
 
-// WithBoolParam 添加布尔参数
+// WithBoolParam adds boolean parameter
 func (tb *ToolBuilder) WithBoolParam(name, description string, required bool) *ToolBuilder {
 	properties := tb.inputSchema["properties"].(map[string]interface{})
 	properties[name] = map[string]interface{}{
@@ -124,7 +124,7 @@ func (tb *ToolBuilder) WithBoolParam(name, description string, required bool) *T
 	return tb
 }
 
-// WithNumberParam 添加数字参数（支持整数和浮点数）
+// WithNumberParam adds number parameter (supports integers and floats)
 func (tb *ToolBuilder) WithNumberParam(name, description string, required bool) *ToolBuilder {
 	properties := tb.inputSchema["properties"].(map[string]interface{})
 	properties[name] = map[string]interface{}{
@@ -145,13 +145,13 @@ func (tb *ToolBuilder) WithNumberParam(name, description string, required bool) 
 	return tb
 }
 
-// WithInputSchema 设置自定义输入schema
+// WithInputSchema sets custom input schema
 func (tb *ToolBuilder) WithInputSchema(schema protocol.JSONSchema) *ToolBuilder {
 	tb.inputSchema = schema
 	return tb
 }
 
-// WithStructSchema 使用结构体自动生成schema
+// WithStructSchema automatically generates schema using struct
 func (tb *ToolBuilder) WithStructSchema(v interface{}) *ToolBuilder {
 	schema, err := utils.StructToJSONSchema(v)
 	if err == nil {
@@ -160,13 +160,13 @@ func (tb *ToolBuilder) WithStructSchema(v interface{}) *ToolBuilder {
 	return tb
 }
 
-// WithOutputSchema 设置输出模式 (MCP 2025-06-18)
+// WithOutputSchema sets output schema (MCP 2025-06-18)
 func (tb *ToolBuilder) WithOutputSchema(schema protocol.JSONSchema) *ToolBuilder {
 	tb.outputSchema = schema
 	return tb
 }
 
-// WithStructOutputSchema 使用结构体自动生成输出模式
+// WithStructOutputSchema automatically generates output schema using struct
 func (tb *ToolBuilder) WithStructOutputSchema(v interface{}) *ToolBuilder {
 	schema, err := utils.StructToJSONSchema(v)
 	if err == nil {
@@ -175,7 +175,7 @@ func (tb *ToolBuilder) WithStructOutputSchema(v interface{}) *ToolBuilder {
 	return tb
 }
 
-// Handle 注册工具处理器
+// Handle registers tool handler
 func (tb *ToolBuilder) Handle(handler ToolHandler) error {
 	if len(tb.outputSchema) > 0 {
 		return tb.fastmcp.server.RegisterTool(tb.name, tb.description, tb.inputSchema, handler, ToolOptions{
@@ -185,7 +185,23 @@ func (tb *ToolBuilder) Handle(handler ToolHandler) error {
 	return tb.fastmcp.server.RegisterTool(tb.name, tb.description, tb.inputSchema, handler)
 }
 
-// HandleWithValidation 带验证的工具处理器
+// HandleWithElicitation registers tool handler with elicitation support
+func (tb *ToolBuilder) HandleWithElicitation(handler ToolHandlerWithElicitation) error {
+	// wrap handler to provide MCPContext
+	wrappedHandler := func(ctx context.Context, args map[string]interface{}) (*protocol.CallToolResult, error) {
+		mcpCtx := tb.fastmcp.server.CreateMCPContext(ctx)
+		return handler(mcpCtx, args)
+	}
+
+	if len(tb.outputSchema) > 0 {
+		return tb.fastmcp.server.RegisterTool(tb.name, tb.description, tb.inputSchema, wrappedHandler, ToolOptions{
+			OutputSchema: tb.outputSchema,
+		})
+	}
+	return tb.fastmcp.server.RegisterTool(tb.name, tb.description, tb.inputSchema, wrappedHandler)
+}
+
+// HandleWithValidation tool handler with validation
 func (tb *ToolBuilder) HandleWithValidation(handler ToolHandler) error {
 	wrappedHandler := func(ctx context.Context, args map[string]interface{}) (*protocol.CallToolResult, error) {
 		if err := validateToolArguments(args, tb.inputSchema); err != nil {
@@ -197,7 +213,7 @@ func (tb *ToolBuilder) HandleWithValidation(handler ToolHandler) error {
 			return nil, err
 		}
 
-		// 验证结构化输出
+		// validate structured output
 		if result.StructuredContent != nil && tb.outputSchema != nil {
 			if err := protocol.ValidateStructuredOutput(result.StructuredContent, tb.outputSchema); err != nil {
 				return protocol.NewToolResultError(fmt.Sprintf("output validation failed: %v", err)), nil
@@ -209,7 +225,7 @@ func (tb *ToolBuilder) HandleWithValidation(handler ToolHandler) error {
 	return tb.Handle(wrappedHandler)
 }
 
-// Resource 资源链式API
+// Resource resource fluent API
 func (f *FastMCP) Resource(uri, name, description string) *ResourceBuilder {
 	return &ResourceBuilder{
 		fastmcp:     f,
@@ -220,18 +236,18 @@ func (f *FastMCP) Resource(uri, name, description string) *ResourceBuilder {
 	}
 }
 
-// WithMimeType 设置MIME类型
+// WithMimeType sets MIME type
 func (rb *ResourceBuilder) WithMimeType(mimeType string) *ResourceBuilder {
 	rb.mimeType = mimeType
 	return rb
 }
 
-// Handle 注册资源处理器
+// Handle registers resource handler
 func (rb *ResourceBuilder) Handle(handler ResourceHandler) error {
 	return rb.fastmcp.server.RegisterResource(rb.uri, rb.name, rb.description, rb.mimeType, handler)
 }
 
-// Prompt 提示模板链式API
+// Prompt prompt template fluent API
 func (f *FastMCP) Prompt(name, description string) *PromptBuilder {
 	return &PromptBuilder{
 		fastmcp:     f,
@@ -241,13 +257,13 @@ func (f *FastMCP) Prompt(name, description string) *PromptBuilder {
 	}
 }
 
-// WithArgument 添加参数
+// WithArgument adds argument
 func (pb *PromptBuilder) WithArgument(name, description string, required bool) *PromptBuilder {
 	pb.arguments = append(pb.arguments, protocol.NewPromptArgument(name, description, required))
 	return pb
 }
 
-// Handle 注册提示模板处理器
+// Handle registers prompt template handler
 func (pb *PromptBuilder) Handle(handler PromptHandler) error {
 	return pb.fastmcp.server.RegisterPrompt(pb.name, pb.description, pb.arguments, handler)
 }
@@ -263,7 +279,7 @@ func (f *FastMCP) HandleMessage(ctx context.Context, data []byte) ([]byte, error
 		return nil, err
 	}
 
-	// 不返回任何数据
+	// do not return any data
 	if response == nil {
 		return nil, nil
 	}
@@ -273,6 +289,10 @@ func (f *FastMCP) HandleMessage(ctx context.Context, data []byte) ([]byte, error
 
 func (f *FastMCP) SetNotificationHandler(handler func(method string, params interface{}) error) {
 	f.server.SetNotificationHandler(handler)
+}
+
+func (f *FastMCP) SetElicitor(elicitor Elicitor) {
+	f.server.SetElicitor(elicitor)
 }
 
 func (f *FastMCP) SendNotification(method string, params interface{}) error {
@@ -320,7 +340,7 @@ func (f *FastMCP) SimpleTextPrompt(name, description string, handler func(ctx co
 	})
 }
 
-// SimpleStructuredTool 创建返回结构化数据的简单工具 (MCP 2025-06-18)
+// SimpleStructuredTool creates a simple tool that returns structured data (MCP 2025-06-18)
 func (f *FastMCP) SimpleStructuredTool(name, description string, outputSchema protocol.JSONSchema, handler func(ctx context.Context, args map[string]interface{}) (interface{}, error)) error {
 	return f.Tool(name, description).
 		WithOutputSchema(outputSchema).
@@ -336,7 +356,7 @@ func (f *FastMCP) SimpleStructuredTool(name, description string, outputSchema pr
 		})
 }
 
-// SimpleStructuredToolWithText 创建返回文本和结构化数据的工具
+// SimpleStructuredToolWithText creates a tool that returns both text and structured data
 func (f *FastMCP) SimpleStructuredToolWithText(name, description string, outputSchema protocol.JSONSchema, handler func(ctx context.Context, args map[string]interface{}) (string, interface{}, error)) error {
 	return f.Tool(name, description).
 		WithOutputSchema(outputSchema).
@@ -347,6 +367,17 @@ func (f *FastMCP) SimpleStructuredToolWithText(name, description string, outputS
 			}
 			return protocol.NewToolResultTextWithStructured(text, data), nil
 		})
+}
+
+// SimpleElicitationTool creates a simple tool with elicitation support
+func (f *FastMCP) SimpleElicitationTool(name, description string, handler func(ctx *MCPContext, args map[string]interface{}) (string, error)) error {
+	return f.Tool(name, description).HandleWithElicitation(func(ctx *MCPContext, args map[string]interface{}) (*protocol.CallToolResult, error) {
+		text, err := handler(ctx, args)
+		if err != nil {
+			return protocol.NewToolResultError(err.Error()), nil
+		}
+		return protocol.NewToolResultText(text), nil
+	})
 }
 
 func validateToolArguments(args map[string]interface{}, schema protocol.JSONSchema) error {
