@@ -32,6 +32,8 @@ const (
 	InvalidTool      = -32003 // 无效工具
 	InvalidResource  = -32004 // 无效资源
 	InvalidPrompt    = -32005 // 无效提示模板
+
+	ErrorCodeInvalidParams = InvalidParams
 )
 
 type JSONRPCMessage struct {
@@ -47,6 +49,26 @@ type JSONRPCError struct {
 	Code    int         `json:"code"`
 	Message string      `json:"message"`
 	Data    interface{} `json:"data,omitempty"`
+}
+
+// MCPError MCP特定错误类型
+type MCPError struct {
+	Code    int         `json:"code"`
+	Message string      `json:"message"`
+	Data    interface{} `json:"data,omitempty"`
+}
+
+func (e *MCPError) Error() string {
+	return e.Message
+}
+
+// NewMCPError 创建新的MCP错误
+func NewMCPError(code int, message string, data interface{}) *MCPError {
+	return &MCPError{
+		Code:    code,
+		Message: message,
+		Data:    data,
+	}
 }
 
 type ContentType string
@@ -258,12 +280,12 @@ func StringToID(id string) json.RawMessage {
 	return idBytes
 }
 
-// IsNotification 检查消息是否为通知（没有 ID）
+// IsNotification 检查消息是否为通知（没有ID）
 func (m *JSONRPCMessage) IsNotification() bool {
 	return len(m.ID) == 0
 }
 
-// GetIDString 获取消息 ID 的字符串表示
+// GetIDString 获取消息ID的字符串表示
 func (m *JSONRPCMessage) GetIDString() string {
 	return IDToString(m.ID)
 }

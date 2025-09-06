@@ -18,6 +18,9 @@ import (
 // ElicitationHandler 定义处理 elicitation 请求的接口
 type ElicitationHandler func(ctx context.Context, params *protocol.ElicitationCreateParams) (*protocol.ElicitationResult, error)
 
+// SamplingHandler 定义处理 sampling 请求的接口
+type SamplingHandler func(ctx context.Context, request *protocol.CreateMessageRequest) (*protocol.CreateMessageResult, error)
+
 type Client interface {
 	Initialize(ctx context.Context, clientInfo protocol.ClientInfo) (*protocol.InitializeResult, error)
 	SendInitialized(ctx context.Context) error
@@ -34,6 +37,7 @@ type Client interface {
 	SendNotification(ctx context.Context, method string, params interface{}) error
 
 	SetElicitationHandler(handler ElicitationHandler)
+	SetSamplingHandler(handler SamplingHandler)
 
 	Close() error
 }
@@ -48,6 +52,7 @@ type MCPClient struct {
 
 	pendingRequests    map[string]chan *protocol.JSONRPCMessage
 	elicitationHandler ElicitationHandler
+	samplingHandler    SamplingHandler
 	mu                 sync.RWMutex
 
 	initialized    bool
@@ -123,6 +128,14 @@ func WithTimeout(timeout time.Duration) Option {
 func WithElicitationHandler(handler ElicitationHandler) Option {
 	return func(c *MCPClient) error {
 		c.elicitationHandler = handler
+		return nil
+	}
+}
+
+// WithSamplingHandler 设置sampling处理器
+func WithSamplingHandler(handler SamplingHandler) Option {
+	return func(c *MCPClient) error {
+		c.samplingHandler = handler
 		return nil
 	}
 }
@@ -298,15 +311,85 @@ func (c *MCPClient) handleRootsListRequest(ctx context.Context, message *protoco
 
 // handleSamplingRequest 处理 LLM 采样请求
 func (c *MCPClient) handleSamplingRequest(ctx context.Context, message *protocol.JSONRPCMessage) (*protocol.JSONRPCMessage, error) {
-	// 默认返回不支持采样的错误
-	// 实际应用中，客户端应该将请求转发给 LLM 并返回结果
+	c.mu.RLock()
+	handler := c.samplingHandler
+	c.mu.RUnlock()
+
+	if handler == nil {
+		return &protocol.JSONRPCMessage{
+			JSONRPC: protocol.JSONRPCVersion,
+			ID:      message.ID,
+			Error: &protocol.JSONRPCError{
+				Code:    protocol.MethodNotFound,
+				Message: "sampling handler not set",
+			},
+		}, nil
+	}
+
+	var request protocol.CreateMessageRequest
+	if message.Params != nil {
+		if err := json.Unmarshal(message.Params, &request); err != nil {
+			return &protocol.JSONRPCMessage{
+				JSONRPC: protocol.JSONRPCVersion,
+				ID:      message.ID,
+				Error: &protocol.JSONRPCError{
+					Code:    protocol.InvalidParams,
+					Message: fmt.Sprintf("invalid params: %v", err),
+				},
+			}, nil
+		}
+	}
+
+	if err := request.Validate(); err != nil {
+		mcpErr, ok := err.(*protocol.MCPError)
+		if !ok {
+			mcpErr = protocol.NewMCPError(protocol.ErrorCodeInvalidParams, err.Error(), nil)
+		}
+		return &protocol.JSONRPCMessage{
+			JSONRPC: protocol.JSONRPCVersion,
+			ID:      message.ID,
+			Error: &protocol.JSONRPCError{
+				Code:    mcpErr.Code,
+				Message: mcpErr.Message,
+				Data:    mcpErr.Data,
+			},
+		}, nil
+	}
+
+	// 调用处理器
+	result, err := handler(ctx, &request)
+	if err != nil {
+		mcpErr, ok := err.(*protocol.MCPError)
+		if !ok {
+			mcpErr = protocol.NewMCPError(protocol.InternalError, err.Error(), nil)
+		}
+		return &protocol.JSONRPCMessage{
+			JSONRPC: protocol.JSONRPCVersion,
+			ID:      message.ID,
+			Error: &protocol.JSONRPCError{
+				Code:    mcpErr.Code,
+				Message: mcpErr.Message,
+				Data:    mcpErr.Data,
+			},
+		}, nil
+	}
+
+	resultBytes, err := json.Marshal(result)
+	if err != nil {
+		return &protocol.JSONRPCMessage{
+			JSONRPC: protocol.JSONRPCVersion,
+			ID:      message.ID,
+			Error: &protocol.JSONRPCError{
+				Code:    protocol.InternalError,
+				Message: fmt.Sprintf("failed to marshal result: %v", err),
+			},
+		}, nil
+	}
+
 	return &protocol.JSONRPCMessage{
 		JSONRPC: protocol.JSONRPCVersion,
 		ID:      message.ID,
-		Error: &protocol.JSONRPCError{
-			Code:    protocol.MethodNotFound,
-			Message: "sampling not implemented",
-		},
+		Result:  json.RawMessage(resultBytes),
 	}, nil
 }
 
@@ -638,11 +721,18 @@ func (c *MCPClient) SendNotification(ctx context.Context, method string, params 
 	return c.transport.Send(ctx, msgBytes)
 }
 
-// SetElicitationHandler 设置 elicitation 处理器
+// SetElicitationHandler 设置elicitation处理器
 func (c *MCPClient) SetElicitationHandler(handler ElicitationHandler) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.elicitationHandler = handler
+}
+
+// SetSamplingHandler 设置sampling处理器
+func (c *MCPClient) SetSamplingHandler(handler SamplingHandler) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.samplingHandler = handler
 }
 
 // Close 关闭客户端连接
