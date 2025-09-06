@@ -194,7 +194,7 @@ func main() {
 	}
 
 	log.Printf("Elicitation Demo Server 启动在端口 %s", port)
-	log.Printf("可用工具: user_profile, book_restaurant, calculator", port)
+	log.Printf("可用工具: user_profile, book_restaurant, calculator")
 	log.Printf("协议版本: %s", protocol.MCPVersion)
 
 	sseServer := sse.NewServer(":"+port, mcp)

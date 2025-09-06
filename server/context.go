@@ -55,6 +55,53 @@ func (c *MCPContext) Elicit(message string, schema protocol.JSONSchema) (*protoc
 	return &result, nil
 }
 
+// CreateMessage sends a sampling request to the client
+func (c *MCPContext) CreateMessage(request *protocol.CreateMessageRequest) (*protocol.CreateMessageResult, error) {
+	if c.elicitor == nil {
+		return nil, fmt.Errorf("sampling not supported: no elicitor configured")
+	}
+
+	// validate request
+	if err := request.Validate(); err != nil {
+		return nil, fmt.Errorf("invalid sampling request: %w", err)
+	}
+
+	// send sampling request through elicitor
+	result, err := c.elicitor.CreateMessage(c.Context, request)
+	if err != nil {
+		return nil, fmt.Errorf("failed to send sampling request: %w", err)
+	}
+
+	return result, nil
+}
+
+// CreateTextMessage creates a simple text-based sampling request
+func (c *MCPContext) CreateTextMessage(userMessage string, maxTokens int) (*protocol.CreateMessageResult, error) {
+	messages := []protocol.SamplingMessage{
+		protocol.NewSamplingMessage(protocol.RoleUser, protocol.NewTextContent(userMessage)),
+	}
+
+	request := protocol.NewCreateMessageRequest(messages, maxTokens)
+	return c.CreateMessage(request)
+}
+
+// CreateTextMessageWithSystem creates a text-based sampling request with system prompt
+func (c *MCPContext) CreateTextMessageWithSystem(systemPrompt, userMessage string, maxTokens int) (*protocol.CreateMessageResult, error) {
+	messages := []protocol.SamplingMessage{
+		protocol.NewSamplingMessage(protocol.RoleUser, protocol.NewTextContent(userMessage)),
+	}
+
+	request := protocol.NewCreateMessageRequest(messages, maxTokens).
+		WithSystemPrompt(systemPrompt)
+	return c.CreateMessage(request)
+}
+
+// CreateConversationMessage creates a sampling request with conversation history
+func (c *MCPContext) CreateConversationMessage(messages []protocol.SamplingMessage, maxTokens int) (*protocol.CreateMessageResult, error) {
+	request := protocol.NewCreateMessageRequest(messages, maxTokens)
+	return c.CreateMessage(request)
+}
+
 // ElicitString requests user to input a string
 func (c *MCPContext) ElicitString(message, name, description string, required bool) (string, error) {
 	schema := protocol.JSONSchema{

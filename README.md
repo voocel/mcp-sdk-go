@@ -17,7 +17,6 @@
 <div align="center">
 
 **构建更智能的应用，连接更强大的模型**
-
 *使用 MCP Go SDK，轻松集成大语言模型能力*
 
 </div>
@@ -33,6 +32,7 @@ MCP Go SDK 是模型上下文协议（Model Context Protocol）的 Go 语言实�
 - **客户端 SDK** - 连接任何 MCP 兼容服务器的客户端实现
 - **多种传输协议** - STDIO、SSE、Streamable HTTP (官方标准)
 - **🆕 Elicitation 支持** - 交互式用户输入，支持字符串、数字、布尔值、枚举选择
+- **🔥 Sampling 支持** - 服务器发起的LLM推理请求，支持递归AI交互
 - **类型安全** - 完整的类型定义和参数验证
 - **高性能** - 并发安全，优化的消息处理
 - **安全防护** - 内置输入验证、路径遍历保护、资源限制
@@ -45,7 +45,7 @@ MCP Go SDK 是模型上下文协议（Model Context Protocol）的 Go 语言实�
 
 | 版本 | 发布时间 | 主要特性 | 支持状态 |
 |------|----------|----------|----------|
-| **2025-06-18** | 2025年6月 | 结构化工具输出、工具注解、**Elicitation 用户交互** | **完全支持** |
+| **2025-06-18** | 2025年6月 | 结构化工具输出、工具注解、**Elicitation 用户交互**、**Sampling LLM推理** | **完全支持** |
 | **2025-03-26** | 2025年3月 | OAuth 2.1授权、Streamable HTTP、JSON-RPC批处理 | **完全支持** |
 | **2024-11-05** | 2024年11月 | HTTP+SSE传输、基础工具和资源 | **完全支持** |
 
@@ -231,7 +231,7 @@ func main() {
 
 ## 核心架构
 
-### 服务器端 (主要功能)
+### 服务器端(主要功能)
 
 ```go
 // 创建FastMCP服务器
@@ -291,10 +291,10 @@ sseTransport.Serve(ctx)
 // streamableTransport.Serve(ctx)
 ```
 
-### 客户端 (连接 MCP 服务器)
+### 客户端(连接 MCP 服务器)
 
 ```go
-// 🆕 Elicitation 处理器
+// Elicitation 处理器
 func handleElicitation(ctx context.Context, params *protocol.ElicitationCreateParams) (*protocol.ElicitationResult, error) {
     fmt.Println(params.Message) // 显示服务器请求
     // 获取用户输入并返回结果
@@ -307,7 +307,27 @@ func handleElicitation(ctx context.Context, params *protocol.ElicitationCreatePa
 client, err := client.New(
     client.WithSSETransport("http://localhost:8080"),
     client.WithClientInfo("client-name", "1.0.0"),
-    client.WithElicitationHandler(handleElicitation), // 🆕 设置 elicitation 处理器
+    client.WithElicitationHandler(handleElicitation), // 设置 elicitation 处理器
+)
+
+// Sampling 处理器
+func handleSampling(ctx context.Context, request *protocol.CreateMessageRequest) (*protocol.CreateMessageResult, error) {
+    fmt.Printf("收到AI推理请求: %+v\n", request)
+    // 调用实际的LLM API并返回结果
+    return protocol.NewCreateMessageResult(
+        protocol.RoleAssistant,
+        protocol.NewTextContent("AI生成的回复"),
+        "gpt-4",
+        protocol.StopReasonEndTurn,
+    ), nil
+}
+
+// 创建客户端
+client, err := client.New(
+    client.WithSSETransport("http://localhost:8080"),
+    client.WithClientInfo("client-name", "1.0.0"),
+    client.WithElicitationHandler(handleElicitation), // 设置 elicitation 处理器
+    client.WithSamplingHandler(handleSampling),       // 设置 sampling 处理器
 )
 
 // 初始化并调用工具
@@ -316,12 +336,42 @@ client.SendInitialized(ctx)
 result, err := client.CallTool(ctx, "tool_name", map[string]interface{}{"param": "value"})
 ```
 
+### Sampling (LLM推理) 示例
+
+```go
+// 服务器端：使用Sampling的AI工具
+mcp.Tool("ai_calculator", "使用AI进行数学计算").
+    WithStringParam("expression", "数学表达式", true).
+    HandleWithElicitation(func(ctx *server.MCPContext, args map[string]interface{}) (*protocol.CallToolResult, error) {
+        expression := args["expression"].(string)
+
+        // 发起LLM推理请求
+        result, err := ctx.CreateTextMessageWithSystem(
+            "你是一个数学计算助手，只返回计算结果",
+            fmt.Sprintf("计算: %s", expression),
+            100,
+        )
+        if err != nil {
+            return protocol.NewToolResultError(fmt.Sprintf("AI计算失败: %v", err)), nil
+        }
+
+        // 提取AI响应
+        if textContent, ok := result.Content.(protocol.TextContent); ok {
+            return protocol.NewToolResultText(fmt.Sprintf("计算结果: %s", textContent.Text)), nil
+        }
+
+        return protocol.NewToolResultError("无法解析AI响应"), nil
+    })
+```
+
 ## 协议支持
 
 ### MCP 标准合规性
+
 **完全符合 MCP 2025-06-18 规范**，向后兼容 MCP 2025-03-26, 2024-11-05
 
 ### 传输协议
+
 | 协议 | 使用场景 | 官方支持 | 协议版本 |
 |------|----------|------|----------|
 | **STDIO** | 子进程通信 | 官方标准 | 2024-11-05+ |
@@ -335,6 +385,7 @@ result, err := client.CallTool(ctx, "tool_name", map[string]interface{}{"param":
 ## 开发指南
 
 ### 错误处理
+
 ```go
 // 服务器端
 return protocol.NewToolResultError("参数错误"), nil  // 业务错误
@@ -347,6 +398,7 @@ if result.IsError {
 ```
 
 ### 学习路径
+
 1. 快速开始示例 → 基本概念
 2. [Calculator](./examples/calculator/) → 工具注册和调用
 3. [SSE Demo](./examples/sse-demo/) → SSE 传输
@@ -370,11 +422,19 @@ MIT License - 详见 [LICENSE](LICENSE) 文件
 ## Roadmap
 
 - [x] **结构化工具输出** - 支持类型化、验证的工具结果 (MCP 2025-06-18)
+- [x] **用户交互请求 (Elicitation)** - 服务器可在交互过程中请求用户输入 (MCP 2025-06-18)
+- [x] **LLM采样支持 (Sampling)** - 服务器发起的LLM推理请求，支持递归AI交互
+- [ ] **进度跟踪 (Progress Tracking)** - 长时间运行操作的实时进度反馈和取消机制
+- [ ] **参数自动补全 (Completion)** - 工具和提示参数的智能补全建议
+- [ ] **根目录管理 (Roots)** - 客户端文件系统根目录管理和变更通知
+
+- [ ] **资源模板 (Resource Templates)** - 支持动态资源模板和URI模板 (如 `file:///{path}`)
+- [ ] **结构化日志 (Logging)** - 服务器向客户端发送结构化日志消息
+- [ ] **资源订阅 (Resource Subscription)** - 实时资源变更通知和订阅机制
+- [ ] **请求取消 (Cancellation)** - 支持取消长时间运行的操作
+
 - [ ] **基础会话管理** - 支持每客户端独立状态管理
 - [ ] **简单中间件系统** - 提供基本的请求/响应拦截能力
-- [ ] **用户交互请求 (Elicitation)** - 服务器可在交互过程中请求用户输入 (MCP 2025-06-18)
-- [ ] **资源模板 (Resource Templates)** - 支持动态资源模板和URI模板
-- [ ] **进度报告 (Progress Reporting)** - 长时间运行工具的实时进度反馈
 - [ ] **CLI工具** - 开发、测试和调试MCP服务器的命令行工具
 - [ ] **OAuth 2.1授权支持** - 企业级安全认证机制
 - [ ] **高级工具过滤** - 基于用户角色的工具访问控制
