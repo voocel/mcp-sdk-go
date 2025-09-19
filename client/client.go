@@ -22,16 +22,17 @@ type ElicitationHandler func(ctx context.Context, params *protocol.ElicitationCr
 type SamplingHandler func(ctx context.Context, request *protocol.CreateMessageRequest) (*protocol.CreateMessageResult, error)
 
 type Client interface {
-	Initialize(ctx context.Context, clientInfo protocol.ClientInfo) (*protocol.InitializeResult, error)
-	SendInitialized(ctx context.Context) error
+    Initialize(ctx context.Context, clientInfo protocol.ClientInfo) (*protocol.InitializeResult, error)
+    SendInitialized(ctx context.Context) error
 
-	ListTools(ctx context.Context, cursor string) (*protocol.ListToolsResult, error)
-	CallTool(ctx context.Context, name string, args map[string]interface{}) (*protocol.CallToolResult, error)
+    ListTools(ctx context.Context, cursor string) (*protocol.ListToolsResult, error)
+    CallTool(ctx context.Context, name string, args map[string]interface{}) (*protocol.CallToolResult, error)
 
-	ListResources(ctx context.Context, cursor string) (*protocol.ListResourcesResult, error)
-	ReadResource(ctx context.Context, uri string) (*protocol.ReadResourceResult, error)
+    ListResources(ctx context.Context, cursor string) (*protocol.ListResourcesResult, error)
+    ReadResource(ctx context.Context, uri string) (*protocol.ReadResourceResult, error)
+    ListResourceTemplates(ctx context.Context, cursor string) (*protocol.ListResourceTemplatesResult, error)
 
-	ListPrompts(ctx context.Context, cursor string) (*protocol.ListPromptsResult, error)
+    ListPrompts(ctx context.Context, cursor string) (*protocol.ListPromptsResult, error)
 	GetPrompt(ctx context.Context, name string, args map[string]string) (*protocol.GetPromptResult, error)
 
 	SendNotification(ctx context.Context, method string, params interface{}) error
@@ -85,12 +86,20 @@ func WithStdioTransport(command string, args []string) Option {
 // WithSSETransport 配置SSE传输层
 func WithSSETransport(url string) Option {
 	return func(c *MCPClient) error {
-		t := sse.New(url,
-			sse.WithProtocolVersion(protocol.MCPVersion))
-		if err := t.Connect(context.Background()); err != nil {
-			return fmt.Errorf("failed to connect SSE transport: %w", err)
+		factory := func(ctx context.Context) (transport.Transport, error) {
+			t := sse.New(url,
+				sse.WithProtocolVersion(protocol.MCPVersion))
+			if err := t.Connect(ctx); err != nil {
+				return nil, fmt.Errorf("failed to connect SSE transport: %w", err)
+			}
+			return t, nil
 		}
-		c.transport = t
+
+		wrapper := newReconnectingTransport(factory)
+		if err := wrapper.ensure(context.Background()); err != nil {
+			return err
+		}
+		c.transport = wrapper
 		return nil
 	}
 }
@@ -98,9 +107,17 @@ func WithSSETransport(url string) Option {
 // WithStreamableHTTPTransport 配置Streamable HTTP传输层
 func WithStreamableHTTPTransport(url string) Option {
 	return func(c *MCPClient) error {
-		t := streamable.New(url,
-			streamable.WithProtocolVersion(protocol.MCPVersion))
-		c.transport = t
+		factory := func(ctx context.Context) (transport.Transport, error) {
+			t := streamable.New(url,
+				streamable.WithProtocolVersion(protocol.MCPVersion))
+			return t, nil
+		}
+
+		wrapper := newReconnectingTransport(factory)
+		if err := wrapper.ensure(context.Background()); err != nil {
+			return err
+		}
+		c.transport = wrapper
 		return nil
 	}
 }
@@ -177,12 +194,13 @@ func (c *MCPClient) receiveLoop(ctx context.Context) {
 		default:
 			data, err := c.transport.Receive(ctx)
 			if err != nil {
-				// 如果是context取消，正常退出
 				if ctx.Err() != nil {
 					return
 				}
-				// 其他错误，暂时返回（未来可以添加重连逻辑）
-				// fmt.Printf("接收消息错误: %v\n", err)
+				c.failPendingRequests(err)
+				if c.tryReconnect(ctx) {
+					continue
+				}
 				return
 			}
 
@@ -219,6 +237,63 @@ func (c *MCPClient) receiveLoop(ctx context.Context) {
 				c.handleNotification(&message)
 			}
 		}
+	}
+}
+
+func (c *MCPClient) tryReconnect(ctx context.Context) bool {
+	reconnectable, ok := c.transport.(interface {
+		Reconnect(context.Context) error
+	})
+	if !ok {
+		return false
+	}
+
+	backoff := []time.Duration{0, time.Second, 2 * time.Second, 5 * time.Second}
+	for _, wait := range backoff {
+		if wait > 0 {
+			select {
+			case <-ctx.Done():
+				return false
+			case <-time.After(wait):
+			}
+		}
+
+		if err := reconnectable.Reconnect(context.Background()); err == nil {
+			return true
+		}
+	}
+
+	return false
+}
+
+func (c *MCPClient) failPendingRequests(err error) {
+	c.mu.Lock()
+	if len(c.pendingRequests) == 0 {
+		c.mu.Unlock()
+		return
+	}
+
+	channels := make([]chan *protocol.JSONRPCMessage, 0, len(c.pendingRequests))
+	for id, ch := range c.pendingRequests {
+		channels = append(channels, ch)
+		delete(c.pendingRequests, id)
+	}
+	c.mu.Unlock()
+
+	errMsg := &protocol.JSONRPCMessage{
+		JSONRPC: protocol.JSONRPCVersion,
+		Error: &protocol.JSONRPCError{
+			Code:    protocol.InternalError,
+			Message: err.Error(),
+		},
+	}
+
+	for _, ch := range channels {
+		select {
+		case ch <- errMsg:
+		default:
+		}
+		close(ch)
 	}
 }
 
@@ -277,6 +352,9 @@ func (c *MCPClient) handleNotification(message *protocol.JSONRPCMessage) {
 	case "notifications/resources/list_changed":
 		// 资源列表变更通知
 		// 客户端可以选择重新获取资源列表
+	case "notifications/resources/templates/list_changed":
+		// 资源模板列表变更通知
+		// 客户端可以选择重新获取资源模板
 	case "notifications/prompts/list_changed":
 		// 提示模板列表变更通知
 		// 客户端可以选择重新获取提示模板列表
@@ -488,6 +566,9 @@ func (c *MCPClient) sendRequest(ctx context.Context, method string, params inter
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	case resp := <-respChan:
+		if resp == nil {
+			return nil, fmt.Errorf("connection reset")
+		}
 		if resp.Error != nil {
 			return nil, fmt.Errorf("server error [%d]: %s", resp.Error.Code, resp.Error.Message)
 		}
@@ -599,9 +680,9 @@ func (c *MCPClient) CallTool(ctx context.Context, name string, args map[string]i
 
 // ListResources 获取资源列表
 func (c *MCPClient) ListResources(ctx context.Context, cursor string) (*protocol.ListResourcesResult, error) {
-	if !c.initialized {
-		return nil, fmt.Errorf("client not initialized")
-	}
+    if !c.initialized {
+        return nil, fmt.Errorf("client not initialized")
+    }
 
 	var params *protocol.ListResourcesParams
 	if cursor != "" {
@@ -621,6 +702,30 @@ func (c *MCPClient) ListResources(ctx context.Context, cursor string) (*protocol
 	}
 
 	return &result, nil
+}
+
+// ListResourceTemplates 获取资源模板列表
+func (c *MCPClient) ListResourceTemplates(ctx context.Context, cursor string) (*protocol.ListResourceTemplatesResult, error) {
+    if !c.initialized {
+        return nil, fmt.Errorf("client not initialized")
+    }
+
+    var params *protocol.ListResourceTemplatesRequest
+    if cursor != "" {
+        params = &protocol.ListResourceTemplatesRequest{Cursor: cursor}
+    }
+
+    resp, err := c.sendRequest(ctx, "resources/templates/list", params)
+    if err != nil {
+        return nil, err
+    }
+
+    var result protocol.ListResourceTemplatesResult
+    if err := json.Unmarshal(resp.Result, &result); err != nil {
+        return nil, fmt.Errorf("failed to unmarshal resource templates list: %w", err)
+    }
+
+    return &result, nil
 }
 
 // ReadResource 读取资源内容
