@@ -65,6 +65,8 @@ type ListResourceTemplatesResult struct {
 // ResourcesListChangedNotification 资源变更通知
 type ResourcesListChangedNotification struct{}
 
+type ResourceTemplatesListChangedNotification struct{}
+
 type ResourcesUpdatedNotification struct {
 	URI   string `json:"uri"`
 	Title string `json:"title,omitempty"` // 2025-06-18 新增：可选的资源标题
@@ -98,6 +100,15 @@ func NewBlobResourceContents(uri, blob, mimeType string) ResourceContents {
 func NewReadResourceResult(contents ...ResourceContents) *ReadResourceResult {
 	return &ReadResourceResult{
 		Contents: contents,
+	}
+}
+
+func NewResourceTemplate(uriTemplate, name, description, mimeType string) ResourceTemplate {
+	return ResourceTemplate{
+		URITemplate: uriTemplate,
+		Name:        name,
+		Description: description,
+		MimeType:    mimeType,
 	}
 }
 

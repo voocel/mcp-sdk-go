@@ -39,9 +39,10 @@ type MCPServer struct {
 	serverInfo   protocol.ServerInfo
 	capabilities protocol.ServerCapabilities
 
-	tools     map[string]*ToolRegistration
-	resources map[string]*ResourceRegistration
-	prompts   map[string]*PromptRegistration
+	tools             map[string]*ToolRegistration
+	resources         map[string]*ResourceRegistration
+	resourceTemplates map[string]*ResourceTemplateRegistration
+	prompts           map[string]*PromptRegistration
 
 	initialized bool
 	clientInfo  *protocol.ClientInfo
@@ -62,6 +63,10 @@ type ResourceRegistration struct {
 	Handler  ResourceHandler
 }
 
+type ResourceTemplateRegistration struct {
+	Template protocol.ResourceTemplate
+}
+
 type PromptRegistration struct {
 	Prompt  protocol.Prompt
 	Handler PromptHandler
@@ -76,12 +81,13 @@ func NewServer(name, version string) *MCPServer {
 		},
 		capabilities: protocol.ServerCapabilities{
 			Tools:     &protocol.ToolsCapability{ListChanged: true},
-			Resources: &protocol.ResourcesCapability{ListChanged: true, Subscribe: false},
+			Resources: &protocol.ResourcesCapability{ListChanged: true, Subscribe: false, Templates: true},
 			Prompts:   &protocol.PromptsCapability{ListChanged: true},
 		},
-		tools:     make(map[string]*ToolRegistration),
-		resources: make(map[string]*ResourceRegistration),
-		prompts:   make(map[string]*PromptRegistration),
+		tools:             make(map[string]*ToolRegistration),
+		resources:         make(map[string]*ResourceRegistration),
+		resourceTemplates: make(map[string]*ResourceTemplateRegistration),
+		prompts:           make(map[string]*PromptRegistration),
 	}
 }
 
@@ -149,6 +155,37 @@ func (s *MCPServer) RegisterResource(uri, name, description, mimeType string, ha
 	// send change notification
 	if s.initialized {
 		go s.SendNotification("notifications/resources/list_changed", &protocol.ResourcesListChangedNotification{})
+	}
+
+	return nil
+}
+
+// RegisterResourceTemplate registers a resource template
+func (s *MCPServer) RegisterResourceTemplate(uriTemplate, name, description, mimeType string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	template := protocol.NewResourceTemplate(uriTemplate, name, description, mimeType)
+	s.resourceTemplates[uriTemplate] = &ResourceTemplateRegistration{
+		Template: template,
+	}
+
+	if s.initialized {
+		go s.SendNotification("notifications/resources/templates/list_changed", &protocol.ResourceTemplatesListChangedNotification{})
+	}
+
+	return nil
+}
+
+// UnregisterResourceTemplate unregisters a resource template
+func (s *MCPServer) UnregisterResourceTemplate(uriTemplate string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	delete(s.resourceTemplates, uriTemplate)
+
+	if s.initialized {
+		go s.SendNotification("notifications/resources/templates/list_changed", &protocol.ResourceTemplatesListChangedNotification{})
 	}
 
 	return nil
@@ -278,6 +315,8 @@ func (s *MCPServer) handleRequest(ctx context.Context, request *protocol.JSONRPC
 		result, err = s.handleListResources(ctx, request.Params)
 	case "resources/read":
 		result, err = s.handleReadResource(ctx, request.Params)
+	case "resources/templates/list":
+		result, err = s.handleListResourceTemplates(ctx, request.Params)
 	case "prompts/list":
 		result, err = s.handleListPrompts(ctx, request.Params)
 	case "prompts/get":
@@ -389,6 +428,21 @@ func (s *MCPServer) handleListResources(ctx context.Context, params json.RawMess
 
 	return &protocol.ListResourcesResult{
 		Resources: resources,
+	}, nil
+}
+
+// resource template list
+func (s *MCPServer) handleListResourceTemplates(ctx context.Context, params json.RawMessage) (*protocol.ListResourceTemplatesResult, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	templates := make([]protocol.ResourceTemplate, 0, len(s.resourceTemplates))
+	for _, reg := range s.resourceTemplates {
+		templates = append(templates, reg.Template)
+	}
+
+	return &protocol.ListResourceTemplatesResult{
+		ResourceTemplates: templates,
 	}, nil
 }
 

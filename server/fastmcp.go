@@ -29,6 +29,14 @@ type ResourceBuilder struct {
 	mimeType    string
 }
 
+type ResourceTemplateBuilder struct {
+	fastmcp     *FastMCP
+	uriTemplate string
+	name        string
+	description string
+	mimeType    string
+}
+
 type PromptBuilder struct {
 	fastmcp     *FastMCP
 	name        string
@@ -236,6 +244,16 @@ func (f *FastMCP) Resource(uri, name, description string) *ResourceBuilder {
 	}
 }
 
+func (f *FastMCP) ResourceTemplate(uriTemplate, name, description string) *ResourceTemplateBuilder {
+	return &ResourceTemplateBuilder{
+		fastmcp:     f,
+		uriTemplate: uriTemplate,
+		name:        name,
+		description: description,
+		mimeType:    "text/plain",
+	}
+}
+
 // WithMimeType sets MIME type
 func (rb *ResourceBuilder) WithMimeType(mimeType string) *ResourceBuilder {
 	rb.mimeType = mimeType
@@ -245,6 +263,17 @@ func (rb *ResourceBuilder) WithMimeType(mimeType string) *ResourceBuilder {
 // Handle registers resource handler
 func (rb *ResourceBuilder) Handle(handler ResourceHandler) error {
 	return rb.fastmcp.server.RegisterResource(rb.uri, rb.name, rb.description, rb.mimeType, handler)
+}
+
+// WithMimeType sets MIME type for resource template
+func (rtb *ResourceTemplateBuilder) WithMimeType(mimeType string) *ResourceTemplateBuilder {
+	rtb.mimeType = mimeType
+	return rtb
+}
+
+// Register registers resource template metadata
+func (rtb *ResourceTemplateBuilder) Register() error {
+	return rtb.fastmcp.server.RegisterResourceTemplate(rtb.uriTemplate, rtb.name, rtb.description, rtb.mimeType)
 }
 
 // Prompt prompt template fluent API

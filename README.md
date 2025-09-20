@@ -31,8 +31,8 @@ MCP Go SDK 是模型上下文协议（Model Context Protocol）的 Go 语言实�
 - **服务器 SDK** - 快速构建 MCP 服务器，支持工具、资源、提示模板
 - **客户端 SDK** - 连接任何 MCP 兼容服务器的客户端实现
 - **多种传输协议** - STDIO、SSE、Streamable HTTP (官方标准)
-- **🆕 Elicitation 支持** - 交互式用户输入，支持字符串、数字、布尔值、枚举选择
-- **🔥 Sampling 支持** - 服务器发起的LLM推理请求，支持递归AI交互
+- **Elicitation 支持** - 交互式用户输入，支持字符串、数字、布尔值、枚举选择
+- **Sampling 支持** - 服务器发起的LLM推理请求，支持递归AI交互
 - **类型安全** - 完整的类型定义和参数验证
 - **高性能** - 并发安全，优化的消息处理
 - **安全防护** - 内置输入验证、路径遍历保护、资源限制
@@ -226,6 +226,7 @@ func main() {
 | [Chatbot](./examples/chatbot/) | 聊天机器人服务 | SSE | `cd examples/chatbot/server && go run main.go` |
 | [File Server](./examples/file-server/) | 文件操作服务 | SSE | `cd examples/file-server/server && go run main.go` |
 | [Streamable Demo](./examples/streamable-demo/) | Streamable HTTP 演示 (MCP 2025-06-18) | Streamable HTTP | `cd examples/streamable-demo/server && go run main.go` |
+| [Resource Templates](./examples/resource-templates/) | 资源模板注册与使用 | SSE | `cd examples/resource-templates/server && go run main.go` |
 
 **运行示例**: 每个示例都包含服务器和客户端，需要在不同终端中分别运行。
 
@@ -252,6 +253,11 @@ mcp.Resource("resource://uri", "资源名称", "资源描述").
         contents := protocol.NewTextResourceContents("resource://uri", "内容")
         return protocol.NewReadResourceResult(contents), nil
     })
+
+// 注册资源模板，向客户端声明可用的动态资源模式
+mcp.ResourceTemplate("log://app/{date}", "应用日志", "获取指定日期的应用日志").
+    WithMimeType("text/plain").
+    Register()
 
 // 注册提示模板
 mcp.Prompt("prompt_name", "提示描述").
@@ -334,6 +340,27 @@ client, err := client.New(
 initResult, err := client.Initialize(ctx, protocol.ClientInfo{...})
 client.SendInitialized(ctx)
 result, err := client.CallTool(ctx, "tool_name", map[string]interface{}{"param": "value"})
+```
+
+### 资源模板
+
+```go
+// 服务器端注册资源模板，向客户端声明动态资源形态
+mcp.ResourceTemplate("log://app/{date}", "应用日志", "获取指定日期的应用日志").
+    WithMimeType("text/plain").
+    Register()
+
+// 客户端检索资源模板并读取具体资源
+templates, err := client.ListResourceTemplates(ctx, "")
+if err != nil {
+    log.Fatalf("列出资源模板失败: %v", err)
+}
+
+for _, tpl := range templates.ResourceTemplates {
+    fmt.Printf("模板: %s\n", tpl.URITemplate)
+}
+
+resource, err := client.ReadResource(ctx, "log://app/latest")
 ```
 
 ### Sampling (LLM推理) 示例
@@ -424,11 +451,11 @@ MIT License - 详见 [LICENSE](LICENSE) 文件
 - [x] **结构化工具输出** - 支持类型化、验证的工具结果 (MCP 2025-06-18)
 - [x] **用户交互请求 (Elicitation)** - 服务器可在交互过程中请求用户输入 (MCP 2025-06-18)
 - [x] **LLM采样支持 (Sampling)** - 服务器发起的LLM推理请求，支持递归AI交互
+- [x] **资源模板 (Resource Templates)** - 支持动态资源模板和URI模板 (如 `file:///{path}`)
 - [ ] **进度跟踪 (Progress Tracking)** - 长时间运行操作的实时进度反馈和取消机制
 - [ ] **参数自动补全 (Completion)** - 工具和提示参数的智能补全建议
 - [ ] **根目录管理 (Roots)** - 客户端文件系统根目录管理和变更通知
 
-- [ ] **资源模板 (Resource Templates)** - 支持动态资源模板和URI模板 (如 `file:///{path}`)
 - [ ] **结构化日志 (Logging)** - 服务器向客户端发送结构化日志消息
 - [ ] **资源订阅 (Resource Subscription)** - 实时资源变更通知和订阅机制
 - [ ] **请求取消 (Cancellation)** - 支持取消长时间运行的操作

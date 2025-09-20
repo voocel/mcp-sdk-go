@@ -172,6 +172,7 @@ type ToolsCapability struct {
 type ResourcesCapability struct {
 	Subscribe   bool `json:"subscribe,omitempty"`
 	ListChanged bool `json:"listChanged,omitempty"`
+	Templates   bool `json:"templates,omitempty"`
 }
 
 type PromptsCapability struct {
