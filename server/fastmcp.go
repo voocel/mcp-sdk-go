@@ -324,6 +324,10 @@ func (f *FastMCP) SetElicitor(elicitor Elicitor) {
 	f.server.SetElicitor(elicitor)
 }
 
+func (f *FastMCP) SetRequestSender(sender func(ctx context.Context, method string, params interface{}) (*protocol.JSONRPCMessage, error)) {
+	f.server.SetRequestSender(sender)
+}
+
 func (f *FastMCP) SendNotification(method string, params interface{}) error {
 	return f.server.SendNotification(method, params)
 }
@@ -334,6 +338,10 @@ func (f *FastMCP) GetServerInfo() protocol.ServerInfo {
 
 func (f *FastMCP) GetCapabilities() protocol.ServerCapabilities {
 	return f.server.GetCapabilities()
+}
+
+func (f *FastMCP) RequestRootsList(ctx context.Context) (*protocol.ListRootsResult, error) {
+	return f.server.RequestRootsList(ctx)
 }
 
 func (f *FastMCP) SimpleTextTool(name, description string, handler func(ctx context.Context, args map[string]interface{}) (string, error)) error {

@@ -363,6 +363,30 @@ for _, tpl := range templates.ResourceTemplates {
 resource, err := client.ReadResource(ctx, "log://app/latest")
 ```
 
+### 根目录管理 (Roots)
+
+```go
+// 客户端设置静态根目录列表
+client, err := client.New(
+    client.WithSSETransport("http://localhost:8080"),
+    client.WithRoots(
+        protocol.NewRoot("file:///home/user/projects", "项目目录"),
+        protocol.NewRoot("file:///home/user/documents", "文档目录"),
+    ),
+)
+
+// 或者使用动态提供器
+client.SetRootsProvider(func(ctx context.Context) ([]protocol.Root, error) {
+    wd, _ := os.Getwd()
+    return []protocol.Root{
+        protocol.NewRoot("file://"+wd, "当前目录"),
+    }, nil
+})
+
+// 服务器端请求客户端根目录列表
+rootsList, err := server.RequestRootsList(ctx)
+```
+
 ### Sampling (LLM推理) 示例
 
 ```go
@@ -454,7 +478,7 @@ MIT License - 详见 [LICENSE](LICENSE) 文件
 - [x] **资源模板 (Resource Templates)** - 支持动态资源模板和URI模板 (如 `file:///{path}`)
 - [ ] **进度跟踪 (Progress Tracking)** - 长时间运行操作的实时进度反馈和取消机制
 - [ ] **参数自动补全 (Completion)** - 工具和提示参数的智能补全建议
-- [ ] **根目录管理 (Roots)** - 客户端文件系统根目录管理和变更通知
+- [x] **根目录管理 (Roots)** - 客户端文件系统根目录管理和变更通知
 
 - [ ] **结构化日志 (Logging)** - 服务器向客户端发送结构化日志消息
 - [ ] **资源订阅 (Resource Subscription)** - 实时资源变更通知和订阅机制

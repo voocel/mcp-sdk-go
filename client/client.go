@@ -21,24 +21,30 @@ type ElicitationHandler func(ctx context.Context, params *protocol.ElicitationCr
 // SamplingHandler 定义处理 sampling 请求的接口
 type SamplingHandler func(ctx context.Context, request *protocol.CreateMessageRequest) (*protocol.CreateMessageResult, error)
 
+// RootsProvider 定义提供根目录列表的接口
+type RootsProvider func(ctx context.Context) ([]protocol.Root, error)
+
 type Client interface {
-    Initialize(ctx context.Context, clientInfo protocol.ClientInfo) (*protocol.InitializeResult, error)
-    SendInitialized(ctx context.Context) error
+	Initialize(ctx context.Context, clientInfo protocol.ClientInfo) (*protocol.InitializeResult, error)
+	SendInitialized(ctx context.Context) error
 
-    ListTools(ctx context.Context, cursor string) (*protocol.ListToolsResult, error)
-    CallTool(ctx context.Context, name string, args map[string]interface{}) (*protocol.CallToolResult, error)
+	ListTools(ctx context.Context, cursor string) (*protocol.ListToolsResult, error)
+	CallTool(ctx context.Context, name string, args map[string]interface{}) (*protocol.CallToolResult, error)
 
-    ListResources(ctx context.Context, cursor string) (*protocol.ListResourcesResult, error)
-    ReadResource(ctx context.Context, uri string) (*protocol.ReadResourceResult, error)
-    ListResourceTemplates(ctx context.Context, cursor string) (*protocol.ListResourceTemplatesResult, error)
+	ListResources(ctx context.Context, cursor string) (*protocol.ListResourcesResult, error)
+	ReadResource(ctx context.Context, uri string) (*protocol.ReadResourceResult, error)
+	ListResourceTemplates(ctx context.Context, cursor string) (*protocol.ListResourceTemplatesResult, error)
 
-    ListPrompts(ctx context.Context, cursor string) (*protocol.ListPromptsResult, error)
+	ListPrompts(ctx context.Context, cursor string) (*protocol.ListPromptsResult, error)
 	GetPrompt(ctx context.Context, name string, args map[string]string) (*protocol.GetPromptResult, error)
 
 	SendNotification(ctx context.Context, method string, params interface{}) error
 
 	SetElicitationHandler(handler ElicitationHandler)
 	SetSamplingHandler(handler SamplingHandler)
+	SetRootsProvider(provider RootsProvider)
+
+	NotifyRootsChanged(ctx context.Context) error
 
 	Close() error
 }
@@ -54,6 +60,7 @@ type MCPClient struct {
 	pendingRequests    map[string]chan *protocol.JSONRPCMessage
 	elicitationHandler ElicitationHandler
 	samplingHandler    SamplingHandler
+	rootsProvider      RootsProvider
 	mu                 sync.RWMutex
 
 	initialized    bool
@@ -153,6 +160,24 @@ func WithElicitationHandler(handler ElicitationHandler) Option {
 func WithSamplingHandler(handler SamplingHandler) Option {
 	return func(c *MCPClient) error {
 		c.samplingHandler = handler
+		return nil
+	}
+}
+
+// WithRootsProvider 设置根目录提供器
+func WithRootsProvider(provider RootsProvider) Option {
+	return func(c *MCPClient) error {
+		c.rootsProvider = provider
+		return nil
+	}
+}
+
+// WithRoots 设置静态根目录列表
+func WithRoots(roots ...protocol.Root) Option {
+	return func(c *MCPClient) error {
+		c.rootsProvider = func(ctx context.Context) ([]protocol.Root, error) {
+			return roots, nil
+		}
 		return nil
 	}
 }
@@ -369,12 +394,31 @@ func (c *MCPClient) handleNotification(message *protocol.JSONRPCMessage) {
 
 // handleRootsListRequest 处理根目录列表请求
 func (c *MCPClient) handleRootsListRequest(ctx context.Context, message *protocol.JSONRPCMessage) (*protocol.JSONRPCMessage, error) {
-	// 默认返回空的根目录列表
-	// 实际应用中，客户端应该返回其暴露的文件系统根目录
-	result := map[string]interface{}{
-		"roots": []interface{}{},
+	c.mu.RLock()
+	provider := c.rootsProvider
+	c.mu.RUnlock()
+
+	var roots []protocol.Root
+	var err error
+
+	if provider != nil {
+		roots, err = provider(ctx)
+		if err != nil {
+			return &protocol.JSONRPCMessage{
+				JSONRPC: protocol.JSONRPCVersion,
+				ID:      message.ID,
+				Error: &protocol.JSONRPCError{
+					Code:    protocol.InternalError,
+					Message: fmt.Sprintf("failed to list roots: %v", err),
+				},
+			}, nil
+		}
+	} else {
+		// 如果没有设置提供器，返回空列表
+		roots = []protocol.Root{}
 	}
 
+	result := protocol.NewListRootsResult(roots...)
 	resultBytes, err := json.Marshal(result)
 	if err != nil {
 		return nil, err
@@ -680,9 +724,9 @@ func (c *MCPClient) CallTool(ctx context.Context, name string, args map[string]i
 
 // ListResources 获取资源列表
 func (c *MCPClient) ListResources(ctx context.Context, cursor string) (*protocol.ListResourcesResult, error) {
-    if !c.initialized {
-        return nil, fmt.Errorf("client not initialized")
-    }
+	if !c.initialized {
+		return nil, fmt.Errorf("client not initialized")
+	}
 
 	var params *protocol.ListResourcesParams
 	if cursor != "" {
@@ -706,26 +750,26 @@ func (c *MCPClient) ListResources(ctx context.Context, cursor string) (*protocol
 
 // ListResourceTemplates 获取资源模板列表
 func (c *MCPClient) ListResourceTemplates(ctx context.Context, cursor string) (*protocol.ListResourceTemplatesResult, error) {
-    if !c.initialized {
-        return nil, fmt.Errorf("client not initialized")
-    }
+	if !c.initialized {
+		return nil, fmt.Errorf("client not initialized")
+	}
 
-    var params *protocol.ListResourceTemplatesRequest
-    if cursor != "" {
-        params = &protocol.ListResourceTemplatesRequest{Cursor: cursor}
-    }
+	var params *protocol.ListResourceTemplatesRequest
+	if cursor != "" {
+		params = &protocol.ListResourceTemplatesRequest{Cursor: cursor}
+	}
 
-    resp, err := c.sendRequest(ctx, "resources/templates/list", params)
-    if err != nil {
-        return nil, err
-    }
+	resp, err := c.sendRequest(ctx, "resources/templates/list", params)
+	if err != nil {
+		return nil, err
+	}
 
-    var result protocol.ListResourceTemplatesResult
-    if err := json.Unmarshal(resp.Result, &result); err != nil {
-        return nil, fmt.Errorf("failed to unmarshal resource templates list: %w", err)
-    }
+	var result protocol.ListResourceTemplatesResult
+	if err := json.Unmarshal(resp.Result, &result); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal resource templates list: %w", err)
+	}
 
-    return &result, nil
+	return &result, nil
 }
 
 // ReadResource 读取资源内容
@@ -838,6 +882,27 @@ func (c *MCPClient) SetSamplingHandler(handler SamplingHandler) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.samplingHandler = handler
+}
+
+// SetRootsProvider 设置根目录提供器
+func (c *MCPClient) SetRootsProvider(provider RootsProvider) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.rootsProvider = provider
+}
+
+// SetRoots 设置静态根目录列表
+func (c *MCPClient) SetRoots(roots ...protocol.Root) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.rootsProvider = func(ctx context.Context) ([]protocol.Root, error) {
+		return roots, nil
+	}
+}
+
+// NotifyRootsChanged 通知服务器根目录列表已变更
+func (c *MCPClient) NotifyRootsChanged(ctx context.Context) error {
+	return c.SendNotification(ctx, "notifications/roots/list_changed", &protocol.RootsListChangedNotification{})
 }
 
 // Close 关闭客户端连接

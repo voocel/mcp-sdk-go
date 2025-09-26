@@ -25,6 +25,9 @@ type Server interface {
 
 	HandleMessage(ctx context.Context, message *protocol.JSONRPCMessage) (*protocol.JSONRPCMessage, error)
 	SendNotification(method string, params interface{}) error
+
+	// RequestRootsList 请求客户端的根目录列表
+	RequestRootsList(ctx context.Context) (*protocol.ListRootsResult, error)
 }
 
 type ToolHandler func(ctx context.Context, arguments map[string]interface{}) (*protocol.CallToolResult, error)
@@ -49,6 +52,9 @@ type MCPServer struct {
 
 	notificationHandler func(method string, params interface{}) error
 	elicitor            Elicitor
+
+	// requestSender 用于向客户端发送请求（如根目录列表请求）
+	requestSender func(ctx context.Context, method string, params interface{}) (*protocol.JSONRPCMessage, error)
 
 	mu sync.RWMutex
 }
@@ -267,6 +273,13 @@ func (s *MCPServer) SetNotificationHandler(handler func(method string, params in
 	s.notificationHandler = handler
 }
 
+// SetRequestSender sets request sender for server-initiated requests
+func (s *MCPServer) SetRequestSender(sender func(ctx context.Context, method string, params interface{}) (*protocol.JSONRPCMessage, error)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.requestSender = sender
+}
+
 // SendNotification sends notification
 func (s *MCPServer) SendNotification(method string, params interface{}) error {
 	if s.notificationHandler != nil {
@@ -414,6 +427,33 @@ func (s *MCPServer) handleCallTool(ctx context.Context, params json.RawMessage) 
 	}
 
 	return registration.Handler(ctx, req.Arguments)
+}
+
+// RequestRootsList root list
+func (s *MCPServer) RequestRootsList(ctx context.Context) (*protocol.ListRootsResult, error) {
+	s.mu.RLock()
+	sender := s.requestSender
+	s.mu.RUnlock()
+
+	if sender == nil {
+		return nil, fmt.Errorf("request sender not configured")
+	}
+
+	resp, err := sender(ctx, "roots/list", nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to send roots/list request: %w", err)
+	}
+
+	if resp.Error != nil {
+		return nil, fmt.Errorf("roots/list request failed: %s", resp.Error.Message)
+	}
+
+	var result protocol.ListRootsResult
+	if err := json.Unmarshal(resp.Result, &result); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal roots/list result: %w", err)
+	}
+
+	return &result, nil
 }
 
 // resource list
