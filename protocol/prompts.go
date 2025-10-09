@@ -14,6 +14,7 @@ type Prompt struct {
 	Name        string           `json:"name"`
 	Description string           `json:"description,omitempty"`
 	Arguments   []PromptArgument `json:"arguments,omitempty"`
+	Meta        map[string]any   `json:"_meta,omitempty"` // MCP 2025-06-18: 扩展元数据
 }
 
 // PromptMessage 提示消息
@@ -28,19 +29,19 @@ func (pm *PromptMessage) UnmarshalJSON(data []byte) error {
 		Role    Role            `json:"role"`
 		Content json.RawMessage `json:"content"`
 	}
-	
+
 	if err := json.Unmarshal(data, &temp); err != nil {
 		return err
 	}
-	
+
 	pm.Role = temp.Role
-	
+
 	content, err := UnmarshalContent(temp.Content)
 	if err != nil {
 		return err
 	}
 	pm.Content = content
-	
+
 	return nil
 }
 
@@ -72,8 +73,9 @@ type GetPromptParams struct {
 }
 
 type GetPromptResult struct {
-	Description string          `json:"description,omitempty"`
-	Messages    []PromptMessage `json:"messages"`
+	Description string                 `json:"description,omitempty"`
+	Messages    []PromptMessage        `json:"messages"`
+	Meta        map[string]interface{} `json:"_meta,omitempty"` // MCP 2025-06-18: 扩展元数据
 }
 
 // PromptsListChangedNotification 提示模板变更通知

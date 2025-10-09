@@ -56,6 +56,7 @@ MCP Go SDK 是模型上下文协议（Model Context Protocol）的 Go 语言实�
 - **用户交互请求**：工具可主动请求用户输入或确认
 - **资源链接**：支持资源间的关联和引用
 - **协议版本头**：HTTP传输需要`MCP-Protocol-Version`头
+- **扩展元数据 (_meta)**：为工具、资源、提示添加自定义元数据
 
 ### 主要变更历史
 
@@ -65,6 +66,7 @@ MCP Go SDK 是模型上下文协议（Model Context Protocol）的 Go 语言实�
 - 增强工具注解系统
 - 添加用户交互请求机制
 - 支持资源链接功能
+- 新增 `_meta` 字段用于扩展元数据
 
 **2024-11-05 → 2025-03-26**：
 
@@ -219,16 +221,25 @@ func main() {
 
 ## 示例项目
 
-| 示例 | 描述 | 传输协议 | 运行方式 |
-|------|------|----------|----------|
-| [Calculator](./examples/calculator/) | 数学计算器服务 | STDIO | `cd examples/calculator/server && go run main.go` |
-| [SSE Demo](./examples/sse-demo/) | SSE 传输演示 | SSE | `cd examples/sse-demo/server && go run main.go` |
-| [Chatbot](./examples/chatbot/) | 聊天机器人服务 | SSE | `cd examples/chatbot/server && go run main.go` |
-| [File Server](./examples/file-server/) | 文件操作服务 | SSE | `cd examples/file-server/server && go run main.go` |
-| [Streamable Demo](./examples/streamable-demo/) | Streamable HTTP 演示 (MCP 2025-06-18) | Streamable HTTP | `cd examples/streamable-demo/server && go run main.go` |
-| [Resource Templates](./examples/resource-templates/) | 资源模板注册与使用 | SSE | `cd examples/resource-templates/server && go run main.go` |
+| 示例 | 描述 | 传输协议 | 特性 |
+|------|------|----------|------|
+| [**Basic**](./examples/basic/) | **完整综合示例** | STDIO | 所有核心功能 + 客户端 |
+| [Calculator](./examples/calculator/) | 数学计算器服务 | STDIO | 工具、资源 |
+| [SSE Demo](./examples/sse-demo/) | SSE 传输演示 | SSE | SSE 传输 |
+| [Chatbot](./examples/chatbot/) | 聊天机器人服务 | SSE | 对话式交互 |
+| [File Server](./examples/file-server/) | 文件操作服务 | SSE | 文件操作 |
+| [Streamable Demo](./examples/streamable-demo/) | Streamable HTTP 演示 | Streamable HTTP | 流式传输 |
 
-**运行示例**: 每个示例都包含服务器和客户端，需要在不同终端中分别运行。
+**推荐从 Basic 示例开始**: 包含所有核心功能的完整演示,含服务器和客户端实现。
+
+**运行方式**:
+```bash
+# 服务器
+cd examples/basic && go run main.go
+
+# 客户端
+cd examples/basic/client && go run main.go
+```
 
 ## 核心架构
 
@@ -476,6 +487,7 @@ MIT License - 详见 [LICENSE](LICENSE) 文件
 - [x] **用户交互请求 (Elicitation)** - 服务器可在交互过程中请求用户输入 (MCP 2025-06-18)
 - [x] **LLM采样支持 (Sampling)** - 服务器发起的LLM推理请求，支持递归AI交互
 - [x] **资源模板 (Resource Templates)** - 支持动态资源模板和URI模板 (如 `file:///{path}`)
+- [ ] **资源链接 (Resource Links)** - 工具结果中返回资源链接，提供额外上下文 (MCP 2025-06-18)
 - [ ] **进度跟踪 (Progress Tracking)** - 长时间运行操作的实时进度反馈和取消机制
 - [ ] **参数自动补全 (Completion)** - 工具和提示参数的智能补全建议
 - [x] **根目录管理 (Roots)** - 客户端文件系统根目录管理和变更通知

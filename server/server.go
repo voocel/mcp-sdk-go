@@ -26,7 +26,6 @@ type Server interface {
 	HandleMessage(ctx context.Context, message *protocol.JSONRPCMessage) (*protocol.JSONRPCMessage, error)
 	SendNotification(method string, params interface{}) error
 
-	// RequestRootsList 请求客户端的根目录列表
 	RequestRootsList(ctx context.Context) (*protocol.ListRootsResult, error)
 }
 
@@ -53,7 +52,7 @@ type MCPServer struct {
 	notificationHandler func(method string, params interface{}) error
 	elicitor            Elicitor
 
-	// requestSender 用于向客户端发送请求（如根目录列表请求）
+	// requestSender Send a request to the client (such as a roots list request)
 	requestSender func(ctx context.Context, method string, params interface{}) (*protocol.JSONRPCMessage, error)
 
 	mu sync.RWMutex
@@ -100,6 +99,7 @@ func NewServer(name, version string) *MCPServer {
 // ToolOptions tool registration options
 type ToolOptions struct {
 	OutputSchema protocol.JSONSchema // optional output schema (MCP 2025-06-18)
+	Meta         map[string]any      // optional metadata (MCP 2025-06-18)
 }
 
 // RegisterTool registers tool with optional output schema support
@@ -108,8 +108,14 @@ func (s *MCPServer) RegisterTool(name, description string, inputSchema protocol.
 	defer s.mu.Unlock()
 
 	var outputSchema protocol.JSONSchema
-	if len(opts) > 0 && len(opts[0].OutputSchema) > 0 {
-		outputSchema = opts[0].OutputSchema
+	var meta map[string]any
+	if len(opts) > 0 {
+		if len(opts[0].OutputSchema) > 0 {
+			outputSchema = opts[0].OutputSchema
+		}
+		if len(opts[0].Meta) > 0 {
+			meta = opts[0].Meta
+		}
 	}
 
 	var tool protocol.Tool
@@ -117,6 +123,10 @@ func (s *MCPServer) RegisterTool(name, description string, inputSchema protocol.
 		tool = protocol.NewToolWithOutput(name, description, inputSchema, outputSchema)
 	} else {
 		tool = protocol.NewTool(name, description, inputSchema)
+	}
+
+	if len(meta) > 0 {
+		tool.Meta = meta
 	}
 
 	s.tools[name] = &ToolRegistration{
@@ -148,11 +158,16 @@ func (s *MCPServer) UnregisterTool(name string) error {
 }
 
 // RegisterResource registers resource
-func (s *MCPServer) RegisterResource(uri, name, description, mimeType string, handler ResourceHandler) error {
+func (s *MCPServer) RegisterResource(uri, name, description, mimeType string, handler ResourceHandler, meta ...map[string]any) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	resource := protocol.NewResource(uri, name, description, mimeType)
+
+	if len(meta) > 0 && len(meta[0]) > 0 {
+		resource.Meta = meta[0]
+	}
+
 	s.resources[uri] = &ResourceRegistration{
 		Resource: resource,
 		Handler:  handler,
@@ -167,11 +182,16 @@ func (s *MCPServer) RegisterResource(uri, name, description, mimeType string, ha
 }
 
 // RegisterResourceTemplate registers a resource template
-func (s *MCPServer) RegisterResourceTemplate(uriTemplate, name, description, mimeType string) error {
+func (s *MCPServer) RegisterResourceTemplate(uriTemplate, name, description, mimeType string, meta ...map[string]any) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	template := protocol.NewResourceTemplate(uriTemplate, name, description, mimeType)
+
+	if len(meta) > 0 && len(meta[0]) > 0 {
+		template.Meta = meta[0]
+	}
+
 	s.resourceTemplates[uriTemplate] = &ResourceTemplateRegistration{
 		Template: template,
 	}
@@ -213,11 +233,16 @@ func (s *MCPServer) UnregisterResource(uri string) error {
 }
 
 // RegisterPrompt registers prompt template
-func (s *MCPServer) RegisterPrompt(name, description string, arguments []protocol.PromptArgument, handler PromptHandler) error {
+func (s *MCPServer) RegisterPrompt(name, description string, arguments []protocol.PromptArgument, handler PromptHandler, meta ...map[string]any) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	prompt := protocol.NewPrompt(name, description, arguments...)
+
+	if len(meta) > 0 && len(meta[0]) > 0 {
+		prompt.Meta = meta[0]
+	}
+
 	s.prompts[name] = &PromptRegistration{
 		Prompt:  prompt,
 		Handler: handler,

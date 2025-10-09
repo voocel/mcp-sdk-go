@@ -11,7 +11,7 @@ import (
 	"github.com/voocel/mcp-sdk-go/protocol"
 )
 
-func NewJSONRPCRequest(method string, params interface{}) (*protocol.JSONRPCMessage, error) {
+func NewJSONRPCRequest(method string, params any) (*protocol.JSONRPCMessage, error) {
 	id := uuid.New().String()
 
 	var paramsBytes json.RawMessage
@@ -31,7 +31,7 @@ func NewJSONRPCRequest(method string, params interface{}) (*protocol.JSONRPCMess
 	}, nil
 }
 
-func NewJSONRPCResponse(id string, result interface{}) (*protocol.JSONRPCMessage, error) {
+func NewJSONRPCResponse(id string, result any) (*protocol.JSONRPCMessage, error) {
 	var resultBytes json.RawMessage
 	if result != nil {
 		bytes, err := json.Marshal(result)
@@ -48,7 +48,7 @@ func NewJSONRPCResponse(id string, result interface{}) (*protocol.JSONRPCMessage
 	}, nil
 }
 
-func NewJSONRPCError(id string, code int, message string, data interface{}) (*protocol.JSONRPCMessage, error) {
+func NewJSONRPCError(id string, code int, message string, data any) (*protocol.JSONRPCMessage, error) {
 	return &protocol.JSONRPCMessage{
 		JSONRPC: protocol.JSONRPCVersion,
 		ID:      protocol.StringToID(id),
@@ -60,7 +60,7 @@ func NewJSONRPCError(id string, code int, message string, data interface{}) (*pr
 	}, nil
 }
 
-func NewJSONRPCNotification(method string, params interface{}) (*protocol.JSONRPCMessage, error) {
+func NewJSONRPCNotification(method string, params any) (*protocol.JSONRPCMessage, error) {
 	var paramsBytes json.RawMessage
 	if params != nil {
 		bytes, err := json.Marshal(params)
@@ -77,7 +77,7 @@ func NewJSONRPCNotification(method string, params interface{}) (*protocol.JSONRP
 	}, nil
 }
 
-func StructToJSONSchema(v interface{}) (protocol.JSONSchema, error) {
+func StructToJSONSchema(v any) (protocol.JSONSchema, error) {
 	t := reflect.TypeOf(v)
 	if t.Kind() == reflect.Ptr {
 		t = t.Elem()
@@ -117,7 +117,6 @@ func createStructSchema(t reflect.Type) protocol.JSONSchema {
 			jsonName = tagParts[0]
 		}
 
-		// 检查是否必需 (没有omitempty)
 		isRequired := !contains(tagParts, "omitempty")
 		if isRequired {
 			required = append(required, jsonName)
@@ -181,7 +180,6 @@ func createFieldSchema(t reflect.Type) map[string]interface{} {
 	return schema
 }
 
-// 工具函数
 func contains(slice []string, item string) bool {
 	for _, s := range slice {
 		if s == item {
@@ -191,7 +189,7 @@ func contains(slice []string, item string) bool {
 	return false
 }
 
-func JSONToStruct(data []byte, v interface{}) error {
+func JSONToStruct(data []byte, v any) error {
 	return json.Unmarshal(data, v)
 }
 

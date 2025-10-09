@@ -18,7 +18,8 @@ type ToolBuilder struct {
 	name         string
 	description  string
 	inputSchema  protocol.JSONSchema
-	outputSchema protocol.JSONSchema // MCP 2025-06-18 added
+	outputSchema protocol.JSONSchema // MCP 2025-06-18
+	meta         map[string]any      // MCP 2025-06-18: Extended Metadata
 }
 
 type ResourceBuilder struct {
@@ -27,6 +28,7 @@ type ResourceBuilder struct {
 	name        string
 	description string
 	mimeType    string
+	meta        map[string]any
 }
 
 type ResourceTemplateBuilder struct {
@@ -35,6 +37,7 @@ type ResourceTemplateBuilder struct {
 	name        string
 	description string
 	mimeType    string
+	meta        map[string]any
 }
 
 type PromptBuilder struct {
@@ -42,6 +45,7 @@ type PromptBuilder struct {
 	name        string
 	description string
 	arguments   []protocol.PromptArgument
+	meta        map[string]any
 }
 
 func NewFastMCP(name, version string) *FastMCP {
@@ -174,6 +178,15 @@ func (tb *ToolBuilder) WithOutputSchema(schema protocol.JSONSchema) *ToolBuilder
 	return tb
 }
 
+// WithMeta sets metadata (MCP 2025-06-18)
+func (tb *ToolBuilder) WithMeta(key string, value interface{}) *ToolBuilder {
+	if tb.meta == nil {
+		tb.meta = make(map[string]interface{})
+	}
+	tb.meta[key] = value
+	return tb
+}
+
 // WithStructOutputSchema automatically generates output schema using struct
 func (tb *ToolBuilder) WithStructOutputSchema(v interface{}) *ToolBuilder {
 	schema, err := utils.StructToJSONSchema(v)
@@ -185,10 +198,12 @@ func (tb *ToolBuilder) WithStructOutputSchema(v interface{}) *ToolBuilder {
 
 // Handle registers tool handler
 func (tb *ToolBuilder) Handle(handler ToolHandler) error {
-	if len(tb.outputSchema) > 0 {
-		return tb.fastmcp.server.RegisterTool(tb.name, tb.description, tb.inputSchema, handler, ToolOptions{
-			OutputSchema: tb.outputSchema,
-		})
+	opts := ToolOptions{
+		OutputSchema: tb.outputSchema,
+		Meta:         tb.meta,
+	}
+	if len(tb.outputSchema) > 0 || len(tb.meta) > 0 {
+		return tb.fastmcp.server.RegisterTool(tb.name, tb.description, tb.inputSchema, handler, opts)
 	}
 	return tb.fastmcp.server.RegisterTool(tb.name, tb.description, tb.inputSchema, handler)
 }
@@ -260,9 +275,18 @@ func (rb *ResourceBuilder) WithMimeType(mimeType string) *ResourceBuilder {
 	return rb
 }
 
+// WithMeta sets metadata (MCP 2025-06-18)
+func (rb *ResourceBuilder) WithMeta(key string, value any) *ResourceBuilder {
+	if rb.meta == nil {
+		rb.meta = make(map[string]any)
+	}
+	rb.meta[key] = value
+	return rb
+}
+
 // Handle registers resource handler
 func (rb *ResourceBuilder) Handle(handler ResourceHandler) error {
-	return rb.fastmcp.server.RegisterResource(rb.uri, rb.name, rb.description, rb.mimeType, handler)
+	return rb.fastmcp.server.RegisterResource(rb.uri, rb.name, rb.description, rb.mimeType, handler, rb.meta)
 }
 
 // WithMimeType sets MIME type for resource template
@@ -271,9 +295,18 @@ func (rtb *ResourceTemplateBuilder) WithMimeType(mimeType string) *ResourceTempl
 	return rtb
 }
 
+// WithMeta sets metadata (MCP 2025-06-18)
+func (rtb *ResourceTemplateBuilder) WithMeta(key string, value any) *ResourceTemplateBuilder {
+	if rtb.meta == nil {
+		rtb.meta = make(map[string]any)
+	}
+	rtb.meta[key] = value
+	return rtb
+}
+
 // Register registers resource template metadata
 func (rtb *ResourceTemplateBuilder) Register() error {
-	return rtb.fastmcp.server.RegisterResourceTemplate(rtb.uriTemplate, rtb.name, rtb.description, rtb.mimeType)
+	return rtb.fastmcp.server.RegisterResourceTemplate(rtb.uriTemplate, rtb.name, rtb.description, rtb.mimeType, rtb.meta)
 }
 
 // Prompt prompt template fluent API
@@ -292,9 +325,18 @@ func (pb *PromptBuilder) WithArgument(name, description string, required bool) *
 	return pb
 }
 
+// WithMeta sets metadata (MCP 2025-06-18)
+func (pb *PromptBuilder) WithMeta(key string, value any) *PromptBuilder {
+	if pb.meta == nil {
+		pb.meta = make(map[string]any)
+	}
+	pb.meta[key] = value
+	return pb
+}
+
 // Handle registers prompt template handler
 func (pb *PromptBuilder) Handle(handler PromptHandler) error {
-	return pb.fastmcp.server.RegisterPrompt(pb.name, pb.description, pb.arguments, handler)
+	return pb.fastmcp.server.RegisterPrompt(pb.name, pb.description, pb.arguments, handler, pb.meta)
 }
 
 func (f *FastMCP) HandleMessage(ctx context.Context, data []byte) ([]byte, error) {

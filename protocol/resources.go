@@ -2,10 +2,11 @@ package protocol
 
 // Resource 资源定义
 type Resource struct {
-	URI         string `json:"uri"`
-	Name        string `json:"name"`
-	Description string `json:"description,omitempty"`
-	MimeType    string `json:"mimeType,omitempty"`
+	URI         string         `json:"uri"`
+	Name        string         `json:"name"`
+	Description string         `json:"description,omitempty"`
+	MimeType    string         `json:"mimeType,omitempty"`
+	Meta        map[string]any `json:"_meta,omitempty"` // MCP 2025-06-18: 扩展元数据
 }
 
 // ResourceContents 资源内容
@@ -51,10 +52,11 @@ type ListResourceTemplatesRequest struct {
 }
 
 type ResourceTemplate struct {
-	URITemplate string `json:"uriTemplate"`
-	Name        string `json:"name"`
-	Description string `json:"description,omitempty"`
-	MimeType    string `json:"mimeType,omitempty"`
+	URITemplate string         `json:"uriTemplate"`
+	Name        string         `json:"name"`
+	Description string         `json:"description,omitempty"`
+	MimeType    string         `json:"mimeType,omitempty"`
+	Meta        map[string]any `json:"_meta,omitempty"` // MCP 2025-06-18: 扩展元数据
 }
 
 type ListResourceTemplatesResult struct {

@@ -16,10 +16,11 @@ type ToolParameter struct {
 }
 
 type Tool struct {
-	Name         string     `json:"name"`
-	Description  string     `json:"description,omitempty"`
-	InputSchema  JSONSchema `json:"inputSchema"`
-	OutputSchema JSONSchema `json:"outputSchema,omitempty"` // MCP 2025-06-18 新增
+	Name         string         `json:"name"`
+	Description  string         `json:"description,omitempty"`
+	InputSchema  JSONSchema     `json:"inputSchema"`
+	OutputSchema JSONSchema     `json:"outputSchema,omitempty"` // MCP 2025-06-18
+	Meta         map[string]any `json:"_meta,omitempty"`        // MCP 2025-06-18: 扩展元数据
 }
 
 type ToolList struct {
@@ -27,8 +28,8 @@ type ToolList struct {
 }
 
 type CallToolParams struct {
-	Name      string                 `json:"name"`
-	Arguments map[string]interface{} `json:"arguments"`
+	Name      string         `json:"name"`
+	Arguments map[string]any `json:"arguments"`
 }
 
 type ListToolsParams struct {
@@ -36,9 +37,10 @@ type ListToolsParams struct {
 }
 
 type CallToolResult struct {
-	Content           []Content   `json:"content"`
-	IsError           bool        `json:"isError,omitempty"`
-	StructuredContent interface{} `json:"structuredContent,omitempty"` // MCP 2025-06-18 新增
+	Content           []Content      `json:"content"`
+	IsError           bool           `json:"isError,omitempty"`
+	StructuredContent any            `json:"structuredContent,omitempty"` // MCP 2025-06-18
+	Meta              map[string]any `json:"_meta,omitempty"`             // MCP 2025-06-18: 扩展元数据
 }
 
 // UnmarshalJSON 实现自定义JSON反序列化
@@ -46,7 +48,8 @@ func (ctr *CallToolResult) UnmarshalJSON(data []byte) error {
 	var temp struct {
 		Content           []json.RawMessage `json:"content"`
 		IsError           bool              `json:"isError,omitempty"`
-		StructuredContent interface{}       `json:"structuredContent,omitempty"`
+		StructuredContent any               `json:"structuredContent,omitempty"`
+		Meta              map[string]any    `json:"_meta,omitempty"`
 	}
 
 	if err := json.Unmarshal(data, &temp); err != nil {
@@ -55,6 +58,7 @@ func (ctr *CallToolResult) UnmarshalJSON(data []byte) error {
 
 	ctr.IsError = temp.IsError
 	ctr.StructuredContent = temp.StructuredContent
+	ctr.Meta = temp.Meta
 	ctr.Content = make([]Content, len(temp.Content))
 
 	for i, raw := range temp.Content {
@@ -78,8 +82,8 @@ type ListToolsResult struct {
 }
 
 type CallToolRequest struct {
-	Name      string                 `json:"name"`
-	Arguments map[string]interface{} `json:"arguments,omitempty"`
+	Name      string         `json:"name"`
+	Arguments map[string]any `json:"arguments,omitempty"`
 }
 
 type ToolsListChangedNotification struct{}
