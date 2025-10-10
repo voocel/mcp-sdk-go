@@ -12,6 +12,7 @@ type PromptArgument struct {
 // Prompt 提示模板定义
 type Prompt struct {
 	Name        string           `json:"name"`
+	Title       string           `json:"title,omitempty"` // MCP 2025-06-18: 人类友好的标题
 	Description string           `json:"description,omitempty"`
 	Arguments   []PromptArgument `json:"arguments,omitempty"`
 	Meta        map[string]any   `json:"_meta,omitempty"` // MCP 2025-06-18: 扩展元数据
@@ -73,9 +74,9 @@ type GetPromptParams struct {
 }
 
 type GetPromptResult struct {
-	Description string                 `json:"description,omitempty"`
-	Messages    []PromptMessage        `json:"messages"`
-	Meta        map[string]interface{} `json:"_meta,omitempty"` // MCP 2025-06-18: 扩展元数据
+	Description string          `json:"description,omitempty"`
+	Messages    []PromptMessage `json:"messages"`
+	Meta        map[string]any  `json:"_meta,omitempty"`
 }
 
 // PromptsListChangedNotification 提示模板变更通知

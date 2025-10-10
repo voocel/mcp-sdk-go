@@ -6,15 +6,17 @@ type Resource struct {
 	Name        string         `json:"name"`
 	Description string         `json:"description,omitempty"`
 	MimeType    string         `json:"mimeType,omitempty"`
-	Meta        map[string]any `json:"_meta,omitempty"` // MCP 2025-06-18: 扩展元数据
+	Meta        map[string]any `json:"_meta,omitempty"`
 }
 
 // ResourceContents 资源内容
 type ResourceContents struct {
-	URI      string `json:"uri"`
-	MimeType string `json:"mimeType,omitempty"`
-	Text     string `json:"text,omitempty"`
-	Blob     string `json:"blob,omitempty"`
+	URI         string      `json:"uri"`
+	Title       string      `json:"title,omitempty"`
+	MimeType    string      `json:"mimeType,omitempty"`
+	Text        string      `json:"text,omitempty"`
+	Blob        string      `json:"blob,omitempty"`
+	Annotations *Annotation `json:"annotations,omitempty"`
 }
 
 // ListResourcesRequest resources/list 请求和响应
@@ -56,7 +58,7 @@ type ResourceTemplate struct {
 	Name        string         `json:"name"`
 	Description string         `json:"description,omitempty"`
 	MimeType    string         `json:"mimeType,omitempty"`
-	Meta        map[string]any `json:"_meta,omitempty"` // MCP 2025-06-18: 扩展元数据
+	Meta        map[string]any `json:"_meta,omitempty"`
 }
 
 type ListResourceTemplatesResult struct {
@@ -71,7 +73,7 @@ type ResourceTemplatesListChangedNotification struct{}
 
 type ResourcesUpdatedNotification struct {
 	URI   string `json:"uri"`
-	Title string `json:"title,omitempty"` // 2025-06-18 新增：可选的资源标题
+	Title string `json:"title,omitempty"`
 }
 
 func NewResource(uri, name, description, mimeType string) Resource {

@@ -98,6 +98,7 @@ func NewServer(name, version string) *MCPServer {
 
 // ToolOptions tool registration options
 type ToolOptions struct {
+	Title        string              // optional human-friendly title (MCP 2025-06-18)
 	OutputSchema protocol.JSONSchema // optional output schema (MCP 2025-06-18)
 	Meta         map[string]any      // optional metadata (MCP 2025-06-18)
 }
@@ -107,9 +108,13 @@ func (s *MCPServer) RegisterTool(name, description string, inputSchema protocol.
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	var title string
 	var outputSchema protocol.JSONSchema
 	var meta map[string]any
 	if len(opts) > 0 {
+		if opts[0].Title != "" {
+			title = opts[0].Title
+		}
 		if len(opts[0].OutputSchema) > 0 {
 			outputSchema = opts[0].OutputSchema
 		}
@@ -123,6 +128,10 @@ func (s *MCPServer) RegisterTool(name, description string, inputSchema protocol.
 		tool = protocol.NewToolWithOutput(name, description, inputSchema, outputSchema)
 	} else {
 		tool = protocol.NewTool(name, description, inputSchema)
+	}
+
+	if title != "" {
+		tool.Title = title
 	}
 
 	if len(meta) > 0 {
@@ -232,15 +241,26 @@ func (s *MCPServer) UnregisterResource(uri string) error {
 	return nil
 }
 
+// PromptOptions prompt registration options
+type PromptOptions struct {
+	Title string         // optional human-friendly title (MCP 2025-06-18)
+	Meta  map[string]any // optional metadata (MCP 2025-06-18)
+}
+
 // RegisterPrompt registers prompt template
-func (s *MCPServer) RegisterPrompt(name, description string, arguments []protocol.PromptArgument, handler PromptHandler, meta ...map[string]any) error {
+func (s *MCPServer) RegisterPrompt(name, description string, arguments []protocol.PromptArgument, handler PromptHandler, opts ...PromptOptions) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	prompt := protocol.NewPrompt(name, description, arguments...)
 
-	if len(meta) > 0 && len(meta[0]) > 0 {
-		prompt.Meta = meta[0]
+	if len(opts) > 0 {
+		if opts[0].Title != "" {
+			prompt.Title = opts[0].Title
+		}
+		if len(opts[0].Meta) > 0 {
+			prompt.Meta = opts[0].Meta
+		}
 	}
 
 	s.prompts[name] = &PromptRegistration{

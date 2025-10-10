@@ -26,8 +26,9 @@ func main() {
 			return protocol.NewToolResultText(greeting), nil
 		})
 
-	// ========== 2. 带元数据的工具 (MCP 2025-06-18) ==========
+	// ========== 2. 带元数据和标题的工具 (MCP 2025-06-18) ==========
 	mcp.Tool("calculate", "执行数学计算").
+		WithTitle("计算器工具"). // 人类友好的标题
 		WithStringParam("operation", "运算类型 (add, subtract, multiply, divide)", true).
 		WithIntParam("a", "第一个数字", true).
 		WithIntParam("b", "第二个数字", true).
@@ -140,8 +141,9 @@ func main() {
 			}, nil
 		})
 
-	// ========== 7. 提示模板 ==========
+	// ========== 7. 提示模板 (带标题) ==========
 	mcp.Prompt("code_review", "代码审查提示").
+		WithTitle("代码审查助手"). // 人类友好的标题
 		WithArgument("language", "编程语言", true).
 		WithArgument("code", "要审查的代码", true).
 		WithMeta("domain", "software-engineering").
@@ -216,6 +218,36 @@ func main() {
 			return protocol.NewToolResultError("无法解析 AI 响应"), nil
 		})
 
+	// ========== 10. 资源链接工具 - Resource Links (MCP 2025-06-18) ==========
+	mcp.Tool("find_file", "查找文件并返回资源链接").
+		WithStringParam("filename", "要查找的文件名", true).
+		Handle(func(ctx context.Context, args map[string]interface{}) (*protocol.CallToolResult, error) {
+			filename := args["filename"].(string)
+
+			// 模拟文件查找
+			fileURI := fmt.Sprintf("file:///project/src/%s", filename)
+
+			// 创建带注解的资源链接
+			annotation := protocol.NewAnnotation().
+				WithAudience(protocol.RoleAssistant).
+				WithPriority(0.9)
+
+			resourceLink := protocol.NewResourceLinkContentWithDetails(
+				fileURI,
+				filename,
+				"Found file in project",
+				"text/plain",
+			)
+			resourceLink.WithAnnotations(annotation)
+
+			return &protocol.CallToolResult{
+				Content: []protocol.Content{
+					protocol.NewTextContent(fmt.Sprintf("找到文件: %s", filename)),
+					resourceLink,
+				},
+			}, nil
+		})
+
 	// ========== 启动服务器 ==========
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -239,14 +271,15 @@ func main() {
 	log.Println("")
 	log.Println("功能列表:")
 	log.Println("  ✓ 基础工具 (greet)")
-	log.Println("  ✓ 带元数据的工具 (calculate)")
+	log.Println("  ✓ 带元数据和标题的工具 (calculate)")
 	log.Println("  ✓ 带输出 Schema 的工具 (get_time)")
 	log.Println("  ✓ 基础资源 (info://server)")
 	log.Println("  ✓ 带元数据的资源 (config://app)")
 	log.Println("  ✓ 资源模板 (echo:///{message})")
-	log.Println("  ✓ 提示模板 (code_review)")
+	log.Println("  ✓ 提示模板 - 带标题 (code_review)")
 	log.Println("  ✓ 交互式工具 - Elicitation (interactive_greet)")
 	log.Println("  ✓ AI 工具 - Sampling (ai_assistant)")
+	log.Println("  ✓ 资源链接工具 - Resource Links (find_file)")
 	log.Println("========================================")
 	log.Println("等待客户端连接...")
 

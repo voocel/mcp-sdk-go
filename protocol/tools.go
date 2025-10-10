@@ -17,6 +17,7 @@ type ToolParameter struct {
 
 type Tool struct {
 	Name         string         `json:"name"`
+	Title        string         `json:"title,omitempty"` // MCP 2025-06-18: 人类友好的标题
 	Description  string         `json:"description,omitempty"`
 	InputSchema  JSONSchema     `json:"inputSchema"`
 	OutputSchema JSONSchema     `json:"outputSchema,omitempty"` // MCP 2025-06-18

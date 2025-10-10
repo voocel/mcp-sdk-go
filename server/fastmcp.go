@@ -16,6 +16,7 @@ type FastMCP struct {
 type ToolBuilder struct {
 	fastmcp      *FastMCP
 	name         string
+	title        string // MCP 2025-06-18: Human-friendly title
 	description  string
 	inputSchema  protocol.JSONSchema
 	outputSchema protocol.JSONSchema // MCP 2025-06-18
@@ -43,6 +44,7 @@ type ResourceTemplateBuilder struct {
 type PromptBuilder struct {
 	fastmcp     *FastMCP
 	name        string
+	title       string // MCP 2025-06-18: Human-friendly title
 	description string
 	arguments   []protocol.PromptArgument
 	meta        map[string]any
@@ -172,6 +174,12 @@ func (tb *ToolBuilder) WithStructSchema(v interface{}) *ToolBuilder {
 	return tb
 }
 
+// WithTitle sets human-friendly title (MCP 2025-06-18)
+func (tb *ToolBuilder) WithTitle(title string) *ToolBuilder {
+	tb.title = title
+	return tb
+}
+
 // WithOutputSchema sets output schema (MCP 2025-06-18)
 func (tb *ToolBuilder) WithOutputSchema(schema protocol.JSONSchema) *ToolBuilder {
 	tb.outputSchema = schema
@@ -199,10 +207,11 @@ func (tb *ToolBuilder) WithStructOutputSchema(v interface{}) *ToolBuilder {
 // Handle registers tool handler
 func (tb *ToolBuilder) Handle(handler ToolHandler) error {
 	opts := ToolOptions{
+		Title:        tb.title,
 		OutputSchema: tb.outputSchema,
 		Meta:         tb.meta,
 	}
-	if len(tb.outputSchema) > 0 || len(tb.meta) > 0 {
+	if tb.title != "" || len(tb.outputSchema) > 0 || len(tb.meta) > 0 {
 		return tb.fastmcp.server.RegisterTool(tb.name, tb.description, tb.inputSchema, handler, opts)
 	}
 	return tb.fastmcp.server.RegisterTool(tb.name, tb.description, tb.inputSchema, handler)
@@ -216,10 +225,13 @@ func (tb *ToolBuilder) HandleWithElicitation(handler ToolHandlerWithElicitation)
 		return handler(mcpCtx, args)
 	}
 
-	if len(tb.outputSchema) > 0 {
-		return tb.fastmcp.server.RegisterTool(tb.name, tb.description, tb.inputSchema, wrappedHandler, ToolOptions{
-			OutputSchema: tb.outputSchema,
-		})
+	opts := ToolOptions{
+		Title:        tb.title,
+		OutputSchema: tb.outputSchema,
+		Meta:         tb.meta,
+	}
+	if tb.title != "" || len(tb.outputSchema) > 0 || len(tb.meta) > 0 {
+		return tb.fastmcp.server.RegisterTool(tb.name, tb.description, tb.inputSchema, wrappedHandler, opts)
 	}
 	return tb.fastmcp.server.RegisterTool(tb.name, tb.description, tb.inputSchema, wrappedHandler)
 }
@@ -325,6 +337,12 @@ func (pb *PromptBuilder) WithArgument(name, description string, required bool) *
 	return pb
 }
 
+// WithTitle sets human-friendly title (MCP 2025-06-18)
+func (pb *PromptBuilder) WithTitle(title string) *PromptBuilder {
+	pb.title = title
+	return pb
+}
+
 // WithMeta sets metadata (MCP 2025-06-18)
 func (pb *PromptBuilder) WithMeta(key string, value any) *PromptBuilder {
 	if pb.meta == nil {
@@ -336,7 +354,14 @@ func (pb *PromptBuilder) WithMeta(key string, value any) *PromptBuilder {
 
 // Handle registers prompt template handler
 func (pb *PromptBuilder) Handle(handler PromptHandler) error {
-	return pb.fastmcp.server.RegisterPrompt(pb.name, pb.description, pb.arguments, handler, pb.meta)
+	opts := PromptOptions{
+		Title: pb.title,
+		Meta:  pb.meta,
+	}
+	if pb.title != "" || len(pb.meta) > 0 {
+		return pb.fastmcp.server.RegisterPrompt(pb.name, pb.description, pb.arguments, handler, opts)
+	}
+	return pb.fastmcp.server.RegisterPrompt(pb.name, pb.description, pb.arguments, handler)
 }
 
 func (f *FastMCP) HandleMessage(ctx context.Context, data []byte) ([]byte, error) {

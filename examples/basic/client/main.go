@@ -58,6 +58,9 @@ func demonstrateAllFeatures(ctx context.Context, mcpClient client.Client) {
 	} else {
 		for _, tool := range tools.Tools {
 			fmt.Printf("  - %s: %s\n", tool.Name, tool.Description)
+			if tool.Title != "" {
+				fmt.Printf("    标题: %s\n", tool.Title)
+			}
 			if len(tool.Meta) > 0 {
 				fmt.Printf("    元数据: %v\n", tool.Meta)
 			}
@@ -144,6 +147,9 @@ func demonstrateAllFeatures(ctx context.Context, mcpClient client.Client) {
 	} else {
 		for _, prompt := range prompts.Prompts {
 			fmt.Printf("  - %s: %s\n", prompt.Name, prompt.Description)
+			if prompt.Title != "" {
+				fmt.Printf("    标题: %s\n", prompt.Title)
+			}
 			if len(prompt.Meta) > 0 {
 				fmt.Printf("    元数据: %v\n", prompt.Meta)
 			}
@@ -186,6 +192,36 @@ func demonstrateAllFeatures(ctx context.Context, mcpClient client.Client) {
 		log.Printf("调用工具失败: %v", err)
 	} else {
 		printToolResult(result)
+	}
+
+	// 调用资源链接工具 (Resource Links)
+	fmt.Println("\n========== 12. 调用资源链接工具 (find_file) ==========")
+	result, err = mcpClient.CallTool(ctx, "find_file", map[string]interface{}{
+		"filename": "main.go",
+	})
+	if err != nil {
+		log.Printf("调用工具失败: %v", err)
+	} else {
+		printToolResult(result)
+		// 特别展示资源链接
+		for i, content := range result.Content {
+			if rlc, ok := content.(protocol.ResourceLinkContent); ok {
+				fmt.Printf("\n  资源链接 %d:\n", i+1)
+				fmt.Printf("    URI: %s\n", rlc.URI)
+				fmt.Printf("    名称: %s\n", rlc.Name)
+				fmt.Printf("    描述: %s\n", rlc.Description)
+				fmt.Printf("    MIME类型: %s\n", rlc.MimeType)
+				if rlc.Annotations != nil {
+					fmt.Printf("    注解:\n")
+					if len(rlc.Annotations.Audience) > 0 {
+						fmt.Printf("      受众: %v\n", rlc.Annotations.Audience)
+					}
+					if rlc.Annotations.Priority > 0 {
+						fmt.Printf("      优先级: %.1f\n", rlc.Annotations.Priority)
+					}
+				}
+			}
+		}
 	}
 
 	fmt.Println("\n=================== END =====================")
