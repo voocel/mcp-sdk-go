@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -224,7 +225,78 @@ func demonstrateAllFeatures(ctx context.Context, mcpClient client.Client) {
 		}
 	}
 
+	// 测试参数自动补全 (Completion)
+	fmt.Println("\n========== 9. 测试参数自动补全 (Completion) ==========")
+	testCompletion(ctx, mcpClient)
+
 	fmt.Println("\n=================== END =====================")
+}
+
+// testCompletion 测试参数自动补全功能
+func testCompletion(ctx context.Context, mcpClient client.Client) {
+	// 测试提示参数补全
+	fmt.Println("测试提示参数补全 (code_review.language):")
+
+	// 补全 "py" -> ["python", "pytorch", "pyside"]
+	completeReq := protocol.CompleteRequest{
+		Ref: map[string]any{
+			"type": "ref/prompt",
+			"name": "code_review",
+		},
+		Argument: protocol.CompletionArgument{
+			Name:  "language",
+			Value: "py",
+		},
+	}
+
+	response, err := mcpClient.SendRequest(ctx, "completion/complete", completeReq)
+	if err != nil {
+		log.Printf("  补全请求失败: %v", err)
+		return
+	}
+
+	var result protocol.CompleteResult
+	if err := json.Unmarshal(response.Result, &result); err != nil {
+		log.Printf("  解析补全结果失败: %v", err)
+		return
+	}
+
+	fmt.Printf("  输入: 'py'\n")
+	fmt.Printf("  建议: %v\n", result.Completion.Values)
+	if result.Completion.Total != nil {
+		fmt.Printf("  总数: %d\n", *result.Completion.Total)
+	}
+	fmt.Printf("  更多: %v\n", result.Completion.HasMore)
+
+	// 测试资源 URI 补全
+	fmt.Println("\n测试资源 URI 补全 (file path):")
+
+	completeReq2 := protocol.CompleteRequest{
+		Ref: map[string]any{
+			"type": "ref/resource",
+			"uri":  "file:///{path}",
+		},
+		Argument: protocol.CompletionArgument{
+			Name:  "path",
+			Value: "/home",
+		},
+	}
+
+	response2, err := mcpClient.SendRequest(ctx, "completion/complete", completeReq2)
+	if err != nil {
+		log.Printf("  补全请求失败: %v", err)
+		return
+	}
+
+	var result2 protocol.CompleteResult
+	if err := json.Unmarshal(response2.Result, &result2); err != nil {
+		log.Printf("  解析补全结果失败: %v", err)
+		return
+	}
+
+	fmt.Printf("  输入: '/home'\n")
+	fmt.Printf("  建议: %v\n", result2.Completion.Values)
+	fmt.Printf("  更多: %v\n", result2.Completion.HasMore)
 }
 
 // handleElicitation 处理服务器的用户交互请求

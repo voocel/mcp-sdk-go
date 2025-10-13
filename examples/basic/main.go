@@ -257,6 +257,46 @@ func main() {
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
+	// ========== 10. 参数自动补全 (Completion) - MCP 2025-06-18 ==========
+	mcp.Completion(func(ctx context.Context, ref protocol.CompletionReference, argument protocol.CompletionArgument, context *protocol.CompletionContext) (*protocol.CompletionResult, error) {
+		// 根据引用类型处理补全
+		switch r := ref.(type) {
+		case protocol.PromptReference:
+			// 提示参数补全
+			if r.Name == "code_review" && argument.Name == "language" {
+				// 根据当前输入值过滤语言列表
+				allLanguages := []string{"python", "pytorch", "pyside", "javascript", "java", "go", "rust", "typescript"}
+				var matches []string
+				for _, lang := range allLanguages {
+					if len(argument.Value) == 0 || len(lang) >= len(argument.Value) && lang[:len(argument.Value)] == argument.Value {
+						matches = append(matches, lang)
+					}
+				}
+				result := protocol.NewCompletionResultWithTotal(matches, len(allLanguages), len(matches) < len(allLanguages))
+				return &result, nil
+			}
+
+		case protocol.ResourceReference:
+			// 资源 URI 补全
+			if argument.Name == "path" {
+				// 模拟文件路径补全
+				paths := []string{"/home/user/file1.txt", "/home/user/file2.txt", "/home/user/documents/"}
+				var matches []string
+				for _, path := range paths {
+					if len(argument.Value) == 0 || len(path) >= len(argument.Value) && path[:len(argument.Value)] == argument.Value {
+						matches = append(matches, path)
+					}
+				}
+				result := protocol.NewCompletionResult(matches, len(matches) < len(paths))
+				return &result, nil
+			}
+		}
+
+		// 默认返回空结果
+		result := protocol.NewCompletionResult([]string{}, false)
+		return &result, nil
+	})
+
 	go func() {
 		<-sigChan
 		log.Println("收到中断信号，正在关闭服务器...")
@@ -280,6 +320,7 @@ func main() {
 	log.Println("  ✓ 交互式工具 - Elicitation (interactive_greet)")
 	log.Println("  ✓ AI 工具 - Sampling (ai_assistant)")
 	log.Println("  ✓ 资源链接工具 - Resource Links (find_file)")
+	log.Println("  ✓ 参数自动补全 - Completion (code_review.language, resource paths)")
 	log.Println("========================================")
 	log.Println("等待客户端连接...")
 

@@ -32,6 +32,7 @@ type Server interface {
 type ToolHandler func(ctx context.Context, arguments map[string]interface{}) (*protocol.CallToolResult, error)
 type ResourceHandler func(ctx context.Context) (*protocol.ReadResourceResult, error)
 type PromptHandler func(ctx context.Context, arguments map[string]string) (*protocol.GetPromptResult, error)
+type CompletionHandler func(ctx context.Context, ref protocol.CompletionReference, argument protocol.CompletionArgument, context *protocol.CompletionContext) (*protocol.CompletionResult, error)
 
 type ToolHandlerWithElicitation func(ctx *MCPContext, arguments map[string]interface{}) (*protocol.CallToolResult, error)
 type ResourceHandlerWithElicitation func(ctx *MCPContext) (*protocol.ReadResourceResult, error)
@@ -45,6 +46,7 @@ type MCPServer struct {
 	resources         map[string]*ResourceRegistration
 	resourceTemplates map[string]*ResourceTemplateRegistration
 	prompts           map[string]*PromptRegistration
+	completionHandler CompletionHandler // MCP 2025-06-18: 参数自动补全
 
 	initialized bool
 	clientInfo  *protocol.ClientInfo
@@ -291,6 +293,28 @@ func (s *MCPServer) UnregisterPrompt(name string) error {
 	return nil
 }
 
+// RegisterCompletionHandler registers completion handler (MCP 2025-06-18)
+func (s *MCPServer) RegisterCompletionHandler(handler CompletionHandler) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.completionHandler = handler
+
+	// 启用 completion 能力
+	if s.capabilities.Completion == nil {
+		s.capabilities.Completion = &protocol.CompletionCapability{}
+	}
+}
+
+// UnregisterCompletionHandler unregisters completion handler
+func (s *MCPServer) UnregisterCompletionHandler() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.completionHandler = nil
+	s.capabilities.Completion = nil
+}
+
 // GetServerInfo gets server information
 func (s *MCPServer) GetServerInfo() protocol.ServerInfo {
 	return s.serverInfo
@@ -379,6 +403,8 @@ func (s *MCPServer) handleRequest(ctx context.Context, request *protocol.JSONRPC
 		result, err = s.handleListPrompts(ctx, request.Params)
 	case "prompts/get":
 		result, err = s.handleGetPrompt(ctx, request.Params)
+	case "completion/complete":
+		result, err = s.handleComplete(ctx, request.Params)
 	default:
 		// for notification messages, don't return error response
 		if request.IsNotification() {
@@ -580,4 +606,43 @@ func (s *MCPServer) handleGetPrompt(ctx context.Context, params json.RawMessage)
 	}
 
 	return registration.Handler(ctx, req.Arguments)
+}
+
+// handle completion request (MCP 2025-06-18)
+func (s *MCPServer) handleComplete(ctx context.Context, params json.RawMessage) (*protocol.CompleteResult, error) {
+	var req protocol.CompleteRequest
+	if err := json.Unmarshal(params, &req); err != nil {
+		return nil, &protocol.MCPError{
+			Code:    -32602,
+			Message: "Invalid completion params",
+			Data:    err.Error(),
+		}
+	}
+
+	s.mu.RLock()
+	handler := s.completionHandler
+	s.mu.RUnlock()
+
+	if handler == nil {
+		return nil, &protocol.MCPError{
+			Code:    -32601,
+			Message: "Completion not supported",
+		}
+	}
+
+	// 解析引用
+	ref, err := protocol.UnmarshalCompletionReference(req.Ref)
+	if err != nil {
+		return nil, err
+	}
+
+	// 调用处理器
+	result, err := handler(ctx, ref, req.Argument, req.Context)
+	if err != nil {
+		return nil, err
+	}
+
+	return &protocol.CompleteResult{
+		Completion: *result,
+	}, nil
 }

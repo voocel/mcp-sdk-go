@@ -280,6 +280,7 @@ type ServerCapabilities struct {
 	Resources    *ResourcesCapability   `json:"resources,omitempty"`
 	Prompts      *PromptsCapability     `json:"prompts,omitempty"`
 	Logging      *LoggingCapability     `json:"logging,omitempty"`
+	Completion   *CompletionCapability  `json:"completions,omitempty"` // MCP 2025-06-18: 参数自动补全
 	Experimental map[string]interface{} `json:"experimental,omitempty"`
 }
 

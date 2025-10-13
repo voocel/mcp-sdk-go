@@ -494,3 +494,8 @@ func validateToolArguments(args map[string]interface{}, schema protocol.JSONSche
 	}
 	return nil
 }
+
+// Completion registers a completion handler (MCP 2025-06-18)
+func (f *FastMCP) Completion(handler CompletionHandler) {
+	f.server.RegisterCompletionHandler(handler)
+}

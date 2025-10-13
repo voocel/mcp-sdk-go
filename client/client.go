@@ -38,6 +38,7 @@ type Client interface {
 	ListPrompts(ctx context.Context, cursor string) (*protocol.ListPromptsResult, error)
 	GetPrompt(ctx context.Context, name string, args map[string]string) (*protocol.GetPromptResult, error)
 
+	SendRequest(ctx context.Context, method string, params interface{}) (*protocol.JSONRPCMessage, error)
 	SendNotification(ctx context.Context, method string, params interface{}) error
 
 	SetElicitationHandler(handler ElicitationHandler)
@@ -563,6 +564,11 @@ func (c *MCPClient) handleElicitationRequest(ctx context.Context, message *proto
 		ID:      message.ID,
 		Result:  resultBytes,
 	}, nil
+}
+
+// SendRequest 发送请求并等待响应
+func (c *MCPClient) SendRequest(ctx context.Context, method string, params interface{}) (*protocol.JSONRPCMessage, error) {
+	return c.sendRequest(ctx, method, params)
 }
 
 // sendRequest 发送请求并等待响应
