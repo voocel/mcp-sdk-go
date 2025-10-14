@@ -488,10 +488,10 @@ MIT License - 详见 [LICENSE](LICENSE) 文件
 - [x] **LLM采样支持 (Sampling)** - 服务器发起的LLM推理请求，支持递归AI交互
 - [x] **资源模板 (Resource Templates)** - 支持动态资源模板和URI模板 (如 `file:///{path}`)
 - [x] **资源链接 (Resource Links)** - 工具结果中返回资源链接，提供额外上下文 (MCP 2025-06-18)
-- [ ] **进度跟踪 (Progress Tracking)** - 长时间运行操作的实时进度反馈和取消机制
 - [x] **参数自动补全 (Completion)** - 工具和提示参数的智能补全建议,支持上下文变量 (MCP 2025-06-18)
 - [x] **根目录管理 (Roots)** - 客户端文件系统根目录管理和变更通知
 
+- [ ] **进度跟踪 (Progress Tracking)** - 长时间运行操作的实时进度反馈和取消机制
 - [ ] **结构化日志 (Logging)** - 服务器向客户端发送结构化日志消息
 - [ ] **资源订阅 (Resource Subscription)** - 实时资源变更通知和订阅机制
 - [ ] **请求取消 (Cancellation)** - 支持取消长时间运行的操作
