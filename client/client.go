@@ -81,8 +81,18 @@ func WithTransport(t transport.Transport) Option {
 
 // WithStdioTransport 配置STDIO传输层
 func WithStdioTransport(command string, args []string) Option {
+	return WithStdioTransportAndEnv(command, args, nil)
+}
+
+// WithStdioTransportAndEnv 配置STDIO传输层并设置环境变量
+func WithStdioTransportAndEnv(command string, args []string, env []string) Option {
+	return WithStdioTransportEnvAndDir(command, args, env, "")
+}
+
+// WithStdioTransportEnvAndDir 配置STDIO传输层并设置环境变量和工作目录
+func WithStdioTransportEnvAndDir(command string, args []string, env []string, dir string) Option {
 	return func(c *MCPClient) error {
-		t, err := stdio.NewWithCommand(command, args)
+		t, err := stdio.NewWithCommandEnvAndDir(command, args, env, dir)
 		if err != nil {
 			return fmt.Errorf("failed to create stdio transport: %w", err)
 		}

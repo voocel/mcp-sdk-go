@@ -24,7 +24,28 @@ type Transport struct {
 }
 
 func NewWithCommand(command string, args []string) (*Transport, error) {
+	return NewWithCommandAndEnv(command, args, nil)
+}
+
+func NewWithCommandAndEnv(command string, args []string, env []string) (*Transport, error) {
+	return NewWithCommandEnvAndDir(command, args, env, "")
+}
+
+func NewWithCommandEnvAndDir(command string, args []string, env []string, dir string) (*Transport, error) {
 	cmd := exec.Command(command, args...)
+
+	// 继承父进程的环境变量
+	cmd.Env = os.Environ()
+
+	// 添加额外的环境变量
+	if len(env) > 0 {
+		cmd.Env = append(cmd.Env, env...)
+	}
+
+	// 设置工作目录
+	if dir != "" {
+		cmd.Dir = dir
+	}
 
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
