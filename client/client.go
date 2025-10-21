@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"sync"
 	"time"
 
@@ -576,6 +577,16 @@ func (c *MCPClient) handleElicitationRequest(ctx context.Context, message *proto
 	}, nil
 }
 
+func isNilInterface(i interface{}) bool {
+	if i == nil {
+		return true
+	}
+	v := reflect.ValueOf(i)
+	kind := v.Kind()
+	return (kind == reflect.Ptr || kind == reflect.Slice || kind == reflect.Map ||
+		kind == reflect.Chan || kind == reflect.Func || kind == reflect.Interface) && v.IsNil()
+}
+
 // SendRequest 发送请求并等待响应
 func (c *MCPClient) SendRequest(ctx context.Context, method string, params interface{}) (*protocol.JSONRPCMessage, error) {
 	return c.sendRequest(ctx, method, params)
@@ -586,12 +597,14 @@ func (c *MCPClient) sendRequest(ctx context.Context, method string, params inter
 	id := uuid.New().String()
 
 	var paramsJSON json.RawMessage
-	if params != nil {
+	if params != nil && !isNilInterface(params) {
 		bytes, err := json.Marshal(params)
 		if err != nil {
 			return nil, fmt.Errorf("failed to marshal parameters: %w", err)
 		}
 		paramsJSON = bytes
+	} else {
+		paramsJSON = json.RawMessage("{}")
 	}
 
 	message := protocol.JSONRPCMessage{
@@ -696,9 +709,7 @@ func (c *MCPClient) ListTools(ctx context.Context, cursor string) (*protocol.Lis
 
 	var params *protocol.ListToolsParams
 	if cursor != "" {
-		params = &protocol.ListToolsParams{
-			Cursor: cursor,
-		}
+		params = &protocol.ListToolsParams{Cursor: cursor}
 	}
 
 	resp, err := c.sendRequest(ctx, "tools/list", params)
