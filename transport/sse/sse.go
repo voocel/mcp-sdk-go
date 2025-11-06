@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/voocel/mcp-sdk-go/protocol"
@@ -35,8 +36,9 @@ type Transport struct {
 	mu              sync.RWMutex
 	sessionID       string
 	protocolVersion string
-	closed          bool
+	closed          atomic.Bool // 使用 atomic.Bool 保证并发安全
 	endpointChan    chan struct{}
+	endpointOnce    sync.Once // 确保 endpointChan 只关闭一次
 	started         bool
 }
 
@@ -192,12 +194,12 @@ func (t *Transport) startEventStream(ctx context.Context) error {
 func (t *Transport) processEvents(ctx context.Context, body io.ReadCloser) {
 	defer body.Close()
 	defer func() {
-		t.mu.Lock()
-		if !t.closed {
+		// 使用 atomic.Bool 的 CompareAndSwap 确保只关闭一次
+		if t.closed.CompareAndSwap(false, true) {
+			t.mu.Lock()
 			close(t.messageBuffer)
-			t.closed = true
+			t.mu.Unlock()
 		}
-		t.mu.Unlock()
 	}()
 
 	scanner := bufio.NewScanner(body)
@@ -237,7 +239,7 @@ func (t *Transport) processEvents(ctx context.Context, body io.ReadCloser) {
 		t.handleSSEEvent(event, data)
 	}
 
-	if err := scanner.Err(); err != nil && !t.closed {
+	if err := scanner.Err(); err != nil && !t.closed.Load() {
 		fmt.Printf("SSE scanner error: %v\n", err)
 	}
 }
@@ -261,13 +263,10 @@ func (t *Transport) handleSSEEvent(event, data string) {
 		t.endpoint = endpoint
 		t.mu.Unlock()
 
-		// 通知endpoint已接收
-		select {
-		case <-t.endpointChan:
-			// 已经关闭
-		default:
+		// 使用 sync.Once 确保 endpointChan 只关闭一次
+		t.endpointOnce.Do(func() {
 			close(t.endpointChan)
-		}
+		})
 
 	case "message":
 		// 验证JSON格式并缓存消息
@@ -318,12 +317,12 @@ func (t *Transport) Close() error {
 		if t.closeFunc != nil {
 			err = t.closeFunc()
 		}
-		t.mu.Lock()
-		if !t.closed {
+		// 使用 atomic.Bool 的 CompareAndSwap 确保只关闭一次
+		if t.closed.CompareAndSwap(false, true) {
+			t.mu.Lock()
 			close(t.messageBuffer)
-			t.closed = true
+			t.mu.Unlock()
 		}
-		t.mu.Unlock()
 	})
 
 	return err
@@ -339,6 +338,11 @@ type Server struct {
 	sessions        map[string]*Session
 	mu              sync.RWMutex
 	protocolVersion string
+
+	// Goroutine 生命周期管理
+	ctx    context.Context
+	cancel context.CancelFunc
+	wg     sync.WaitGroup
 }
 
 type Session struct {
@@ -349,10 +353,14 @@ type Session struct {
 }
 
 func NewServer(addr string, handler transport.Handler) *Server {
+	ctx, cancel := context.WithCancel(context.Background())
+
 	s := &Server{
 		handler:         handler,
 		sessions:        make(map[string]*Session),
 		protocolVersion: DefaultProtocolVersion,
+		ctx:             ctx,
+		cancel:          cancel,
 	}
 
 	mux := http.NewServeMux()
@@ -367,7 +375,11 @@ func NewServer(addr string, handler transport.Handler) *Server {
 	}
 
 	// 启动会话清理goroutine
-	go s.cleanupSessions()
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		s.cleanupSessions()
+	}()
 
 	return s
 }
@@ -402,18 +414,24 @@ func (s *Server) cleanupSessions() {
 	ticker := time.NewTicker(time.Minute * 5)
 	defer ticker.Stop()
 
-	for range ticker.C {
-		s.mu.Lock()
-		now := time.Now()
-		for id, session := range s.sessions {
-			session.mu.RLock()
-			if now.Sub(session.LastActive) > time.Minute*10 {
-				close(session.Client)
-				delete(s.sessions, id)
+	for {
+		select {
+		case <-s.ctx.Done():
+			// 服务器关闭,退出清理循环
+			return
+		case <-ticker.C:
+			s.mu.Lock()
+			now := time.Now()
+			for id, session := range s.sessions {
+				session.mu.RLock()
+				if now.Sub(session.LastActive) > time.Minute*10 {
+					close(session.Client)
+					delete(s.sessions, id)
+				}
+				session.mu.RUnlock()
 			}
-			session.mu.RUnlock()
+			s.mu.Unlock()
 		}
-		s.mu.Unlock()
 	}
 }
 
@@ -597,6 +615,15 @@ func (s *Server) Serve(ctx context.Context) error {
 }
 
 func (s *Server) Shutdown(ctx context.Context) error {
+	// 1. 取消 context,通知 cleanup goroutine 退出
+	if s.cancel != nil {
+		s.cancel()
+	}
+
+	// 2. 等待 cleanup goroutine 完全退出
+	s.wg.Wait()
+
+	// 3. 清理所有会话
 	s.mu.Lock()
 	for _, session := range s.sessions {
 		close(session.Client)
@@ -604,5 +631,6 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	s.sessions = make(map[string]*Session)
 	s.mu.Unlock()
 
+	// 4. 关闭 HTTP 服务器
 	return s.httpServer.Shutdown(ctx)
 }

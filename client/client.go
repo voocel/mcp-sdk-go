@@ -67,6 +67,11 @@ type MCPClient struct {
 
 	initialized    bool
 	requestTimeout time.Duration // 添加可配置的超时时间
+
+	// Goroutine 生命周期管理
+	ctx    context.Context
+	cancel context.CancelFunc
+	wg     sync.WaitGroup
 }
 
 // Option 定义客户端配置选项
@@ -196,6 +201,9 @@ func WithRoots(roots ...protocol.Root) Option {
 
 // New 创建MCP客户端
 func New(options ...Option) (Client, error) {
+	// 创建可取消的 context
+	ctx, cancel := context.WithCancel(context.Background())
+
 	client := &MCPClient{
 		pendingRequests: make(map[string]chan *protocol.JSONRPCMessage),
 		protocolVersion: protocol.MCPVersion,
@@ -204,20 +212,28 @@ func New(options ...Option) (Client, error) {
 			Version: "1.0.0",
 		},
 		requestTimeout: 30 * time.Second, // 默认30秒超时
+		ctx:            ctx,
+		cancel:         cancel,
 	}
 
 	for _, option := range options {
 		if err := option(client); err != nil {
+			cancel() // 清理 context
 			return nil, err
 		}
 	}
 
 	if client.transport == nil {
+		cancel() // 清理 context
 		return nil, fmt.Errorf("transport is required")
 	}
 
 	// 启动消息接收循环
-	go client.receiveLoop(context.Background())
+	client.wg.Add(1)
+	go func() {
+		defer client.wg.Done()
+		client.receiveLoop(ctx)
+	}()
 
 	return client, nil
 }
@@ -934,6 +950,15 @@ func (c *MCPClient) NotifyRootsChanged(ctx context.Context) error {
 
 // Close 关闭客户端连接
 func (c *MCPClient) Close() error {
+	// 1. 取消 context,通知 goroutine 退出
+	if c.cancel != nil {
+		c.cancel()
+	}
+
+	// 2. 等待 goroutine 完全退出
+	c.wg.Wait()
+
+	// 3. 关闭传输层
 	if c.transport != nil {
 		return c.transport.Close()
 	}
