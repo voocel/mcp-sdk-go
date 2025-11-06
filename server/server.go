@@ -368,7 +368,7 @@ func (s *MCPServer) NotifyProgress(progressToken any, progress, total float64, m
 		Total:         total,
 		Message:       message,
 	}
-	return s.SendNotification("notifications/progress", params)
+	return s.SendNotification(protocol.NotificationProgress, params)
 }
 
 func (s *MCPServer) NotifyCancelled(requestID any, reason string) error {
@@ -376,7 +376,7 @@ func (s *MCPServer) NotifyCancelled(requestID any, reason string) error {
 		RequestID: requestID,
 		Reason:    reason,
 	}
-	return s.SendNotification("notifications/cancelled", params)
+	return s.SendNotification(protocol.NotificationCancelled, params)
 }
 
 // HandleMessage handles JSON-RPC messages
@@ -403,35 +403,35 @@ func (s *MCPServer) handleRequest(ctx context.Context, request *protocol.JSONRPC
 	var err error
 
 	switch request.Method {
-	case "initialize":
+	case protocol.MethodInitialize:
 		result, err = s.handleInitialize(ctx, request.Params)
-	case "notifications/initialized":
+	case protocol.NotificationInitialized:
 		// handle initialization completed notification
 		err = s.handleInitialized(ctx, request.Params)
 		if err == nil {
 			return nil, nil // notification messages don't need response
 		}
-	case "tools/list":
+	case protocol.MethodToolsList:
 		result, err = s.handleListTools(ctx, request.Params)
-	case "tools/call":
+	case protocol.MethodToolsCall:
 		result, err = s.handleCallTool(ctx, request.Params)
-	case "resources/list":
+	case protocol.MethodResourcesList:
 		result, err = s.handleListResources(ctx, request.Params)
-	case "resources/read":
+	case protocol.MethodResourcesRead:
 		result, err = s.handleReadResource(ctx, request.Params)
-	case "resources/templates/list":
+	case protocol.MethodResourcesTemplatesList:
 		result, err = s.handleListResourceTemplates(ctx, request.Params)
-	case "resources/subscribe":
+	case protocol.MethodResourcesSubscribe:
 		result, err = s.handleSubscribe(ctx, request.Params)
-	case "resources/unsubscribe":
+	case protocol.MethodResourcesUnsubscribe:
 		result, err = s.handleUnsubscribe(ctx, request.Params)
-	case "prompts/list":
+	case protocol.MethodPromptsList:
 		result, err = s.handleListPrompts(ctx, request.Params)
-	case "prompts/get":
+	case protocol.MethodPromptsGet:
 		result, err = s.handleGetPrompt(ctx, request.Params)
-	case "completion/complete":
+	case protocol.MethodCompletionComplete:
 		result, err = s.handleComplete(ctx, request.Params)
-	case "ping":
+	case protocol.MethodPing:
 		result, err = s.handlePing(ctx, request.Params)
 	default:
 		// for notification messages, don't return error response
@@ -678,7 +678,7 @@ func (s *MCPServer) NotifyResourceUpdated(uri string) error {
 	}
 
 	if s.notificationHandler != nil {
-		return s.notificationHandler("notifications/resources/updated", params)
+		return s.notificationHandler(protocol.NotificationResourcesUpdated, params)
 	}
 
 	return nil

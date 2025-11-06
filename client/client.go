@@ -370,13 +370,13 @@ func (c *MCPClient) handleServerRequest(ctx context.Context, message *protocol.J
 	var err error
 
 	switch message.Method {
-	case "sampling/createMessage":
+	case protocol.MethodSamplingCreateMessage:
 		// 处理 LLM 采样请求
 		response, err = c.handleSamplingRequest(ctx, message)
-	case "roots/list":
+	case protocol.MethodRootsList:
 		// 处理根目录列表请求
 		response, err = c.handleRootsListRequest(ctx, message)
-	case "elicitation/create":
+	case protocol.MethodElicitationCreate:
 		// 处理 elicitation 请求
 		response, err = c.handleElicitationRequest(ctx, message)
 	default:
@@ -412,14 +412,14 @@ func (c *MCPClient) handleServerRequest(ctx context.Context, message *protocol.J
 // handleNotification 处理服务端通知
 func (c *MCPClient) handleNotification(message *protocol.JSONRPCMessage) {
 	switch message.Method {
-	case "notifications/tools/list_changed":
+	case protocol.NotificationToolsListChanged:
 		// 工具列表变更通知
 		// 客户端可以选择重新获取工具列表
 		// 这里可以触发回调或事件
-	case "notifications/resources/list_changed":
+	case protocol.NotificationResourcesListChanged:
 		// 资源列表变更通知
 		// 客户端可以选择重新获取资源列表
-	case "notifications/resources/updated":
+	case protocol.NotificationResourcesUpdated:
 		// 资源更新通知
 		var params protocol.ResourceUpdatedNotificationParams
 		if err := json.Unmarshal(message.Params, &params); err == nil {
@@ -427,13 +427,13 @@ func (c *MCPClient) handleNotification(message *protocol.JSONRPCMessage) {
 			// 可以触发回调或事件,让应用重新读取资源
 			// fmt.Printf("资源已更新: %s\n", params.URI)
 		}
-	case "notifications/resources/templates/list_changed":
+	case protocol.NotificationResourcesTemplatesListChanged:
 		// 资源模板列表变更通知
 		// 客户端可以选择重新获取资源模板
-	case "notifications/prompts/list_changed":
+	case protocol.NotificationPromptsListChanged:
 		// 提示模板列表变更通知
 		// 客户端可以选择重新获取提示模板列表
-	case "notifications/progress":
+	case protocol.NotificationProgress:
 		// 进度通知
 		var params protocol.ProgressNotificationParams
 		if err := json.Unmarshal(message.Params, &params); err == nil {
@@ -444,7 +444,7 @@ func (c *MCPClient) handleNotification(message *protocol.JSONRPCMessage) {
 				handler(params.ProgressToken, params.Progress, params.Total, params.Message)
 			}
 		}
-	case "notifications/cancelled":
+	case protocol.NotificationCancelled:
 		// 取消请求通知
 		var params protocol.CancelledNotificationParams
 		if err := json.Unmarshal(message.Params, &params); err == nil {
@@ -732,7 +732,7 @@ func (c *MCPClient) Initialize(ctx context.Context, clientInfo protocol.ClientIn
 		ClientInfo: c.clientInfo,
 	}
 
-	resp, err := c.sendRequest(ctx, "initialize", initRequest)
+	resp, err := c.sendRequest(ctx, protocol.MethodInitialize, initRequest)
 	if err != nil {
 		return nil, fmt.Errorf("initialize failed: %w", err)
 	}
@@ -756,7 +756,7 @@ func (c *MCPClient) SendInitialized(ctx context.Context) error {
 		return fmt.Errorf("client not initialized")
 	}
 
-	return c.SendNotification(ctx, "notifications/initialized", nil)
+	return c.SendNotification(ctx, protocol.NotificationInitialized, nil)
 }
 
 // ListTools 获取工具列表
@@ -770,7 +770,7 @@ func (c *MCPClient) ListTools(ctx context.Context, cursor string) (*protocol.Lis
 		params = &protocol.ListToolsParams{Cursor: cursor}
 	}
 
-	resp, err := c.sendRequest(ctx, "tools/list", params)
+	resp, err := c.sendRequest(ctx, protocol.MethodToolsList, params)
 	if err != nil {
 		return nil, err
 	}
@@ -794,7 +794,7 @@ func (c *MCPClient) CallTool(ctx context.Context, name string, args map[string]i
 		Arguments: args,
 	}
 
-	resp, err := c.sendRequest(ctx, "tools/call", params)
+	resp, err := c.sendRequest(ctx, protocol.MethodToolsCall, params)
 	if err != nil {
 		return nil, err
 	}
@@ -820,7 +820,7 @@ func (c *MCPClient) ListResources(ctx context.Context, cursor string) (*protocol
 		}
 	}
 
-	resp, err := c.sendRequest(ctx, "resources/list", params)
+	resp, err := c.sendRequest(ctx, protocol.MethodResourcesList, params)
 	if err != nil {
 		return nil, err
 	}
@@ -844,7 +844,7 @@ func (c *MCPClient) ListResourceTemplates(ctx context.Context, cursor string) (*
 		params = &protocol.ListResourceTemplatesRequest{Cursor: cursor}
 	}
 
-	resp, err := c.sendRequest(ctx, "resources/templates/list", params)
+	resp, err := c.sendRequest(ctx, protocol.MethodResourcesTemplatesList, params)
 	if err != nil {
 		return nil, err
 	}
@@ -867,7 +867,7 @@ func (c *MCPClient) ReadResource(ctx context.Context, uri string) (*protocol.Rea
 		URI: uri,
 	}
 
-	resp, err := c.sendRequest(ctx, "resources/read", params)
+	resp, err := c.sendRequest(ctx, protocol.MethodResourcesRead, params)
 	if err != nil {
 		return nil, err
 	}
@@ -890,7 +890,7 @@ func (c *MCPClient) SubscribeResource(ctx context.Context, uri string) error {
 		URI: uri,
 	}
 
-	_, err := c.sendRequest(ctx, "resources/subscribe", params)
+	_, err := c.sendRequest(ctx, protocol.MethodResourcesSubscribe, params)
 	return err
 }
 
@@ -904,7 +904,7 @@ func (c *MCPClient) UnsubscribeResource(ctx context.Context, uri string) error {
 		URI: uri,
 	}
 
-	_, err := c.sendRequest(ctx, "resources/unsubscribe", params)
+	_, err := c.sendRequest(ctx, protocol.MethodResourcesUnsubscribe, params)
 	return err
 }
 
@@ -921,7 +921,7 @@ func (c *MCPClient) ListPrompts(ctx context.Context, cursor string) (*protocol.L
 		}
 	}
 
-	resp, err := c.sendRequest(ctx, "prompts/list", params)
+	resp, err := c.sendRequest(ctx, protocol.MethodPromptsList, params)
 	if err != nil {
 		return nil, err
 	}
@@ -945,7 +945,7 @@ func (c *MCPClient) GetPrompt(ctx context.Context, name string, args map[string]
 		Arguments: args,
 	}
 
-	resp, err := c.sendRequest(ctx, "prompts/get", params)
+	resp, err := c.sendRequest(ctx, protocol.MethodPromptsGet, params)
 	if err != nil {
 		return nil, err
 	}
@@ -986,7 +986,7 @@ func (c *MCPClient) SendNotification(ctx context.Context, method string, params 
 // Ping 发送 ping 请求以检测连接状态
 func (c *MCPClient) Ping(ctx context.Context) error {
 	params := protocol.PingParams{}
-	_, err := c.sendRequest(ctx, "ping", params)
+	_, err := c.sendRequest(ctx, protocol.MethodPing, params)
 	return err
 }
 
@@ -1036,7 +1036,7 @@ func (c *MCPClient) SetRoots(roots ...protocol.Root) {
 
 // NotifyRootsChanged 通知服务器根目录列表已变更
 func (c *MCPClient) NotifyRootsChanged(ctx context.Context) error {
-	return c.SendNotification(ctx, "notifications/roots/list_changed", &protocol.RootsListChangedNotification{})
+	return c.SendNotification(ctx, protocol.NotificationRootsListChanged, &protocol.RootsListChangedNotification{})
 }
 
 // Close 关闭客户端连接
