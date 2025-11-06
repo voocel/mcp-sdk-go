@@ -48,6 +48,9 @@ type MCPServer struct {
 	prompts           map[string]*PromptRegistration
 	completionHandler CompletionHandler // MCP 2025-06-18: 参数自动补全
 
+	// 资源订阅管理
+	resourceSubscriptions map[string]map[string]bool // uri -> set of session IDs
+
 	initialized bool
 	clientInfo  *protocol.ClientInfo
 
@@ -88,13 +91,14 @@ func NewServer(name, version string) *MCPServer {
 		},
 		capabilities: protocol.ServerCapabilities{
 			Tools:     &protocol.ToolsCapability{ListChanged: true},
-			Resources: &protocol.ResourcesCapability{ListChanged: true, Subscribe: false, Templates: true},
+			Resources: &protocol.ResourcesCapability{ListChanged: true, Subscribe: true, Templates: true},
 			Prompts:   &protocol.PromptsCapability{ListChanged: true},
 		},
-		tools:             make(map[string]*ToolRegistration),
-		resources:         make(map[string]*ResourceRegistration),
-		resourceTemplates: make(map[string]*ResourceTemplateRegistration),
-		prompts:           make(map[string]*PromptRegistration),
+		tools:                 make(map[string]*ToolRegistration),
+		resources:             make(map[string]*ResourceRegistration),
+		resourceTemplates:     make(map[string]*ResourceTemplateRegistration),
+		prompts:               make(map[string]*PromptRegistration),
+		resourceSubscriptions: make(map[string]map[string]bool),
 	}
 }
 
@@ -399,6 +403,10 @@ func (s *MCPServer) handleRequest(ctx context.Context, request *protocol.JSONRPC
 		result, err = s.handleReadResource(ctx, request.Params)
 	case "resources/templates/list":
 		result, err = s.handleListResourceTemplates(ctx, request.Params)
+	case "resources/subscribe":
+		result, err = s.handleSubscribe(ctx, request.Params)
+	case "resources/unsubscribe":
+		result, err = s.handleUnsubscribe(ctx, request.Params)
 	case "prompts/list":
 		result, err = s.handleListPrompts(ctx, request.Params)
 	case "prompts/get":
@@ -573,6 +581,99 @@ func (s *MCPServer) handleReadResource(ctx context.Context, params json.RawMessa
 	}
 
 	return registration.Handler(ctx)
+}
+
+// handleSubscribe 处理资源订阅请求
+func (s *MCPServer) handleSubscribe(ctx context.Context, params json.RawMessage) (interface{}, error) {
+	var req protocol.SubscribeParams
+	if err := json.Unmarshal(params, &req); err != nil {
+		return nil, fmt.Errorf("invalid subscribe params: %w", err)
+	}
+
+	// 验证资源是否存在
+	s.mu.RLock()
+	_, exists := s.resources[req.URI]
+	s.mu.RUnlock()
+
+	if !exists {
+		return nil, &protocol.MCPError{
+			Code:    protocol.ResourceNotFound,
+			Message: fmt.Sprintf("resource not found: %s", req.URI),
+		}
+	}
+
+	// 添加订阅 (这里使用空字符串作为 session ID,实际应用中应该从 context 获取)
+	sessionID := getSessionIDFromContext(ctx)
+
+	s.mu.Lock()
+	if s.resourceSubscriptions[req.URI] == nil {
+		s.resourceSubscriptions[req.URI] = make(map[string]bool)
+	}
+	s.resourceSubscriptions[req.URI][sessionID] = true
+	s.mu.Unlock()
+
+	return struct{}{}, nil
+}
+
+// handleUnsubscribe 处理取消资源订阅请求
+func (s *MCPServer) handleUnsubscribe(ctx context.Context, params json.RawMessage) (interface{}, error) {
+	var req protocol.UnsubscribeParams
+	if err := json.Unmarshal(params, &req); err != nil {
+		return nil, fmt.Errorf("invalid unsubscribe params: %w", err)
+	}
+
+	sessionID := getSessionIDFromContext(ctx)
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if subscribers, ok := s.resourceSubscriptions[req.URI]; ok {
+		delete(subscribers, sessionID)
+		if len(subscribers) == 0 {
+			delete(s.resourceSubscriptions, req.URI)
+		}
+	}
+
+	return struct{}{}, nil
+}
+
+// NotifyResourceUpdated 通知所有订阅者资源已更新
+func (s *MCPServer) NotifyResourceUpdated(uri string) error {
+	s.mu.RLock()
+	subscribers := s.resourceSubscriptions[uri]
+	if len(subscribers) == 0 {
+		s.mu.RUnlock()
+		return nil
+	}
+
+	// 复制订阅者列表,避免持有锁时间过长
+	sessionIDs := make([]string, 0, len(subscribers))
+	for sessionID := range subscribers {
+		sessionIDs = append(sessionIDs, sessionID)
+	}
+	s.mu.RUnlock()
+
+	// 发送通知给所有订阅者
+	params := protocol.ResourceUpdatedNotificationParams{
+		URI: uri,
+	}
+
+	if s.notificationHandler != nil {
+		return s.notificationHandler("notifications/resources/updated", params)
+	}
+
+	return nil
+}
+
+// getSessionIDFromContext 从 context 获取 session ID
+// 这是一个辅助函数,实际应用中应该从传输层的 context 中获取
+func getSessionIDFromContext(ctx context.Context) string {
+	// TODO: 从 context 中获取真实的 session ID
+	// 这里暂时返回默认值,实际使用时需要传输层支持
+	if sessionID, ok := ctx.Value("sessionID").(string); ok {
+		return sessionID
+	}
+	return "default-session"
 }
 
 // prompt template list

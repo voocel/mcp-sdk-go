@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/voocel/mcp-sdk-go/transport"
@@ -35,7 +36,7 @@ type Transport struct {
 	mu              sync.Mutex
 	sessionID       string
 	protocolVersion string
-	closed          bool
+	closed          atomic.Bool // 使用 atomic.Bool 保证并发安全
 }
 
 type Option func(*Transport)
@@ -94,12 +95,11 @@ func isInitializeRequest(data []byte) bool {
 
 // Send 发送消息
 func (t *Transport) Send(ctx context.Context, data []byte) error {
-	t.mu.Lock()
-	if t.closed {
-		t.mu.Unlock()
+	if t.closed.Load() {
 		return fmt.Errorf("transport is closed")
 	}
 
+	t.mu.Lock()
 	currentSessionID := t.sessionID
 	t.mu.Unlock()
 
@@ -189,9 +189,7 @@ func (t *Transport) Receive(ctx context.Context) ([]byte, error) {
 // Close 关闭传输
 func (t *Transport) Close() error {
 	t.closeOnce.Do(func() {
-		t.mu.Lock()
-		t.closed = true
-		t.mu.Unlock()
+		t.closed.Store(true)
 
 		close(t.messageBuffer)
 

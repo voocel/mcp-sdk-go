@@ -66,6 +66,21 @@ type ListResourceTemplatesResult struct {
 	PaginatedResult
 }
 
+// SubscribeParams resources/subscribe 请求参数
+type SubscribeParams struct {
+	URI string `json:"uri"`
+}
+
+// UnsubscribeParams resources/unsubscribe 请求参数
+type UnsubscribeParams struct {
+	URI string `json:"uri"`
+}
+
+// ResourceUpdatedNotificationParams 资源更新通知参数
+type ResourceUpdatedNotificationParams struct {
+	URI string `json:"uri"`
+}
+
 // ResourcesListChangedNotification 资源变更通知
 type ResourcesListChangedNotification struct{}
 

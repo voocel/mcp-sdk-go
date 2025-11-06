@@ -35,6 +35,8 @@ type Client interface {
 	ListResources(ctx context.Context, cursor string) (*protocol.ListResourcesResult, error)
 	ReadResource(ctx context.Context, uri string) (*protocol.ReadResourceResult, error)
 	ListResourceTemplates(ctx context.Context, cursor string) (*protocol.ListResourceTemplatesResult, error)
+	SubscribeResource(ctx context.Context, uri string) error
+	UnsubscribeResource(ctx context.Context, uri string) error
 
 	ListPrompts(ctx context.Context, cursor string) (*protocol.ListPromptsResult, error)
 	GetPrompt(ctx context.Context, name string, args map[string]string) (*protocol.GetPromptResult, error)
@@ -405,6 +407,14 @@ func (c *MCPClient) handleNotification(message *protocol.JSONRPCMessage) {
 	case "notifications/resources/list_changed":
 		// 资源列表变更通知
 		// 客户端可以选择重新获取资源列表
+	case "notifications/resources/updated":
+		// 资源更新通知
+		var params protocol.ResourceUpdatedNotificationParams
+		if err := json.Unmarshal(message.Params, &params); err == nil {
+			// 通知应用层资源已更新
+			// 可以触发回调或事件,让应用重新读取资源
+			// fmt.Printf("资源已更新: %s\n", params.URI)
+		}
 	case "notifications/resources/templates/list_changed":
 		// 资源模板列表变更通知
 		// 客户端可以选择重新获取资源模板
@@ -639,6 +649,7 @@ func (c *MCPClient) sendRequest(ctx context.Context, method string, params inter
 	defer func() {
 		c.mu.Lock()
 		delete(c.pendingRequests, id)
+		close(respChan) // 关闭 channel,防止 goroutine 泄漏
 		c.mu.Unlock()
 	}()
 
@@ -663,7 +674,7 @@ func (c *MCPClient) sendRequest(ctx context.Context, method string, params inter
 		}
 		return resp, nil
 	case <-time.After(c.requestTimeout):
-		return nil, fmt.Errorf("request timeout")
+		return nil, fmt.Errorf("request timeout after %v for method %s", c.requestTimeout, method)
 	}
 }
 
@@ -836,6 +847,34 @@ func (c *MCPClient) ReadResource(ctx context.Context, uri string) (*protocol.Rea
 	}
 
 	return &result, nil
+}
+
+// SubscribeResource 订阅资源更新
+func (c *MCPClient) SubscribeResource(ctx context.Context, uri string) error {
+	if !c.initialized {
+		return fmt.Errorf("client not initialized")
+	}
+
+	params := protocol.SubscribeParams{
+		URI: uri,
+	}
+
+	_, err := c.sendRequest(ctx, "resources/subscribe", params)
+	return err
+}
+
+// UnsubscribeResource 取消订阅资源更新
+func (c *MCPClient) UnsubscribeResource(ctx context.Context, uri string) error {
+	if !c.initialized {
+		return fmt.Errorf("client not initialized")
+	}
+
+	params := protocol.UnsubscribeParams{
+		URI: uri,
+	}
+
+	_, err := c.sendRequest(ctx, "resources/unsubscribe", params)
+	return err
 }
 
 // ListPrompts 获取提示模板列表
