@@ -25,6 +25,12 @@ type SamplingHandler func(ctx context.Context, request *protocol.CreateMessageRe
 // RootsProvider 定义提供根目录列表的接口
 type RootsProvider func(ctx context.Context) ([]protocol.Root, error)
 
+// ProgressHandler 定义处理进度通知的接口
+type ProgressHandler func(progressToken any, progress, total float64, message string)
+
+// CancelledHandler 定义处理取消通知的接口
+type CancelledHandler func(requestID any, reason string)
+
 type Client interface {
 	Initialize(ctx context.Context, clientInfo protocol.ClientInfo) (*protocol.InitializeResult, error)
 	SendInitialized(ctx context.Context) error
@@ -44,9 +50,13 @@ type Client interface {
 	SendRequest(ctx context.Context, method string, params interface{}) (*protocol.JSONRPCMessage, error)
 	SendNotification(ctx context.Context, method string, params interface{}) error
 
+	Ping(ctx context.Context) error
+
 	SetElicitationHandler(handler ElicitationHandler)
 	SetSamplingHandler(handler SamplingHandler)
 	SetRootsProvider(provider RootsProvider)
+	SetProgressHandler(handler ProgressHandler)
+	SetCancelledHandler(handler CancelledHandler)
 
 	NotifyRootsChanged(ctx context.Context) error
 
@@ -65,6 +75,8 @@ type MCPClient struct {
 	elicitationHandler ElicitationHandler
 	samplingHandler    SamplingHandler
 	rootsProvider      RootsProvider
+	progressHandler    ProgressHandler
+	cancelledHandler   CancelledHandler
 	mu                 sync.RWMutex
 
 	initialized    bool
@@ -422,8 +434,27 @@ func (c *MCPClient) handleNotification(message *protocol.JSONRPCMessage) {
 		// 提示模板列表变更通知
 		// 客户端可以选择重新获取提示模板列表
 	case "notifications/progress":
-		// 进度通知（如果服务器支持）
-		// 可以用于长时间运行的操作
+		// 进度通知
+		var params protocol.ProgressNotificationParams
+		if err := json.Unmarshal(message.Params, &params); err == nil {
+			c.mu.RLock()
+			handler := c.progressHandler
+			c.mu.RUnlock()
+			if handler != nil {
+				handler(params.ProgressToken, params.Progress, params.Total, params.Message)
+			}
+		}
+	case "notifications/cancelled":
+		// 取消请求通知
+		var params protocol.CancelledNotificationParams
+		if err := json.Unmarshal(message.Params, &params); err == nil {
+			c.mu.RLock()
+			handler := c.cancelledHandler
+			c.mu.RUnlock()
+			if handler != nil {
+				handler(params.RequestID, params.Reason)
+			}
+		}
 	default:
 		// 未知通知，记录但不报错
 		// fmt.Printf("收到未知通知: %s\n", message.Method)
@@ -952,6 +983,13 @@ func (c *MCPClient) SendNotification(ctx context.Context, method string, params 
 	return c.transport.Send(ctx, msgBytes)
 }
 
+// Ping 发送 ping 请求以检测连接状态
+func (c *MCPClient) Ping(ctx context.Context) error {
+	params := protocol.PingParams{}
+	_, err := c.sendRequest(ctx, "ping", params)
+	return err
+}
+
 // SetElicitationHandler 设置elicitation处理器
 func (c *MCPClient) SetElicitationHandler(handler ElicitationHandler) {
 	c.mu.Lock()
@@ -971,6 +1009,20 @@ func (c *MCPClient) SetRootsProvider(provider RootsProvider) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.rootsProvider = provider
+}
+
+// SetProgressHandler 设置进度通知处理器
+func (c *MCPClient) SetProgressHandler(handler ProgressHandler) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.progressHandler = handler
+}
+
+// SetCancelledHandler 设置取消通知处理器
+func (c *MCPClient) SetCancelledHandler(handler CancelledHandler) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.cancelledHandler = handler
 }
 
 // SetRoots 设置静态根目录列表

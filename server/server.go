@@ -361,6 +361,24 @@ func (s *MCPServer) SendNotification(method string, params interface{}) error {
 	return nil
 }
 
+func (s *MCPServer) NotifyProgress(progressToken any, progress, total float64, message string) error {
+	params := protocol.ProgressNotificationParams{
+		ProgressToken: progressToken,
+		Progress:      progress,
+		Total:         total,
+		Message:       message,
+	}
+	return s.SendNotification("notifications/progress", params)
+}
+
+func (s *MCPServer) NotifyCancelled(requestID any, reason string) error {
+	params := protocol.CancelledNotificationParams{
+		RequestID: requestID,
+		Reason:    reason,
+	}
+	return s.SendNotification("notifications/cancelled", params)
+}
+
 // HandleMessage handles JSON-RPC messages
 func (s *MCPServer) HandleMessage(ctx context.Context, message *protocol.JSONRPCMessage) (*protocol.JSONRPCMessage, error) {
 	if err := utils.ValidateJSONRPCMessage(message); err != nil {
@@ -413,6 +431,8 @@ func (s *MCPServer) handleRequest(ctx context.Context, request *protocol.JSONRPC
 		result, err = s.handleGetPrompt(ctx, request.Params)
 	case "completion/complete":
 		result, err = s.handleComplete(ctx, request.Params)
+	case "ping":
+		result, err = s.handlePing(ctx, request.Params)
 	default:
 		// for notification messages, don't return error response
 		if request.IsNotification() {
@@ -590,7 +610,6 @@ func (s *MCPServer) handleSubscribe(ctx context.Context, params json.RawMessage)
 		return nil, fmt.Errorf("invalid subscribe params: %w", err)
 	}
 
-	// 验证资源是否存在
 	s.mu.RLock()
 	_, exists := s.resources[req.URI]
 	s.mu.RUnlock()
@@ -731,13 +750,11 @@ func (s *MCPServer) handleComplete(ctx context.Context, params json.RawMessage) 
 		}
 	}
 
-	// 解析引用
 	ref, err := protocol.UnmarshalCompletionReference(req.Ref)
 	if err != nil {
 		return nil, err
 	}
 
-	// 调用处理器
 	result, err := handler(ctx, ref, req.Argument, req.Context)
 	if err != nil {
 		return nil, err
@@ -746,4 +763,9 @@ func (s *MCPServer) handleComplete(ctx context.Context, params json.RawMessage) 
 	return &protocol.CompleteResult{
 		Completion: *result,
 	}, nil
+}
+
+func (s *MCPServer) handlePing(ctx context.Context, params json.RawMessage) (interface{}, error) {
+	// ping 请求只需要返回空对象即可
+	return struct{}{}, nil
 }
