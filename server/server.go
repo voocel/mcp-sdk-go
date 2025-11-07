@@ -51,6 +51,9 @@ type MCPServer struct {
 	// 资源订阅管理
 	resourceSubscriptions map[string]map[string]bool // uri -> set of session IDs
 
+	// 日志管理
+	loggingLevel protocol.LoggingLevel // 当前日志级别
+
 	initialized bool
 	clientInfo  *protocol.ClientInfo
 
@@ -93,12 +96,14 @@ func NewServer(name, version string) *MCPServer {
 			Tools:     &protocol.ToolsCapability{ListChanged: true},
 			Resources: &protocol.ResourcesCapability{ListChanged: true, Subscribe: true, Templates: true},
 			Prompts:   &protocol.PromptsCapability{ListChanged: true},
+			Logging:   &protocol.LoggingCapability{}, // 支持日志功能
 		},
 		tools:                 make(map[string]*ToolRegistration),
 		resources:             make(map[string]*ResourceRegistration),
 		resourceTemplates:     make(map[string]*ResourceTemplateRegistration),
 		prompts:               make(map[string]*PromptRegistration),
 		resourceSubscriptions: make(map[string]map[string]bool),
+		loggingLevel:          protocol.LogLevelInfo, // 默认日志级别为 info
 	}
 }
 
@@ -433,6 +438,8 @@ func (s *MCPServer) handleRequest(ctx context.Context, request *protocol.JSONRPC
 		result, err = s.handleComplete(ctx, request.Params)
 	case protocol.MethodPing:
 		result, err = s.handlePing(ctx, request.Params)
+	case protocol.MethodLoggingSetLevel:
+		result, err = s.handleSetLoggingLevel(ctx, request.Params)
 	default:
 		// for notification messages, don't return error response
 		if request.IsNotification() {
@@ -768,4 +775,95 @@ func (s *MCPServer) handleComplete(ctx context.Context, params json.RawMessage) 
 func (s *MCPServer) handlePing(ctx context.Context, params json.RawMessage) (interface{}, error) {
 	// ping 请求只需要返回空对象即可
 	return struct{}{}, nil
+}
+
+// handleSetLoggingLevel 处理 logging/setLevel 请求
+func (s *MCPServer) handleSetLoggingLevel(ctx context.Context, params json.RawMessage) (interface{}, error) {
+	var req protocol.SetLoggingLevelParams
+	if err := json.Unmarshal(params, &req); err != nil {
+		return nil, fmt.Errorf("invalid logging level params: %w", err)
+	}
+
+	// 验证日志级别
+	validLevels := map[protocol.LoggingLevel]bool{
+		protocol.LogLevelDebug:     true,
+		protocol.LogLevelInfo:      true,
+		protocol.LogLevelNotice:    true,
+		protocol.LogLevelWarning:   true,
+		protocol.LogLevelError:     true,
+		protocol.LogLevelCritical:  true,
+		protocol.LogLevelAlert:     true,
+		protocol.LogLevelEmergency: true,
+	}
+
+	if !validLevels[req.Level] {
+		return nil, fmt.Errorf("invalid logging level: %s", req.Level)
+	}
+
+	// 设置日志级别
+	s.mu.Lock()
+	s.loggingLevel = req.Level
+	s.mu.Unlock()
+
+	// 返回空对象
+	return struct{}{}, nil
+}
+
+// GetLoggingLevel 获取当前日志级别
+func (s *MCPServer) GetLoggingLevel() protocol.LoggingLevel {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.loggingLevel
+}
+
+// SetLoggingLevel 设置日志级别
+func (s *MCPServer) SetLoggingLevel(level protocol.LoggingLevel) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.loggingLevel = level
+}
+
+// SendLog 发送日志消息到客户端
+// 只有当日志级别大于等于当前设置的级别时才会发送
+func (s *MCPServer) SendLog(level protocol.LoggingLevel, data any, logger string) error {
+	// 检查日志级别
+	if !s.shouldLog(level) {
+		return nil // 不发送低于当前级别的日志
+	}
+
+	params := protocol.LoggingMessageParams{
+		Level:  level,
+		Data:   data,
+		Logger: logger,
+	}
+
+	return s.SendNotification(protocol.NotificationLoggingMessage, params)
+}
+
+// shouldLog 检查是否应该发送此级别的日志
+func (s *MCPServer) shouldLog(level protocol.LoggingLevel) bool {
+	s.mu.RLock()
+	currentLevel := s.loggingLevel
+	s.mu.RUnlock()
+
+	// 日志级别优先级 (从低到高)
+	levelPriority := map[protocol.LoggingLevel]int{
+		protocol.LogLevelDebug:     0,
+		protocol.LogLevelInfo:      1,
+		protocol.LogLevelNotice:    2,
+		protocol.LogLevelWarning:   3,
+		protocol.LogLevelError:     4,
+		protocol.LogLevelCritical:  5,
+		protocol.LogLevelAlert:     6,
+		protocol.LogLevelEmergency: 7,
+	}
+
+	currentPriority, ok1 := levelPriority[currentLevel]
+	messagePriority, ok2 := levelPriority[level]
+
+	if !ok1 || !ok2 {
+		return false
+	}
+
+	return messagePriority >= currentPriority
 }

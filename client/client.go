@@ -31,6 +31,9 @@ type ProgressHandler func(progressToken any, progress, total float64, message st
 // CancelledHandler 定义处理取消通知的接口
 type CancelledHandler func(requestID any, reason string)
 
+// LoggingHandler 定义处理日志消息的接口
+type LoggingHandler func(level protocol.LoggingLevel, data any, logger string)
+
 type Client interface {
 	Initialize(ctx context.Context, clientInfo protocol.ClientInfo) (*protocol.InitializeResult, error)
 	SendInitialized(ctx context.Context) error
@@ -51,12 +54,14 @@ type Client interface {
 	SendNotification(ctx context.Context, method string, params interface{}) error
 
 	Ping(ctx context.Context) error
+	SetLoggingLevel(ctx context.Context, level protocol.LoggingLevel) error
 
 	SetElicitationHandler(handler ElicitationHandler)
 	SetSamplingHandler(handler SamplingHandler)
 	SetRootsProvider(provider RootsProvider)
 	SetProgressHandler(handler ProgressHandler)
 	SetCancelledHandler(handler CancelledHandler)
+	SetLoggingHandler(handler LoggingHandler)
 
 	NotifyRootsChanged(ctx context.Context) error
 
@@ -77,6 +82,7 @@ type MCPClient struct {
 	rootsProvider      RootsProvider
 	progressHandler    ProgressHandler
 	cancelledHandler   CancelledHandler
+	loggingHandler     LoggingHandler
 	mu                 sync.RWMutex
 
 	initialized    bool
@@ -453,6 +459,17 @@ func (c *MCPClient) handleNotification(message *protocol.JSONRPCMessage) {
 			c.mu.RUnlock()
 			if handler != nil {
 				handler(params.RequestID, params.Reason)
+			}
+		}
+	case protocol.NotificationLoggingMessage:
+		// 日志消息通知
+		var params protocol.LoggingMessageParams
+		if err := json.Unmarshal(message.Params, &params); err == nil {
+			c.mu.RLock()
+			handler := c.loggingHandler
+			c.mu.RUnlock()
+			if handler != nil {
+				handler(params.Level, params.Data, params.Logger)
 			}
 		}
 	default:
@@ -990,6 +1007,15 @@ func (c *MCPClient) Ping(ctx context.Context) error {
 	return err
 }
 
+// SetLoggingLevel 设置服务器日志级别
+func (c *MCPClient) SetLoggingLevel(ctx context.Context, level protocol.LoggingLevel) error {
+	params := protocol.SetLoggingLevelParams{
+		Level: level,
+	}
+	_, err := c.sendRequest(ctx, protocol.MethodLoggingSetLevel, params)
+	return err
+}
+
 // SetElicitationHandler 设置elicitation处理器
 func (c *MCPClient) SetElicitationHandler(handler ElicitationHandler) {
 	c.mu.Lock()
@@ -1023,6 +1049,13 @@ func (c *MCPClient) SetCancelledHandler(handler CancelledHandler) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.cancelledHandler = handler
+}
+
+// SetLoggingHandler 设置日志消息处理器
+func (c *MCPClient) SetLoggingHandler(handler LoggingHandler) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.loggingHandler = handler
 }
 
 // SetRoots 设置静态根目录列表

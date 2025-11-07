@@ -492,7 +492,7 @@ MIT License - 详见 [LICENSE](LICENSE) 文件
 - [x] **根目录管理 (Roots)** - 客户端文件系统根目录管理和变更通知
 
 - [x] **进度跟踪 (Progress Tracking)** - 长时间运行操作的实时进度反馈和取消机制
-- [ ] **结构化日志 (Logging)** - 服务器向客户端发送结构化日志消息
+- [x] **结构化日志 (Logging)** - 服务器向客户端发送结构化日志消息
 - [x] **资源订阅 (Resource Subscription)** - 实时资源变更通知和订阅机制
 - [x] **请求取消 (Cancellation)** - 支持取消长时间运行的操作
 
