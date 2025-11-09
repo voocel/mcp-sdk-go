@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"math/rand"
+	"net/http"
 	"os"
 	"os/signal"
 	"strings"
@@ -17,13 +18,10 @@ import (
 )
 
 func main() {
-	// 设置随机种子
 	rand.Seed(time.Now().UnixNano())
-
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// 处理优雅关闭
 	signalCh := make(chan os.Signal, 1)
 	signal.Notify(signalCh, os.Interrupt, syscall.SIGTERM)
 	go func() {
@@ -32,14 +30,29 @@ func main() {
 		cancel()
 	}()
 
-	// 创建 FastMCP 服务器
-	mcp := server.NewFastMCP("聊天机器人", "1.0.0")
+	mcpServer := server.NewServer(&protocol.ServerInfo{
+		Name:    "聊天机器人",
+		Version: "1.0.0",
+	}, nil)
 
 	// 注册问候工具
-	mcp.Tool("greeting", "获取随机问候语").
-		WithStringParam("name", "用户名称", true).
-		Handle(func(ctx context.Context, args map[string]interface{}) (*protocol.CallToolResult, error) {
-			name, ok := args["name"].(string)
+	mcpServer.AddTool(
+		&protocol.Tool{
+			Name:        "greeting",
+			Description: "获取随机问候语",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"name": map[string]interface{}{
+						"type":        "string",
+						"description": "用户名称",
+					},
+				},
+				"required": []string{"name"},
+			},
+		},
+		func(ctx context.Context, req *server.CallToolRequest) (*protocol.CallToolResult, error) {
+			name, ok := req.Params.Arguments["name"].(string)
 			if !ok {
 				return protocol.NewToolResultError("参数 'name' 必须是字符串"), nil
 			}
@@ -55,13 +68,27 @@ func main() {
 			greeting := greetings[rand.Intn(len(greetings))]
 			formattedGreeting := fmt.Sprintf(greeting, name)
 			return protocol.NewToolResultText(formattedGreeting), nil
-		})
+		},
+	)
 
 	// 注册天气工具
-	mcp.Tool("weather", "获取指定城市的天气").
-		WithStringParam("city", "城市名称", true).
-		Handle(func(ctx context.Context, args map[string]interface{}) (*protocol.CallToolResult, error) {
-			city, ok := args["city"].(string)
+	mcpServer.AddTool(
+		&protocol.Tool{
+			Name:        "weather",
+			Description: "获取指定城市的天气",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"city": map[string]interface{}{
+						"type":        "string",
+						"description": "城市名称",
+					},
+				},
+				"required": []string{"city"},
+			},
+		},
+		func(ctx context.Context, req *server.CallToolRequest) (*protocol.CallToolResult, error) {
+			city, ok := req.Params.Arguments["city"].(string)
 			if !ok {
 				return protocol.NewToolResultError("参数 'city' 必须是字符串"), nil
 			}
@@ -74,18 +101,35 @@ func main() {
 
 			formattedWeather := fmt.Sprintf("%s 今天的天气是 %s，温度 %d°C", city, weather, temp)
 			return protocol.NewToolResultText(formattedWeather), nil
-		})
+		},
+	)
 
 	// 注册翻译工具
-	mcp.Tool("translate", "简单的中英文翻译").
-		WithStringParam("text", "要翻译的文本", true).
-		WithStringParam("target_lang", "目标语言 (en 或 zh)", true).
-		Handle(func(ctx context.Context, args map[string]interface{}) (*protocol.CallToolResult, error) {
-			text, ok := args["text"].(string)
+	mcpServer.AddTool(
+		&protocol.Tool{
+			Name:        "translate",
+			Description: "简单的中英文翻译",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"text": map[string]interface{}{
+						"type":        "string",
+						"description": "要翻译的文本",
+					},
+					"target_lang": map[string]interface{}{
+						"type":        "string",
+						"description": "目标语言 (en 或 zh)",
+					},
+				},
+				"required": []string{"text", "target_lang"},
+			},
+		},
+		func(ctx context.Context, req *server.CallToolRequest) (*protocol.CallToolResult, error) {
+			text, ok := req.Params.Arguments["text"].(string)
 			if !ok {
 				return protocol.NewToolResultError("参数 'text' 必须是字符串"), nil
 			}
-			targetLang, ok := args["target_lang"].(string)
+			targetLang, ok := req.Params.Arguments["target_lang"].(string)
 			if !ok {
 				return protocol.NewToolResultError("参数 'target_lang' 必须是字符串"), nil
 			}
@@ -109,9 +153,9 @@ func main() {
 				"世界": "world",
 				"谢谢": "thanks",
 				"再见": "goodbye",
-				"书":  "book",
+				"书":   "book",
 				"苹果": "apple",
-				"水":  "water",
+				"水":   "water",
 				"食物": "food",
 				"好的": "good",
 				"坏的": "bad",
@@ -136,13 +180,24 @@ func main() {
 			} else {
 				return protocol.NewToolResultError(fmt.Sprintf("不支持的目标语言: %s", targetLang)), nil
 			}
-		})
+		},
+	)
 
 	// 注册聊天模板提示
-	mcp.Prompt("chat_template", "聊天模板").
-		WithArgument("username", "用户名", true).
-		Handle(func(ctx context.Context, args map[string]string) (*protocol.GetPromptResult, error) {
-			username := args["username"]
+	mcpServer.AddPrompt(
+		&protocol.Prompt{
+			Name:        "chat_template",
+			Description: "聊天模板",
+			Arguments: []protocol.PromptArgument{
+				{
+					Name:        "username",
+					Description: "用户名",
+					Required:    true,
+				},
+			},
+		},
+		func(ctx context.Context, req *server.GetPromptRequest) (*protocol.GetPromptResult, error) {
+			username, _ := req.Params.Arguments["username"]
 			if username == "" {
 				username = "朋友"
 			}
@@ -157,15 +212,25 @@ func main() {
 			}
 
 			return protocol.NewGetPromptResult("聊天机器人对话模板", messages...), nil
-		})
+		},
+	)
 
-	// 创建SSE传输服务器
-	sseServer := sse.NewServer(":8082", mcp)
-
-	log.Println("启动聊天机器人 MCP 服务器 (SSE) 在端口 :8082...")
-	if err := sseServer.Serve(ctx); err != nil && err != context.Canceled {
-		log.Fatalf("服务器错误: %v", err)
+	handler := sse.NewHTTPHandler(func(r *http.Request) *server.Server {
+		return mcpServer
+	})
+	httpServer := &http.Server{
+		Addr:    ":8082",
+		Handler: handler,
 	}
 
+	log.Println("启动聊天机器人 MCP 服务器 (SSE) 在端口 :8082...")
+
+	go func() {
+		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("服务器错误: %v", err)
+		}
+	}()
+
+	<-ctx.Done()
 	log.Println("服务器已关闭")
 }

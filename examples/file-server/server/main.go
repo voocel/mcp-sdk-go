@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"log"
+	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -20,7 +21,6 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// 处理优雅关闭
 	signalCh := make(chan os.Signal, 1)
 	signal.Notify(signalCh, os.Interrupt, syscall.SIGTERM)
 	go func() {
@@ -29,14 +29,29 @@ func main() {
 		cancel()
 	}()
 
-	// 创建FastMCP服务器
-	mcp := server.NewFastMCP("文件服务器", "1.0.0")
+	mcpServer := server.NewServer(&protocol.ServerInfo{
+		Name:    "文件服务器",
+		Version: "1.0.0",
+	}, nil)
 
 	// 注册文件列表工具
-	mcp.Tool("list_directory", "列出指定目录中的文件").
-		WithStringParam("path", "目录路径", true).
-		Handle(func(ctx context.Context, args map[string]any) (*protocol.CallToolResult, error) {
-			path, ok := args["path"].(string)
+	mcpServer.AddTool(
+		&protocol.Tool{
+			Name:        "list_directory",
+			Description: "列出指定目录中的文件",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"path": map[string]interface{}{
+						"type":        "string",
+						"description": "目录路径",
+					},
+				},
+				"required": []string{"path"},
+			},
+		},
+		func(ctx context.Context, req *server.CallToolRequest) (*protocol.CallToolResult, error) {
+			path, ok := req.Params.Arguments["path"].(string)
 			if !ok {
 				return protocol.NewToolResultError("参数 'path' 必须是字符串"), nil
 			}
@@ -66,21 +81,42 @@ func main() {
 
 			result := strings.Join(fileList, "\n")
 			return protocol.NewToolResultText(result), nil
-		})
+		},
+	)
 
 	// 注册当前目录资源
 	currentDir, _ := os.Getwd()
-	mcp.Resource("file://current", "当前工作目录", "当前工作目录的路径").
-		Handle(func(ctx context.Context) (*protocol.ReadResourceResult, error) {
+	mcpServer.AddResource(
+		&protocol.Resource{
+			URI:         "file://current",
+			Name:        "当前工作目录",
+			Description: "当前工作目录的路径",
+			MimeType:    "text/plain",
+		},
+		func(ctx context.Context, req *server.ReadResourceRequest) (*protocol.ReadResourceResult, error) {
 			contents := protocol.NewTextResourceContents("file://current", currentDir)
 			return protocol.NewReadResourceResult(contents), nil
-		})
+		},
+	)
 
 	// 注册文件读取工具
-	mcp.Tool("read_file", "读取文件内容").
-		WithStringParam("path", "文件路径", true).
-		Handle(func(ctx context.Context, args map[string]any) (*protocol.CallToolResult, error) {
-			path, ok := args["path"].(string)
+	mcpServer.AddTool(
+		&protocol.Tool{
+			Name:        "read_file",
+			Description: "读取文件内容",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"path": map[string]interface{}{
+						"type":        "string",
+						"description": "文件路径",
+					},
+				},
+				"required": []string{"path"},
+			},
+		},
+		func(ctx context.Context, req *server.CallToolRequest) (*protocol.CallToolResult, error) {
+			path, ok := req.Params.Arguments["path"].(string)
 			if !ok {
 				return protocol.NewToolResultError("参数 'path' 必须是字符串"), nil
 			}
@@ -103,18 +139,35 @@ func main() {
 			}
 
 			return protocol.NewToolResultText(string(content)), nil
-		})
+		},
+	)
 
 	// 注册文件搜索工具
-	mcp.Tool("search_files", "搜索包含特定内容的文件").
-		WithStringParam("directory", "搜索目录", true).
-		WithStringParam("pattern", "搜索内容", true).
-		Handle(func(ctx context.Context, args map[string]any) (*protocol.CallToolResult, error) {
-			directory, ok := args["directory"].(string)
+	mcpServer.AddTool(
+		&protocol.Tool{
+			Name:        "search_files",
+			Description: "搜索包含特定内容的文件",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"directory": map[string]interface{}{
+						"type":        "string",
+						"description": "搜索目录",
+					},
+					"pattern": map[string]interface{}{
+						"type":        "string",
+						"description": "搜索内容",
+					},
+				},
+				"required": []string{"directory", "pattern"},
+			},
+		},
+		func(ctx context.Context, req *server.CallToolRequest) (*protocol.CallToolResult, error) {
+			directory, ok := req.Params.Arguments["directory"].(string)
 			if !ok {
 				return protocol.NewToolResultError("参数 'directory' 必须是字符串"), nil
 			}
-			pattern, ok := args["pattern"].(string)
+			pattern, ok := req.Params.Arguments["pattern"].(string)
 			if !ok {
 				return protocol.NewToolResultError("参数 'pattern' 必须是字符串"), nil
 			}
@@ -160,11 +213,16 @@ func main() {
 
 			result := fmt.Sprintf("找到 %d 个匹配的文件:\n%s", len(results), strings.Join(results, "\n"))
 			return protocol.NewToolResultText(result), nil
-		})
+		},
+	)
 
 	// 注册文件帮助提示模板
-	mcp.Prompt("file_help", "文件操作帮助").
-		Handle(func(ctx context.Context, args map[string]string) (*protocol.GetPromptResult, error) {
+	mcpServer.AddPrompt(
+		&protocol.Prompt{
+			Name:        "file_help",
+			Description: "文件操作帮助",
+		},
+		func(ctx context.Context, req *server.GetPromptRequest) (*protocol.GetPromptResult, error) {
 			messages := []protocol.PromptMessage{
 				protocol.NewPromptMessage(protocol.RoleSystem, protocol.NewTextContent(
 					"这是一个文件服务器，提供文件和目录操作功能。支持列出目录内容、读取文件和搜索文件。")),
@@ -174,15 +232,26 @@ func main() {
 					"你可以使用以下功能：\n1. list_directory - 列出目录中的文件\n2. read_file - 读取文件内容\n3. search_files - 在目录中搜索包含特定内容的文件\n4. 访问 file://current 资源获取当前目录路径")),
 			}
 			return protocol.NewGetPromptResult("文件服务器操作指南", messages...), nil
-		})
+		},
+	)
 
-	// 创建SSE传输服务器
-	sseServer := sse.NewServer(":8081", mcp)
+	handler := sse.NewHTTPHandler(func(r *http.Request) *server.Server {
+		return mcpServer
+	})
+	httpServer := &http.Server{
+		Addr:    ":8081",
+		Handler: handler,
+	}
 
 	log.Println("启动文件服务器 MCP 服务 (SSE) 在端口 :8081...")
-	if err := sseServer.Serve(ctx); err != nil && err != context.Canceled {
-		log.Fatalf("服务器错误: %v", err)
-	}
+
+	go func() {
+		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("服务器错误: %v", err)
+		}
+	}()
+
+	<-ctx.Done()
 
 	log.Println("服务器已关闭")
 }

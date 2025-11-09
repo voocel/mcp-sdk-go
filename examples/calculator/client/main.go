@@ -14,36 +14,26 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	// 创建 STDIO 客户端连接到计算器服务, 这里假设服务器作为子进程启动
-	mcpClient, err := client.New(
-		client.WithStdioTransport("go", []string{"run", "../server/main.go"}),
-		client.WithClientInfo("calculator-client", "1.0.0"),
-	)
-	if err != nil {
-		log.Fatalf("创建客户端失败: %v", err)
-	}
-	defer mcpClient.Close()
-
-	// 初始化握手
-	fmt.Println("连接到计算器服务...")
-	initResult, err := mcpClient.Initialize(ctx, protocol.ClientInfo{
-		Name:    "计算器客户端",
+	mcpClient := client.NewClient(&client.ClientInfo{
+		Name:    "calculator-client",
 		Version: "1.0.0",
-	})
-	if err != nil {
-		log.Fatalf("初始化失败: %v", err)
-	}
+	}, nil)
 
+	// 创建 CommandTransport 连接到计算器服务
+	transport := client.NewCommandTransport("go", "run", "../server/main.go")
+
+	fmt.Println("连接到计算器服务...")
+	session, err := mcpClient.Connect(ctx, transport, nil)
+	if err != nil {
+		log.Fatalf("连接失败: %v", err)
+	}
+	defer session.Close()
+
+	initResult := session.InitializeResult()
 	fmt.Printf("连接成功！服务器: %s v%s\n",
 		initResult.ServerInfo.Name, initResult.ServerInfo.Version)
 
-	// 发送初始化完成通知
-	if err := mcpClient.SendInitialized(ctx); err != nil {
-		log.Printf("发送初始化完成通知失败: %v", err)
-	}
-
-	// 获取工具列表
-	toolsResult, err := mcpClient.ListTools(ctx, "")
+	toolsResult, err := session.ListTools(ctx, nil)
 	if err != nil {
 		log.Fatalf("获取工具列表失败: %v", err)
 	}
@@ -56,9 +46,12 @@ func main() {
 
 	// 测试加法
 	fmt.Println("测试计算功能:")
-	result, err := mcpClient.CallTool(ctx, "add", map[string]any{
-		"a": 5.0,
-		"b": 3.0,
+	result, err := session.CallTool(ctx, &protocol.CallToolParams{
+		Name: "add",
+		Arguments: map[string]any{
+			"a": 5.0,
+			"b": 3.0,
+		},
 	})
 	if err != nil {
 		log.Fatalf("调用 add 工具失败: %v", err)
@@ -71,9 +64,12 @@ func main() {
 	}
 
 	// 测试减法
-	result, err = mcpClient.CallTool(ctx, "subtract", map[string]any{
-		"a": 10.0,
-		"b": 4.0,
+	result, err = session.CallTool(ctx, &protocol.CallToolParams{
+		Name: "subtract",
+		Arguments: map[string]any{
+			"a": 10.0,
+			"b": 4.0,
+		},
 	})
 	if err != nil {
 		log.Fatalf("调用 subtract 工具失败: %v", err)
@@ -86,9 +82,12 @@ func main() {
 	}
 
 	// 测试乘法
-	result, err = mcpClient.CallTool(ctx, "multiply", map[string]any{
-		"a": 6.0,
-		"b": 7.0,
+	result, err = session.CallTool(ctx, &protocol.CallToolParams{
+		Name: "multiply",
+		Arguments: map[string]any{
+			"a": 6.0,
+			"b": 7.0,
+		},
 	})
 	if err != nil {
 		log.Fatalf("调用 multiply 工具失败: %v", err)
@@ -101,9 +100,12 @@ func main() {
 	}
 
 	// 测试除法
-	result, err = mcpClient.CallTool(ctx, "divide", map[string]any{
-		"a": 20.0,
-		"b": 5.0,
+	result, err = session.CallTool(ctx, &protocol.CallToolParams{
+		Name: "divide",
+		Arguments: map[string]any{
+			"a": 20.0,
+			"b": 5.0,
+		},
 	})
 	if err != nil {
 		log.Fatalf("调用 divide 工具失败: %v", err)
@@ -116,9 +118,12 @@ func main() {
 	}
 
 	// 测试除零错误
-	result, err = mcpClient.CallTool(ctx, "divide", map[string]any{
-		"a": 20.0,
-		"b": 0.0,
+	result, err = session.CallTool(ctx, &protocol.CallToolParams{
+		Name: "divide",
+		Arguments: map[string]any{
+			"a": 20.0,
+			"b": 0.0,
+		},
 	})
 	if err != nil {
 		fmt.Printf("  除零错误: %v\n", err)
@@ -130,7 +135,10 @@ func main() {
 
 	// 获取帮助提示模板
 	fmt.Println("\n获取帮助信息:")
-	promptResult, err := mcpClient.GetPrompt(ctx, "calculator_help", nil)
+	promptResult, err := session.GetPrompt(ctx, &protocol.GetPromptParams{
+		Name:      "calculator_help",
+		Arguments: map[string]string{},
+	})
 	if err != nil {
 		log.Fatalf("获取提示模板失败: %v", err)
 	}

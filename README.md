@@ -28,12 +28,11 @@ MCP Go SDK 是模型上下文协议（Model Context Protocol）的 Go 语言实�
 ## 核心特性
 
 - **完全符合 MCP 标准** - 支持最新 MCP 2025-06-18 规范，向后兼容 2025-03-26, 2024-11-05
+- **优雅的架构设计** - Client/Server + Session 模式,高内聚低耦合
 - **服务器 SDK** - 快速构建 MCP 服务器，支持工具、资源、提示模板
-- **客户端 SDK** - 连接任何 MCP 兼容服务器的客户端实现
-- **多种传输协议** - STDIO、SSE、Streamable HTTP (官方标准)
-- **Elicitation 支持** - 交互式用户输入，支持字符串、数字、布尔值、枚举选择
-- **Sampling 支持** - 服务器发起的LLM推理请求，支持递归AI交互
-- **类型安全** - 完整的类型定义和参数验证
+- **客户端 SDK** - 连接任何 MCP 兼容服务器的完整客户端实现
+- **多种传输协议** - STDIO (推荐)、Streamable HTTP (最新)、SSE (向后兼容)
+- **多会话支持** - Server 和 Client 都可以同时管理多个连接
 - **高性能** - 并发安全，优化的消息处理
 - **安全防护** - 内置输入验证、路径遍历保护、资源限制
 
@@ -83,7 +82,9 @@ go get github.com/voocel/mcp-sdk-go
 
 ## 快速开始
 
-### 服务器端 (主要功能)
+### 服务器端 - STDIO Transport (推荐)
+
+最简单的方式是使用 STDIO transport,适用于命令行工具和 Claude Desktop 集成:
 
 ```go
 package main
@@ -92,62 +93,92 @@ import (
     "context"
     "fmt"
     "log"
-    "os"
-    "os/signal"
-    "syscall"
 
     "github.com/voocel/mcp-sdk-go/protocol"
     "github.com/voocel/mcp-sdk-go/server"
-    "github.com/voocel/mcp-sdk-go/transport/sse"
+    "github.com/voocel/mcp-sdk-go/transport/stdio"
 )
 
 func main() {
-    ctx, cancel := context.WithCancel(context.Background())
-    defer cancel()
+    ctx := context.Background()
 
-    // 处理优雅关闭
-    signalCh := make(chan os.Signal, 1)
-    signal.Notify(signalCh, os.Interrupt, syscall.SIGTERM)
-    go func() {
-        <-signalCh
-        cancel()
-    }()
-
-    // 创建 FastMCP 服务器
-    mcp := server.NewFastMCP("快速入门服务器", "1.0.0")
+    // 创建 MCP 服务器
+    mcpServer := server.NewServer(&protocol.ServerInfo{
+        Name:    "快速入门服务器",
+        Version: "1.0.0",
+    }, nil)
 
     // 注册一个简单的问候工具
-    mcp.Tool("greet", "问候用户").
-        WithStringParam("name", "用户名称", true).
-        Handle(func(ctx context.Context, args map[string]interface{}) (*protocol.CallToolResult, error) {
-            name, ok := args["name"].(string)
-            if !ok {
-                return protocol.NewToolResultError("参数 'name' 必须是字符串"), nil
-            }
-            
+    mcpServer.AddTool(
+        &protocol.Tool{
+            Name:        "greet",
+            Description: "问候用户",
+            InputSchema: map[string]interface{}{
+                "type": "object",
+                "properties": map[string]interface{}{
+                    "name": map[string]interface{}{
+                        "type":        "string",
+                        "description": "用户名称",
+                    },
+                },
+                "required": []string{"name"},
+            },
+        },
+        func(ctx context.Context, req *server.CallToolRequest) (*protocol.CallToolResult, error) {
+            name := req.Params.Arguments["name"].(string)
             greeting := fmt.Sprintf("你好，%s！欢迎使用 MCP Go SDK！", name)
             return protocol.NewToolResultText(greeting), nil
-        })
+        },
+    )
 
-    // 注册一个资源
-    mcp.Resource("info://server", "服务器信息", "获取服务器基本信息").
-        Handle(func(ctx context.Context) (*protocol.ReadResourceResult, error) {
-            info := "MCP Go SDK 服务器正在运行..."
-            contents := protocol.NewTextResourceContents("info://server", info)
-            return protocol.NewReadResourceResult(contents), nil
-        })
-
-    // 创建 SSE 传输服务器 (也可以使用 Streamable HTTP)
-    sseServer := sse.NewServer(":8080", mcp)
-    
-    log.Println("服务器启动在 http://localhost:8080")
-    if err := sseServer.Serve(ctx); err != nil && err != context.Canceled {
-        log.Fatalf("服务器错误: %v", err)
+    // 使用 STDIO transport 运行服务器
+    if err := mcpServer.Run(ctx, &stdio.StdioTransport{}); err != nil {
+        log.Fatal(err)
     }
 }
 ```
 
-### 客户端 (连接 MCP 服务器)
+### 服务器端 - HTTP Transport
+
+使用 Streamable HTTP transport 构建 Web 服务:
+
+```go
+package main
+
+import (
+    "context"
+    "log"
+    "net/http"
+
+    "github.com/voocel/mcp-sdk-go/protocol"
+    "github.com/voocel/mcp-sdk-go/server"
+    "github.com/voocel/mcp-sdk-go/transport/streamable"
+)
+
+func main() {
+    // 创建 MCP 服务器
+    mcpServer := server.NewServer(&protocol.ServerInfo{
+        Name:    "HTTP 服务器",
+        Version: "1.0.0",
+    }, nil)
+
+    // 注册工具...
+    mcpServer.AddTool(...)
+
+    // 创建 HTTP 处理器
+    handler := streamable.NewHTTPHandler(func(*http.Request) *server.Server {
+        return mcpServer
+    })
+
+    // 启动 HTTP 服务器
+    log.Println("服务器启动在 http://localhost:8081")
+    if err := http.ListenAndServe(":8081", handler); err != nil {
+        log.Fatal(err)
+    }
+}
+```
+
+### 客户端 - 连接 MCP 服务器
 
 ```go
 package main
@@ -156,51 +187,53 @@ import (
     "context"
     "fmt"
     "log"
-    "time"
+    "os/exec"
 
     "github.com/voocel/mcp-sdk-go/client"
     "github.com/voocel/mcp-sdk-go/protocol"
 )
 
 func main() {
-    ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-    defer cancel()
+    ctx := context.Background()
 
-    // 创建 SSE 客户端
-    mcpClient, err := client.New(
-        client.WithSSETransport("http://localhost:8080"),
-        client.WithClientInfo("demo-client", "1.0.0"),
-    )
-    if err != nil {
-        log.Fatalf("创建客户端失败: %v", err)
-    }
-    defer mcpClient.Close()
-
-    // 初始化连接
-    initResult, err := mcpClient.Initialize(ctx, protocol.ClientInfo{
+    // 创建客户端
+    mcpClient := client.NewClient(&client.ClientInfo{
         Name:    "演示客户端",
         Version: "1.0.0",
-    })
+    }, nil)
+
+    // 通过 STDIO 连接到服务器(启动子进程)
+    transport := client.NewCommandTransport(exec.Command("./server"))
+    session, err := mcpClient.Connect(ctx, transport, nil)
     if err != nil {
-        log.Fatalf("初始化失败: %v", err)
+        log.Fatalf("连接失败: %v", err)
     }
+    defer session.Close()
 
     fmt.Printf("连接成功！服务器: %s v%s\n",
-        initResult.ServerInfo.Name, initResult.ServerInfo.Version)
+        session.ServerInfo().Name, session.ServerInfo().Version)
 
-    // 发送初始化完成通知
-    if err := mcpClient.SendInitialized(ctx); err != nil {
-        log.Printf("发送初始化完成通知失败: %v", err)
+    // 列出可用工具
+    tools, err := session.ListTools(ctx, nil)
+    if err != nil {
+        log.Fatalf("列出工具失败: %v", err)
+    }
+
+    for _, tool := range tools.Tools {
+        fmt.Printf("工具: %s - %s\n", tool.Name, tool.Description)
     }
 
     // 调用工具
-    result, err := mcpClient.CallTool(ctx, "greet", map[string]interface{}{
-        "name": "Go 开发者",
+    result, err := session.CallTool(ctx, &protocol.CallToolParams{
+        Name: "greet",
+        Arguments: map[string]interface{}{
+            "name": "Go 开发者",
+        },
     })
     if err != nil {
         log.Fatalf("调用工具失败: %v", err)
     }
-    
+
     if len(result.Content) > 0 {
         if textContent, ok := result.Content[0].(protocol.TextContent); ok {
             fmt.Printf("结果: %s\n", textContent.Text)
@@ -208,11 +241,13 @@ func main() {
     }
 
     // 读取资源
-    resource, err := mcpClient.ReadResource(ctx, "info://server")
+    resource, err := session.ReadResource(ctx, &protocol.ReadResourceParams{
+        URI: "info://server",
+    })
     if err != nil {
         log.Fatalf("读取资源失败: %v", err)
     }
-    
+
     if len(resource.Contents) > 0 {
         fmt.Printf("服务器信息: %s\n", resource.Contents[0].Text)
     }
@@ -233,6 +268,7 @@ func main() {
 **推荐从 Basic 示例开始**: 包含所有核心功能的完整演示,含服务器和客户端实现。
 
 **运行方式**:
+
 ```bash
 # 服务器
 cd examples/basic && go run main.go
@@ -243,196 +279,238 @@ cd examples/basic/client && go run main.go
 
 ## 核心架构
 
-### 服务器端(主要功能)
+### 服务器端 API
 
 ```go
-// 创建FastMCP服务器
-mcp := server.NewFastMCP("服务名称", "1.0.0")
+// 创建 MCP 服务器
+mcpServer := server.NewServer(&protocol.ServerInfo{
+    Name:    "我的服务器",
+    Version: "1.0.0",
+}, nil)
 
-// 注册工具 - 链式 API
-mcp.Tool("tool_name", "工具描述").
-    WithStringParam("param1", "参数1描述", true).
-    WithIntParam("param2", "参数2描述", false).
-    Handle(func(ctx context.Context, args map[string]interface{}) (*protocol.CallToolResult, error) {
-        // 工具逻辑实现
-        return protocol.NewToolResultText("结果"), nil
-    })
+// 注册工具
+mcpServer.AddTool(
+    &protocol.Tool{
+        Name:        "greet",
+        Description: "问候用户",
+        InputSchema: map[string]interface{}{
+            "type": "object",
+            "properties": map[string]interface{}{
+                "name": map[string]interface{}{
+                    "type":        "string",
+                    "description": "用户名称",
+                },
+            },
+            "required": []string{"name"},
+        },
+    },
+    func(ctx context.Context, req *server.CallToolRequest) (*protocol.CallToolResult, error) {
+        name := req.Params.Arguments["name"].(string)
+        return protocol.NewToolResultText(fmt.Sprintf("你好，%s！", name)), nil
+    },
+)
 
 // 注册资源
-mcp.Resource("resource://uri", "资源名称", "资源描述").
-    Handle(func(ctx context.Context) (*protocol.ReadResourceResult, error) {
-        contents := protocol.NewTextResourceContents("resource://uri", "内容")
+mcpServer.AddResource(
+    &protocol.Resource{
+        URI:         "info://server",
+        Name:        "服务器信息",
+        Description: "获取服务器基本信息",
+        MimeType:    "text/plain",
+    },
+    func(ctx context.Context, req *server.ReadResourceRequest) (*protocol.ReadResourceResult, error) {
+        contents := protocol.NewTextResourceContents("info://server", "服务器信息内容")
         return protocol.NewReadResourceResult(contents), nil
-    })
+    },
+)
 
-// 注册资源模板，向客户端声明可用的动态资源模式
-mcp.ResourceTemplate("log://app/{date}", "应用日志", "获取指定日期的应用日志").
-    WithMimeType("text/plain").
-    Register()
+// 注册资源模板
+mcpServer.AddResourceTemplate(
+    &protocol.ResourceTemplate{
+        URITemplate: "log://app/{date}",
+        Name:        "应用日志",
+        Description: "获取指定日期的应用日志",
+        MimeType:    "text/plain",
+    },
+    func(ctx context.Context, req *server.ReadResourceRequest) (*protocol.ReadResourceResult, error) {
+        // 从 URI 中提取参数
+        date := extractDateFromURI(req.Params.URI)
+        contents := protocol.NewTextResourceContents(req.Params.URI, fmt.Sprintf("日志内容: %s", date))
+        return protocol.NewReadResourceResult(contents), nil
+    },
+)
 
 // 注册提示模板
-mcp.Prompt("prompt_name", "提示描述").
-    WithArgument("arg1", "参数描述", true).
-    Handle(func(ctx context.Context, args map[string]string) (*protocol.GetPromptResult, error) {
+mcpServer.AddPrompt(
+    &protocol.Prompt{
+        Name:        "code_review",
+        Description: "代码审查提示",
+        Arguments: []protocol.PromptArgument{
+            {Name: "language", Description: "编程语言", Required: true},
+            {Name: "code", Description: "代码内容", Required: true},
+        },
+    },
+    func(ctx context.Context, req *server.GetPromptRequest) (*protocol.GetPromptResult, error) {
+        language := req.Params.Arguments["language"]
+        code := req.Params.Arguments["code"]
+
         messages := []protocol.PromptMessage{
-            protocol.NewPromptMessage(protocol.RoleUser, protocol.NewTextContent("内容")),
+            protocol.NewPromptMessage(protocol.RoleUser,
+                protocol.NewTextContent(fmt.Sprintf("请审查这段 %s 代码:\n%s", language, code))),
         }
-        return protocol.NewGetPromptResult("描述", messages...), nil
-    })
-
-// 注册支持 Elicitation 的交互式工具
-mcp.Tool("user_profile", "创建用户档案").
-    HandleWithElicitation(func(ctx *server.MCPContext, args map[string]interface{}) (*protocol.CallToolResult, error) {
-        // 请求用户输入姓名
-        name, err := ctx.ElicitString("请输入你的姓名", "name", "你的全名", true)
-        if err != nil {
-            return protocol.NewToolResultError(err.Error()), nil
-        }
-
-        // 请求用户选择颜色
-        color, err := ctx.ElicitChoice("请选择你喜欢的颜色", "color", "你最喜欢的颜色",
-            []string{"red", "green", "blue"}, []string{"红色", "绿色", "蓝色"}, true)
-        if err != nil {
-            return protocol.NewToolResultError(err.Error()), nil
-        }
-
-        return protocol.NewToolResultText(fmt.Sprintf("用户档案: %s 喜欢 %s", name, color)), nil
-    })
-
-// 启动服务器 (SSE 传输)
-sseTransport := sse.NewServer(":8080", mcp)
-sseTransport.Serve(ctx)
-
-// 或者使用 Streamable HTTP 传输 (推荐用于新项目)
-// streamableTransport := streamable.NewServer(":8080", mcp)
-// streamableTransport.Serve(ctx)
-```
-
-### 客户端(连接 MCP 服务器)
-
-```go
-// Elicitation 处理器
-func handleElicitation(ctx context.Context, params *protocol.ElicitationCreateParams) (*protocol.ElicitationResult, error) {
-    fmt.Println(params.Message) // 显示服务器请求
-    // 获取用户输入并返回结果
-    return protocol.NewElicitationAccept(map[string]interface{}{
-        "name": "用户输入的姓名",
-    }), nil
-}
-
-// 创建客户端
-client, err := client.New(
-    client.WithSSETransport("http://localhost:8080"),
-    client.WithClientInfo("client-name", "1.0.0"),
-    client.WithElicitationHandler(handleElicitation), // 设置 elicitation 处理器
+        return protocol.NewGetPromptResult("代码审查", messages...), nil
+    },
 )
 
-// Sampling 处理器
-func handleSampling(ctx context.Context, request *protocol.CreateMessageRequest) (*protocol.CreateMessageResult, error) {
-    fmt.Printf("收到AI推理请求: %+v\n", request)
-    // 调用实际的LLM API并返回结果
-    return protocol.NewCreateMessageResult(
-        protocol.RoleAssistant,
-        protocol.NewTextContent("AI生成的回复"),
-        "gpt-4",
-        protocol.StopReasonEndTurn,
-    ), nil
+// 运行服务器 (STDIO)
+if err := mcpServer.Run(ctx, &stdio.StdioTransport{}); err != nil {
+    log.Fatal(err)
 }
 
-// 创建客户端
-client, err := client.New(
-    client.WithSSETransport("http://localhost:8080"),
-    client.WithClientInfo("client-name", "1.0.0"),
-    client.WithElicitationHandler(handleElicitation), // 设置 elicitation 处理器
-    client.WithSamplingHandler(handleSampling),       // 设置 sampling 处理器
-)
-
-// 初始化并调用工具
-initResult, err := client.Initialize(ctx, protocol.ClientInfo{...})
-client.SendInitialized(ctx)
-result, err := client.CallTool(ctx, "tool_name", map[string]interface{}{"param": "value"})
+// 或者使用 HTTP 传输
+handler := streamable.NewHTTPHandler(func(r *http.Request) *server.Server {
+    return mcpServer
+})
+http.ListenAndServe(":8081", handler)
 ```
 
-### 资源模板
+### 客户端 API
 
 ```go
-// 服务器端注册资源模板，向客户端声明动态资源形态
-mcp.ResourceTemplate("log://app/{date}", "应用日志", "获取指定日期的应用日志").
-    WithMimeType("text/plain").
-    Register()
+// 创建客户端
+mcpClient := client.NewClient(&client.ClientInfo{
+    Name:    "我的客户端",
+    Version: "1.0.0",
+}, nil)
 
-// 客户端检索资源模板并读取具体资源
-templates, err := client.ListResourceTemplates(ctx, "")
+// 通过 STDIO 连接(启动子进程)
+transport := client.NewCommandTransport(exec.Command("./server"))
+session, err := mcpClient.Connect(ctx, transport, nil)
 if err != nil {
-    log.Fatalf("列出资源模板失败: %v", err)
+    log.Fatal(err)
+}
+defer session.Close()
+
+// 列出工具
+tools, err := session.ListTools(ctx, nil)
+for _, tool := range tools.Tools {
+    fmt.Printf("工具: %s\n", tool.Name)
 }
 
+// 调用工具
+result, err := session.CallTool(ctx, &protocol.CallToolParams{
+    Name:      "greet",
+    Arguments: map[string]interface{}{"name": "世界"},
+})
+
+// 列出资源
+resources, err := session.ListResources(ctx, nil)
+for _, res := range resources.Resources {
+    fmt.Printf("资源: %s\n", res.URI)
+}
+
+// 读取资源
+resource, err := session.ReadResource(ctx, &protocol.ReadResourceParams{
+    URI: "info://server",
+})
+
+// 获取提示
+prompt, err := session.GetPrompt(ctx, &protocol.GetPromptParams{
+    Name: "code_review",
+    Arguments: map[string]string{
+        "language": "Go",
+        "code":     "func main() { ... }",
+    },
+})
+```
+
+### 高级特性
+
+#### 资源模板
+
+```go
+// 服务器端注册资源模板
+mcpServer.AddResourceTemplate(
+    &protocol.ResourceTemplate{
+        URITemplate: "log://app/{date}",
+        Name:        "应用日志",
+        Description: "获取指定日期的应用日志",
+    },
+    func(ctx context.Context, req *server.ReadResourceRequest) (*protocol.ReadResourceResult, error) {
+        // 处理动态资源请求
+        return protocol.NewReadResourceResult(contents), nil
+    },
+)
+
+// 客户端列出资源模板
+templates, err := session.ListResourceTemplates(ctx, nil)
 for _, tpl := range templates.ResourceTemplates {
     fmt.Printf("模板: %s\n", tpl.URITemplate)
 }
 
-resource, err := client.ReadResource(ctx, "log://app/latest")
+// 读取具体资源
+resource, err := session.ReadResource(ctx, &protocol.ReadResourceParams{
+    URI: "log://app/2025-01-15",
+})
 ```
 
-### 根目录管理 (Roots)
+#### 根目录管理 (Roots)
 
 ```go
-// 客户端设置静态根目录列表
-client, err := client.New(
-    client.WithSSETransport("http://localhost:8080"),
-    client.WithRoots(
+// 客户端设置根目录
+mcpClient := client.NewClient(&client.ClientInfo{
+    Name:    "客户端",
+    Version: "1.0.0",
+}, &client.ClientOptions{
+    Roots: []*protocol.Root{
         protocol.NewRoot("file:///home/user/projects", "项目目录"),
         protocol.NewRoot("file:///home/user/documents", "文档目录"),
-    ),
-)
-
-// 或者使用动态提供器
-client.SetRootsProvider(func(ctx context.Context) ([]protocol.Root, error) {
-    wd, _ := os.Getwd()
-    return []protocol.Root{
-        protocol.NewRoot("file://"+wd, "当前目录"),
-    }, nil
+    },
 })
 
 // 服务器端请求客户端根目录列表
-rootsList, err := server.RequestRootsList(ctx)
+// 注意: 需要在 ServerSession 中调用
+rootsList, err := session.ListRoots(ctx)
+for _, root := range rootsList.Roots {
+    fmt.Printf("根目录: %s - %s\n", root.URI, root.Name)
+}
 ```
 
-### Sampling (LLM推理) 示例
+#### Sampling (LLM 推理)
 
 ```go
-// 服务器端：使用Sampling的AI工具
-mcp.Tool("ai_calculator", "使用AI进行数学计算").
-    WithStringParam("expression", "数学表达式", true).
-    HandleWithElicitation(func(ctx *server.MCPContext, args map[string]interface{}) (*protocol.CallToolResult, error) {
-        expression := args["expression"].(string)
+// 客户端设置 Sampling 处理器
+mcpClient := client.NewClient(&client.ClientInfo{
+    Name:    "客户端",
+    Version: "1.0.0",
+}, &client.ClientOptions{
+    SamplingHandler: func(ctx context.Context, req *protocol.CreateMessageRequest) (*protocol.CreateMessageResult, error) {
+        // 调用实际的 LLM API
+        response := callLLMAPI(req.Messages)
+        return protocol.NewCreateMessageResult(
+            protocol.RoleAssistant,
+            protocol.NewTextContent(response),
+            "gpt-4",
+            protocol.StopReasonEndTurn,
+        ), nil
+    },
+})
 
-        // 发起LLM推理请求
-        result, err := ctx.CreateTextMessageWithSystem(
-            "你是一个数学计算助手，只返回计算结果",
-            fmt.Sprintf("计算: %s", expression),
-            100,
-        )
-        if err != nil {
-            return protocol.NewToolResultError(fmt.Sprintf("AI计算失败: %v", err)), nil
-        }
-
-        // 提取AI响应
-        if textContent, ok := result.Content.(protocol.TextContent); ok {
-            return protocol.NewToolResultText(fmt.Sprintf("计算结果: %s", textContent.Text)), nil
-        }
-
-        return protocol.NewToolResultError("无法解析AI响应"), nil
-    })
+// 服务器端发起 Sampling 请求
+// 注意: 需要在 ServerSession 中调用
+result, err := session.CreateMessage(ctx, &protocol.CreateMessageRequest{
+    Messages: []protocol.SamplingMessage{
+        {Role: protocol.RoleUser, Content: protocol.NewTextContent("计算 2+2")},
+    },
+    MaxTokens: 100,
+})
 ```
 
-## 协议支持
-
-### MCP 标准合规性
+## 传输协议
 
 **完全符合 MCP 2025-06-18 规范**，向后兼容 MCP 2025-03-26, 2024-11-05
 
-### 传输协议
+### 支持的传输方式
 
 | 协议 | 使用场景 | 官方支持 | 协议版本 |
 |------|----------|------|----------|
@@ -442,29 +520,53 @@ mcp.Tool("ai_calculator", "使用AI进行数学计算").
 | ~~**WebSocket**~~ | ~~实时应用~~ | 非官方标准 | - |
 | ~~**gRPC**~~ | ~~微服务~~ | 非官方标准 | - |
 
-**支持的协议版本**: 2025-06-18, 2025-03-26, 2024-11-05
-
-## 开发指南
-
-### 错误处理
+### STDIO Transport (推荐)
 
 ```go
 // 服务器端
-return protocol.NewToolResultError("参数错误"), nil  // 业务错误
-return nil, fmt.Errorf("系统错误")                    // 系统错误
+mcpServer.Run(ctx, &stdio.StdioTransport{})
+
+// 客户端(启动子进程)
+transport := client.NewCommandTransport(exec.Command("./server"))
+session, err := mcpClient.Connect(ctx, transport, nil)
+```
+
+### Streamable HTTP Transport (Web 应用)
+
+```go
+// 服务器端
+handler := streamable.NewHTTPHandler(func(r *http.Request) *server.Server {
+    return mcpServer
+})
+http.ListenAndServe(":8081", handler)
 
 // 客户端
-if result.IsError {
-    // 处理业务错误
-}
+transport, err := streamable.NewStreamableTransport("http://localhost:8081/mcp")
+session, err := mcpClient.Connect(ctx, transport, nil)
 ```
+
+### SSE Transport (向后兼容)
+
+```go
+// 服务器端
+handler := sse.NewHTTPHandler(func(r *http.Request) *server.Server {
+    return mcpServer
+})
+http.ListenAndServe(":8080", handler)
+
+// 客户端
+transport, err := sse.NewSSETransport("http://localhost:8080")
+session, err := mcpClient.Connect(ctx, transport, nil)
+```
+
+## 开发指南
 
 ### 学习路径
 
-1. 快速开始示例 → 基本概念
-2. [Calculator](./examples/calculator/) → 工具注册和调用
-3. [SSE Demo](./examples/sse-demo/) → SSE 传输
-4. [Streamable Demo](./examples/streamable-demo/) → 最新传输协议
+1. **快速开始** → 理解基本概念
+2. [**Basic 示例**](./examples/basic/) → 完整功能演示
+3. [**Streamable Demo**](./examples/streamable-demo/) → HTTP 传输
+4. [**Client Example**](./examples/client-example/) → 客户端开发
 
 ## 贡献
 
@@ -483,29 +585,40 @@ MIT License - 详见 [LICENSE](LICENSE) 文件
 
 ## Roadmap
 
-- [x] **结构化工具输出** - 支持类型化、验证的工具结果 (MCP 2025-06-18)
-- [x] **用户交互请求 (Elicitation)** - 服务器可在交互过程中请求用户输入 (MCP 2025-06-18)
-- [x] **LLM采样支持 (Sampling)** - 服务器发起的LLM推理请求，支持递归AI交互
-- [x] **资源模板 (Resource Templates)** - 支持动态资源模板和URI模板 (如 `file:///{path}`)
-- [x] **资源链接 (Resource Links)** - 工具结果中返回资源链接，提供额外上下文 (MCP 2025-06-18)
-- [x] **参数自动补全 (Completion)** - 工具和提示参数的智能补全建议,支持上下文变量 (MCP 2025-06-18)
-- [x] **根目录管理 (Roots)** - 客户端文件系统根目录管理和变更通知
+### 已完成 (MCP 2025-06-18 完全支持)
 
-- [x] **进度跟踪 (Progress Tracking)** - 长时间运行操作的实时进度反馈和取消机制
-- [x] **结构化日志 (Logging)** - 服务器向客户端发送结构化日志消息
-- [x] **资源订阅 (Resource Subscription)** - 实时资源变更通知和订阅机制
-- [x] **请求取消 (Cancellation)** - 支持取消长时间运行的操作
+**核心架构**:
+- [x] **Client/Server + Session 模式**
+- [x] **Transport 抽象层** - 统一的 Transport/Connection 接口
+- [x] **多会话支持** - Server 和 Client 都支持多个并发连接
 
-- [ ] **基础会话管理** - 支持每客户端独立状态管理
-- [ ] **简单中间件系统** - 提供基本的请求/响应拦截能力
-- [ ] **CLI工具** - 开发、测试和调试MCP服务器的命令行工具
-- [ ] **OAuth 2.1授权支持** - 企业级安全认证机制
-- [ ] **高级工具过滤** - 基于用户角色的工具访问控制
+**传输协议**:
+- [x] **STDIO Transport** - 标准输入/输出,适用于 CLI 和 Claude Desktop
+- [x] **Streamable HTTP Transport** - 最新 HTTP 传输协议 (MCP 2025-06-18)
+- [x] **SSE Transport** - 向后兼容旧版 HTTP+SSE (MCP 2024-11-05)
+
+**MCP 2025-06-18 特性**:
+- [x] **工具 (Tools)** - 完整的工具注册和调用
+- [x] **资源 (Resources)** - 资源管理和订阅
+- [x] **资源模板 (Resource Templates)** - 动态资源 URI 模板
+- [x] **提示模板 (Prompts)** - 提示模板管理
+- [x] **根目录 (Roots)** - 客户端根目录管理
+- [x] **Sampling** - LLM 推理请求支持
+- [x] **进度跟踪 (Progress)** - 长时间操作进度反馈
+- [x] **日志 (Logging)** - 结构化日志消息
+- [x] **请求取消 (Cancellation)** - 取消长时间运行的操作
+
+### 计划中
+
+- [ ] **CLI 工具** - 开发、测试和调试 MCP 服务器的命令行工具
+- [ ] **OAuth 2.1 授权** - 企业级安全认证机制 (MCP 2025-03-26)
+- [ ] **中间件系统** - 请求/响应拦截和处理
+- [ ] **更多示例** - 更多实际应用场景的示例代码
 
 ## 相关项目
 
-- [MCP 官方规范](https://github.com/anthropics/model-context-protocol) - 协议规范定义
-- [MCP Python SDK](https://github.com/anthropics/model-context-protocol/tree/main/src/mcp) - Python 实现
-- [MCP TypeScript SDK](https://github.com/anthropics/model-context-protocol/tree/main/src/mcp) - TypeScript 实现
+- [MCP 官方规范](https://github.com/modelcontextprotocol/modelcontextprotocol) - 协议规范定义
+- [MCP Python SDK](https://github.com/modelcontextprotocol/python-sdk) - Python 实现
+- [MCP TypeScript SDK](https://github.com/modelcontextprotocol/typescript-sdk) - TypeScript 实现
 
 ---

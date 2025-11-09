@@ -10,38 +10,31 @@ import (
 
 	"github.com/voocel/mcp-sdk-go/client"
 	"github.com/voocel/mcp-sdk-go/protocol"
+	"github.com/voocel/mcp-sdk-go/transport/sse"
 )
 
 func main() {
 	ctx := context.Background()
-
-	// 创建 SSE 客户端连接到聊天机器人服务
-	mcpClient, err := client.New(
-		client.WithSSETransport("http://localhost:8082"),
-		client.WithClientInfo("chatbot-client", "1.0.0"),
-	)
-	if err != nil {
-		log.Fatalf("创建客户端失败: %v", err)
-	}
-	defer mcpClient.Close()
-
-	// 执行 MCP 初始化握手
-	fmt.Println("连接到聊天机器人服务...")
-	initResult, err := mcpClient.Initialize(ctx, protocol.ClientInfo{
-		Name:    "聊天机器人客户端",
+	mcpClient := client.NewClient(&client.ClientInfo{
+		Name:    "chatbot-client",
 		Version: "1.0.0",
-	})
+	}, nil)
+
+	transport, err := sse.NewSSETransport("http://localhost:8082")
 	if err != nil {
-		log.Fatalf("初始化失败: %v", err)
+		log.Fatalf("创建 Transport 失败: %v", err)
 	}
 
+	fmt.Println("连接到聊天机器人服务...")
+	session, err := mcpClient.Connect(ctx, transport, nil)
+	if err != nil {
+		log.Fatalf("连接失败: %v", err)
+	}
+	defer session.Close()
+
+	initResult := session.InitializeResult()
 	fmt.Printf("连接成功！服务器: %s v%s\n",
 		initResult.ServerInfo.Name, initResult.ServerInfo.Version)
-
-	// 发送初始化完成通知
-	if err := mcpClient.SendInitialized(ctx); err != nil {
-		log.Printf("发送初始化完成通知失败: %v", err)
-	}
 
 	fmt.Print("\n请输入你的姓名: ")
 	scanner := bufio.NewScanner(os.Stdin)
@@ -52,8 +45,11 @@ func main() {
 	}
 
 	// 获取问候语
-	result, err := mcpClient.CallTool(ctx, "greeting", map[string]any{
-		"name": username,
+	result, err := session.CallTool(ctx, &protocol.CallToolParams{
+		Name: "greeting",
+		Arguments: map[string]any{
+			"name": username,
+		},
 	})
 	if err != nil {
 		log.Fatalf("调用问候工具失败: %v", err)
@@ -66,8 +62,11 @@ func main() {
 	}
 
 	// 获取聊天模板
-	promptResult, err := mcpClient.GetPrompt(ctx, "chat_template", map[string]string{
-		"username": username,
+	promptResult, err := session.GetPrompt(ctx, &protocol.GetPromptParams{
+		Name: "chat_template",
+		Arguments: map[string]string{
+			"username": username,
+		},
 	})
 	if err != nil {
 		log.Fatalf("获取聊天模板失败: %v", err)
@@ -115,8 +114,11 @@ func main() {
 				continue
 			}
 
-			result, err := mcpClient.CallTool(ctx, "weather", map[string]any{
-				"city": city,
+			result, err := session.CallTool(ctx, &protocol.CallToolParams{
+				Name: "weather",
+				Arguments: map[string]any{
+					"city": city,
+				},
 			})
 			if err != nil {
 				fmt.Printf("错误: %v\n", err)
@@ -149,9 +151,12 @@ func main() {
 				continue
 			}
 
-			result, err := mcpClient.CallTool(ctx, "translate", map[string]any{
-				"text":        text,
-				"target_lang": targetLang,
+			result, err := session.CallTool(ctx, &protocol.CallToolParams{
+				Name: "translate",
+				Arguments: map[string]any{
+					"text":        text,
+					"target_lang": targetLang,
+				},
 			})
 			if err != nil {
 				fmt.Printf("错误: %v\n", err)

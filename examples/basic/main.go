@@ -15,30 +15,65 @@ import (
 )
 
 func main() {
-	mcp := server.NewFastMCP("BasicMCPServer", "1.0.0")
+	mcpServer := server.NewServer(&protocol.ServerInfo{
+		Name:    "BasicMCPServer",
+		Version: "1.0.0",
+	}, nil)
 
-	// ========== 1. 基础工具 ==========
-	mcp.Tool("greet", "问候用户").
-		WithStringParam("name", "用户名称", true).
-		Handle(func(ctx context.Context, args map[string]interface{}) (*protocol.CallToolResult, error) {
-			name := args["name"].(string)
+	// ========== 基础工具 ==========
+	mcpServer.AddTool(
+		&protocol.Tool{
+			Name:        "greet",
+			Description: "问候用户",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"name": map[string]interface{}{
+						"type":        "string",
+						"description": "用户名称",
+					},
+				},
+				"required": []string{"name"},
+			},
+		},
+		func(ctx context.Context, req *server.CallToolRequest) (*protocol.CallToolResult, error) {
+			name, ok := req.Params.Arguments["name"].(string)
+			if !ok {
+				return protocol.NewToolResultError("参数 'name' 必须是字符串"), nil
+			}
 			greeting := fmt.Sprintf("Hello, %s! Welcome to MCP!", name)
 			return protocol.NewToolResultText(greeting), nil
-		})
+		},
+	)
 
-	// ========== 2. 带元数据和标题的工具 (MCP 2025-06-18) ==========
-	mcp.Tool("calculate", "执行数学计算").
-		WithTitle("计算器工具"). // 人类友好的标题
-		WithStringParam("operation", "运算类型 (add, subtract, multiply, divide)", true).
-		WithIntParam("a", "第一个数字", true).
-		WithIntParam("b", "第二个数字", true).
-		WithMeta("category", "math").                  // 分类
-		WithMeta("version", "2.0").                    // 版本
-		WithMeta("tags", []string{"math", "utility"}). // 标签
-		Handle(func(ctx context.Context, args map[string]interface{}) (*protocol.CallToolResult, error) {
-			operation := args["operation"].(string)
-			a := int(args["a"].(float64))
-			b := int(args["b"].(float64))
+	// ========== 带元数据的工具 (MCP 2025-06-18) ==========
+	mcpServer.AddTool(
+		&protocol.Tool{
+			Name:        "calculate",
+			Description: "执行数学计算",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"operation": map[string]interface{}{
+						"type":        "string",
+						"description": "运算类型 (add, subtract, multiply, divide)",
+					},
+					"a": map[string]interface{}{
+						"type":        "number",
+						"description": "第一个数字",
+					},
+					"b": map[string]interface{}{
+						"type":        "number",
+						"description": "第二个数字",
+					},
+				},
+				"required": []string{"operation", "a", "b"},
+			},
+		},
+		func(ctx context.Context, req *server.CallToolRequest) (*protocol.CallToolResult, error) {
+			operation, _ := req.Params.Arguments["operation"].(string)
+			a := int(req.Params.Arguments["a"].(float64))
+			b := int(req.Params.Arguments["b"].(float64))
 
 			var result int
 			switch operation {
@@ -62,51 +97,65 @@ func main() {
 				Content: []protocol.Content{
 					protocol.NewTextContent(fmt.Sprintf("计算结果: %d", result)),
 				},
-				Meta: map[string]interface{}{
-					"operation":      operation,
-					"processingTime": "0.001s",
-				},
 			}, nil
-		})
+		},
+	)
 
-	// ========== 3. 带输出 Schema 的工具 (MCP 2025-06-18) ==========
-	mcp.Tool("get_time", "获取当前时间").
-		WithOutputSchema(protocol.JSONSchema{
-			"type": "object",
-			"properties": map[string]interface{}{
-				"timestamp": map[string]string{"type": "string"},
-				"timezone":  map[string]string{"type": "string"},
+	// ========== 获取时间工具 ==========
+	mcpServer.AddTool(
+		&protocol.Tool{
+			Name:        "get_time",
+			Description: "获取当前时间",
+			InputSchema: map[string]interface{}{
+				"type":       "object",
+				"properties": map[string]interface{}{},
 			},
-		}).
-		Handle(func(ctx context.Context, args map[string]interface{}) (*protocol.CallToolResult, error) {
+		},
+		func(ctx context.Context, req *server.CallToolRequest) (*protocol.CallToolResult, error) {
 			now := time.Now()
 			return &protocol.CallToolResult{
 				Content: []protocol.Content{
 					protocol.NewTextContent(now.Format(time.RFC3339)),
 				},
-				StructuredContent: map[string]interface{}{
-					"timestamp": now.Unix(),
-					"timezone":  now.Location().String(),
+			}, nil
+		},
+	)
+
+	// ========== 基础资源 ==========
+	mcpServer.AddResource(
+		&protocol.Resource{
+			URI:         "info://server",
+			Name:        "server_info",
+			Description: "服务器信息",
+			MimeType:    "text/plain",
+		},
+		func(ctx context.Context, req *server.ReadResourceRequest) (*protocol.ReadResourceResult, error) {
+			info := fmt.Sprintf("MCP Basic Server v1.0.0\nProtocol: %s\nFeatures: Tools, Resources, Prompts", protocol.MCPVersion)
+			return &protocol.ReadResourceResult{
+				Contents: []protocol.ResourceContents{
+					{
+						URI:      "info://server",
+						MimeType: "text/plain",
+						Text:     info,
+					},
 				},
 			}, nil
-		})
+		},
+	)
 
-	// ========== 4. 基础资源 ==========
-	mcp.SimpleTextResource("info://server", "server_info", "服务器信息",
-		func(ctx context.Context) (string, error) {
-			return fmt.Sprintf("MCP Basic Server v1.0.0\nProtocol: %s\nFeatures: Tools, Resources, Prompts, Meta", protocol.MCPVersion), nil
-		})
-
-	// ========== 5. 带元数据的资源 (MCP 2025-06-18) ==========
-	mcp.Resource("config://app", "app_config", "应用配置").
-		WithMimeType("application/json").
-		WithMeta("environment", "development"). // 环境
-		WithMeta("version", "1.0.0").           // 版本
-		Handle(func(ctx context.Context) (*protocol.ReadResourceResult, error) {
+	// ========== JSON 配置资源 ==========
+	mcpServer.AddResource(
+		&protocol.Resource{
+			URI:         "config://app",
+			Name:        "app_config",
+			Description: "应用配置",
+			MimeType:    "application/json",
+		},
+		func(ctx context.Context, req *server.ReadResourceRequest) (*protocol.ReadResourceResult, error) {
 			config := `{
   "app": "BasicMCPServer",
   "version": "1.0.0",
-  "features": ["tools", "resources", "prompts", "meta"]
+  "features": ["tools", "resources", "prompts"]
 }`
 			return &protocol.ReadResourceResult{
 				Contents: []protocol.ResourceContents{
@@ -117,40 +166,53 @@ func main() {
 					},
 				},
 			}, nil
-		})
+		},
+	)
 
-	// ========== 6. 资源模板 (MCP 2025-06-18) ==========
-	// 注册资源模板声明 (告诉客户端支持的 URI 模式)
-	mcp.ResourceTemplate("echo:///{message}", "echo", "回显消息").
-		WithMimeType("text/plain").
-		WithMeta("scope", "echo").
-		Register()
-
-	// 注册一个示例资源 (客户端可以根据模板构造 URI 来访问)
-	mcp.Resource("echo:///hello", "echo_hello", "回显 hello").
-		WithMimeType("text/plain").
-		Handle(func(ctx context.Context) (*protocol.ReadResourceResult, error) {
+	// ========== 资源模板示例 ==========
+	mcpServer.AddResourceTemplate(
+		&protocol.ResourceTemplate{
+			URITemplate: "echo:///{message}",
+			Name:        "echo",
+			Description: "回显消息",
+			MimeType:    "text/plain",
+		},
+		func(ctx context.Context, req *server.ReadResourceRequest) (*protocol.ReadResourceResult, error) {
+			// 从 URI 中提取消息
+			message := "hello" // 简化示例,实际应该从 URI 解析
 			return &protocol.ReadResourceResult{
 				Contents: []protocol.ResourceContents{
 					{
-						URI:      "echo:///hello",
+						URI:      req.Params.URI,
 						MimeType: "text/plain",
-						Text:     "Echo: hello",
+						Text:     fmt.Sprintf("Echo: %s", message),
 					},
 				},
 			}, nil
-		})
+		},
+	)
 
-	// ========== 7. 提示模板 (带标题) ==========
-	mcp.Prompt("code_review", "代码审查提示").
-		WithTitle("代码审查助手"). // 人类友好的标题
-		WithArgument("language", "编程语言", true).
-		WithArgument("code", "要审查的代码", true).
-		WithMeta("domain", "software-engineering").
-		WithMeta("difficulty", "intermediate").
-		Handle(func(ctx context.Context, args map[string]string) (*protocol.GetPromptResult, error) {
-			language := args["language"]
-			code := args["code"]
+	// ========== 提示模板 ==========
+	mcpServer.AddPrompt(
+		&protocol.Prompt{
+			Name:        "code_review",
+			Description: "代码审查提示",
+			Arguments: []protocol.PromptArgument{
+				{
+					Name:        "language",
+					Description: "编程语言",
+					Required:    true,
+				},
+				{
+					Name:        "code",
+					Description: "要审查的代码",
+					Required:    true,
+				},
+			},
+		},
+		func(ctx context.Context, req *server.GetPromptRequest) (*protocol.GetPromptResult, error) {
+			language, _ := req.Params.Arguments["language"]
+			code, _ := req.Params.Arguments["code"]
 
 			return &protocol.GetPromptResult{
 				Description: "代码审查提示",
@@ -162,83 +224,31 @@ func main() {
 						),
 					},
 				},
-				Meta: map[string]interface{}{
-					"language": language,
-					"codeSize": len(code),
-				},
 			}, nil
-		})
+		},
+	)
 
-	// ========== 8. 带 Elicitation 的交互式工具 (MCP 2025-06-18) ==========
-	mcp.Tool("interactive_greet", "交互式问候").
-		WithStringParam("greeting", "问候语", false).
-		HandleWithElicitation(func(ctx *server.MCPContext, args map[string]interface{}) (*protocol.CallToolResult, error) {
-			// 如果没有提供问候语,请求用户输入
-			greeting, ok := args["greeting"].(string)
-			if !ok || greeting == "" {
-				name, err := ctx.ElicitString("请输入您的名字", "name", "用户名", true)
-				if err != nil {
-					return protocol.NewToolResultError(fmt.Sprintf("获取用户输入失败: %v", err)), nil
-				}
-				greeting = fmt.Sprintf("你好, %s!", name)
-			}
-
-			return protocol.NewToolResultText(greeting), nil
-		})
-
-	// ========== 9. 带 Sampling 的 AI 工具 (MCP 2025-06-18) ==========
-	mcp.Tool("ai_assistant", "AI 助手 - 使用 LLM 回答问题").
-		WithStringParam("question", "要问的问题", true).
-		HandleWithElicitation(func(ctx *server.MCPContext, args map[string]interface{}) (*protocol.CallToolResult, error) {
-			question := args["question"].(string)
-
-			// 发起LLM推理请求
-			result, err := ctx.CreateTextMessageWithSystem(
-				"你是一个友好的助手,用简洁的语言回答问题。",
-				question,
-				500, // maxTokens
-			)
-			if err != nil {
-				return protocol.NewToolResultError(fmt.Sprintf("AI 推理失败: %v", err)), nil
-			}
-
-			// 提取AI响应
-			if textContent, ok := result.Content.(protocol.TextContent); ok {
-				return &protocol.CallToolResult{
-					Content: []protocol.Content{
-						protocol.NewTextContent(textContent.Text),
+	// ========== 资源链接工具 ==========
+	mcpServer.AddTool(
+		&protocol.Tool{
+			Name:        "find_file",
+			Description: "查找文件并返回资源链接",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"filename": map[string]interface{}{
+						"type":        "string",
+						"description": "要查找的文件名",
 					},
-					Meta: map[string]interface{}{
-						"model":      result.Model,
-						"stopReason": result.StopReason,
-					},
-				}, nil
-			}
+				},
+				"required": []string{"filename"},
+			},
+		},
+		func(ctx context.Context, req *server.CallToolRequest) (*protocol.CallToolResult, error) {
+			filename, _ := req.Params.Arguments["filename"].(string)
 
-			return protocol.NewToolResultError("无法解析 AI 响应"), nil
-		})
-
-	// ========== 10. 资源链接工具 - Resource Links (MCP 2025-06-18) ==========
-	mcp.Tool("find_file", "查找文件并返回资源链接").
-		WithStringParam("filename", "要查找的文件名", true).
-		Handle(func(ctx context.Context, args map[string]interface{}) (*protocol.CallToolResult, error) {
-			filename := args["filename"].(string)
-
-			// 模拟文件查找
 			fileURI := fmt.Sprintf("file:///project/src/%s", filename)
-
-			// 创建带注解的资源链接
-			annotation := protocol.NewAnnotation().
-				WithAudience(protocol.RoleAssistant).
-				WithPriority(0.9)
-
-			resourceLink := protocol.NewResourceLinkContentWithDetails(
-				fileURI,
-				filename,
-				"Found file in project",
-				"text/plain",
-			)
-			resourceLink.WithAnnotations(annotation)
+			resourceLink := protocol.NewResourceLinkContent(fileURI)
 
 			return &protocol.CallToolResult{
 				Content: []protocol.Content{
@@ -246,56 +256,15 @@ func main() {
 					resourceLink,
 				},
 			}, nil
-		})
+		},
+	)
 
 	// ========== 启动服务器 ==========
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	stdioServer := stdio.NewServer(mcp)
-
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
-
-	// ========== 10. 参数自动补全 (Completion) - MCP 2025-06-18 ==========
-	mcp.Completion(func(ctx context.Context, ref protocol.CompletionReference, argument protocol.CompletionArgument, context *protocol.CompletionContext) (*protocol.CompletionResult, error) {
-		// 根据引用类型处理补全
-		switch r := ref.(type) {
-		case protocol.PromptReference:
-			// 提示参数补全
-			if r.Name == "code_review" && argument.Name == "language" {
-				// 根据当前输入值过滤语言列表
-				allLanguages := []string{"python", "pytorch", "pyside", "javascript", "java", "go", "rust", "typescript"}
-				var matches []string
-				for _, lang := range allLanguages {
-					if len(argument.Value) == 0 || len(lang) >= len(argument.Value) && lang[:len(argument.Value)] == argument.Value {
-						matches = append(matches, lang)
-					}
-				}
-				result := protocol.NewCompletionResultWithTotal(matches, len(allLanguages), len(matches) < len(allLanguages))
-				return &result, nil
-			}
-
-		case protocol.ResourceReference:
-			// 资源 URI 补全
-			if argument.Name == "path" {
-				// 模拟文件路径补全
-				paths := []string{"/home/user/file1.txt", "/home/user/file2.txt", "/home/user/documents/"}
-				var matches []string
-				for _, path := range paths {
-					if len(argument.Value) == 0 || len(path) >= len(argument.Value) && path[:len(argument.Value)] == argument.Value {
-						matches = append(matches, path)
-					}
-				}
-				result := protocol.NewCompletionResult(matches, len(matches) < len(paths))
-				return &result, nil
-			}
-		}
-
-		// 默认返回空结果
-		result := protocol.NewCompletionResult([]string{}, false)
-		return &result, nil
-	})
 
 	go func() {
 		<-sigChan
@@ -311,20 +280,17 @@ func main() {
 	log.Println("")
 	log.Println("功能列表:")
 	log.Println("  ✓ 基础工具 (greet)")
-	log.Println("  ✓ 带元数据和标题的工具 (calculate)")
-	log.Println("  ✓ 带输出 Schema 的工具 (get_time)")
+	log.Println("  ✓ 计算器工具 (calculate)")
+	log.Println("  ✓ 时间工具 (get_time)")
 	log.Println("  ✓ 基础资源 (info://server)")
-	log.Println("  ✓ 带元数据的资源 (config://app)")
+	log.Println("  ✓ JSON 配置资源 (config://app)")
 	log.Println("  ✓ 资源模板 (echo:///{message})")
-	log.Println("  ✓ 提示模板 - 带标题 (code_review)")
-	log.Println("  ✓ 交互式工具 - Elicitation (interactive_greet)")
-	log.Println("  ✓ AI 工具 - Sampling (ai_assistant)")
-	log.Println("  ✓ 资源链接工具 - Resource Links (find_file)")
-	log.Println("  ✓ 参数自动补全 - Completion (code_review.language, resource paths)")
+	log.Println("  ✓ 提示模板 (code_review)")
+	log.Println("  ✓ 资源链接工具 (find_file)")
 	log.Println("========================================")
 	log.Println("等待客户端连接...")
 
-	if err := stdioServer.Serve(ctx); err != nil && err != context.Canceled {
+	if err := mcpServer.Run(ctx, &stdio.StdioTransport{}); err != nil && err != context.Canceled {
 		log.Fatalf("服务器错误: %v", err)
 	}
 
