@@ -30,6 +30,7 @@ const (
 
 // CreateMessageRequest 创建消息请求 (服务器发起的LLM采样)
 type CreateMessageRequest struct {
+	Meta             map[string]any         `json:"_meta,omitempty"`
 	Messages         []SamplingMessage      `json:"messages"`
 	ModelPreferences *ModelPreferences      `json:"modelPreferences,omitempty"`
 	SystemPrompt     string                 `json:"systemPrompt,omitempty"`
@@ -40,6 +41,9 @@ type CreateMessageRequest struct {
 	Metadata         map[string]interface{} `json:"metadata,omitempty"`
 }
 
+// CreateMessageParams 是 CreateMessageRequest 的别名,用于保持一致性
+type CreateMessageParams = CreateMessageRequest
+
 type StopReason string
 
 const (
@@ -49,7 +53,6 @@ const (
 	StopReasonToolUse      StopReason = "toolUse"
 )
 
-// CreateMessageResult 创建消息结果
 type CreateMessageResult struct {
 	Role       Role       `json:"role"`
 	Content    Content    `json:"content"`

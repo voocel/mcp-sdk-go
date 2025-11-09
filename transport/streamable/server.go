@@ -1,0 +1,331 @@
+package streamable
+
+import (
+	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/voocel/mcp-sdk-go/protocol"
+	"github.com/voocel/mcp-sdk-go/server"
+)
+
+const (
+	MCPProtocolVersionHeader = "MCP-Protocol-Version"
+	MCPSessionIDHeader       = "Mcp-Session-Id"
+	DefaultProtocolVersion   = "2025-06-18"
+)
+
+type HTTPHandler struct {
+	serverFactory   func(*http.Request) *server.Server
+	protocolVersion string
+
+	mu       sync.RWMutex
+	sessions map[string]*sessionInfo
+}
+
+type sessionInfo struct {
+	server     *server.Server
+	transport  *StreamableTransport
+	lastActive time.Time
+}
+
+func NewHTTPHandler(serverFactory func(*http.Request) *server.Server) *HTTPHandler {
+	h := &HTTPHandler{
+		serverFactory:   serverFactory,
+		protocolVersion: DefaultProtocolVersion,
+		sessions:        make(map[string]*sessionInfo),
+	}
+
+	// 启动会话清理
+	go h.cleanupSessions()
+
+	return h
+}
+
+func (h *HTTPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set(MCPProtocolVersionHeader, h.protocolVersion)
+
+	if err := h.validateProtocolVersion(r); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	switch r.Method {
+	case http.MethodPost:
+		h.handlePost(w, r)
+	case http.MethodGet:
+		h.handleGet(w, r)
+	case http.MethodDelete:
+		h.handleDelete(w, r)
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func (h *HTTPHandler) handlePost(w http.ResponseWriter, r *http.Request) {
+	contentType := r.Header.Get("Content-Type")
+	if !strings.Contains(contentType, "application/json") {
+		http.Error(w, "Invalid content type: must be 'application/json'", http.StatusBadRequest)
+		return
+	}
+
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, "Failed to read request body", http.StatusBadRequest)
+		return
+	}
+	defer r.Body.Close()
+
+	var msg protocol.JSONRPCMessage
+	if err := json.Unmarshal(body, &msg); err != nil {
+		http.Error(w, "Invalid JSON-RPC message", http.StatusBadRequest)
+		return
+	}
+
+	isRequest := msg.ID != nil && msg.Method != ""
+	isNotification := msg.ID == nil && msg.Method != ""
+	isInitialize := msg.Method == protocol.MethodInitialize
+
+	sessionID := r.Header.Get(MCPSessionIDHeader)
+
+	if isInitialize {
+		if sessionID != "" {
+			http.Error(w, "Initialize request must not include session ID", http.StatusBadRequest)
+			return
+		}
+		sessionID = NewSessionID()
+	} else {
+		if sessionID == "" {
+			http.Error(w, "Missing session ID", http.StatusBadRequest)
+			return
+		}
+	}
+
+	h.mu.Lock()
+	info, exists := h.sessions[sessionID]
+
+	if !exists {
+		if !isInitialize {
+			h.mu.Unlock()
+			http.Error(w, "Session not found", http.StatusNotFound)
+			return
+		}
+
+		// 创建新会话
+		mcpServer := h.serverFactory(r)
+		transport := NewStreamableTransport(sessionID)
+
+		// 注意:不调用 Connect,因为 Streamable HTTP 不需要长期运行的连接
+		// 我们直接创建 session 对象
+		info = &sessionInfo{
+			server:     mcpServer,
+			transport:  transport,
+			lastActive: time.Now(),
+		}
+		h.sessions[sessionID] = info
+	}
+	info.lastActive = time.Now()
+	h.mu.Unlock()
+
+	// 如果是 notification,直接处理并返回 202 Accepted
+	if isNotification {
+		// Notification 不需要响应,直接处理
+		_, _ = info.server.HandleMessage(r.Context(), &msg)
+		w.WriteHeader(http.StatusAccepted)
+		return
+	}
+
+	// 如果是 request,需要等待响应
+	if isRequest {
+		// 创建一个 stream 来跟踪这个请求
+		streamID := NewSessionID()
+		requests := make(map[string]struct{})
+		requests[msg.GetIDString()] = struct{}{}
+
+		done := make(chan struct{})
+		var responseData []byte
+
+		deliver := func(data []byte, final bool) error {
+			responseData = data
+			if final {
+				close(done)
+			}
+			return nil
+		}
+
+		// 注册 stream
+		info.transport.RegisterStream(streamID, requests, deliver)
+		defer info.transport.UnregisterStream(streamID)
+
+		// 直接处理消息,因为 Streamable HTTP 每个请求都是独立的
+		response, err := info.server.HandleMessage(r.Context(), &msg)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("HandleMessage failed: %v", err), http.StatusInternalServerError)
+			return
+		}
+
+		// 如果有响应,通过 Write 发送
+		if response != nil {
+			conn := &streamableConn{transport: info.transport}
+			if err := conn.Write(r.Context(), response); err != nil {
+				http.Error(w, fmt.Sprintf("Failed to write response: %v", err), http.StatusInternalServerError)
+				return
+			}
+		}
+
+		// 等待响应
+		ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+		defer cancel()
+
+		select {
+		case <-done:
+			// 返回 JSON 响应
+			w.Header().Set("Content-Type", "application/json")
+			if isInitialize {
+				w.Header().Set(MCPSessionIDHeader, sessionID)
+			}
+			w.WriteHeader(http.StatusOK)
+			w.Write(responseData)
+
+		case <-ctx.Done():
+			http.Error(w, "Request timeout", http.StatusRequestTimeout)
+		}
+	}
+}
+
+// handleGet 处理GET请求 (接收SSE流)
+func (h *HTTPHandler) handleGet(w http.ResponseWriter, r *http.Request) {
+	sessionID := r.Header.Get(MCPSessionIDHeader)
+	if sessionID == "" {
+		http.Error(w, "Method not allowed without session", http.StatusMethodNotAllowed)
+		return
+	}
+
+	h.mu.RLock()
+	info, exists := h.sessions[sessionID]
+	h.mu.RUnlock()
+
+	if !exists {
+		http.Error(w, "Session not found", http.StatusNotFound)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.WriteHeader(http.StatusOK)
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "Streaming unsupported", http.StatusInternalServerError)
+		return
+	}
+	flusher.Flush()
+
+	// 为 standalone SSE stream 设置 deliver 回调
+	done := make(chan struct{})
+
+	info.transport.streamsMu.Lock()
+	standaloneStream := info.transport.streams[""]
+	if standaloneStream != nil {
+		standaloneStream.mu.Lock()
+		standaloneStream.deliver = func(data []byte, final bool) error {
+			if err := r.Context().Err(); err != nil {
+				return err
+			}
+			fmt.Fprintf(w, "event: message\ndata: %s\n\n", data)
+			flusher.Flush()
+			return nil
+		}
+		standaloneStream.mu.Unlock()
+	}
+	info.transport.streamsMu.Unlock()
+
+	defer func() {
+		if standaloneStream != nil {
+			standaloneStream.mu.Lock()
+			standaloneStream.deliver = nil
+			standaloneStream.mu.Unlock()
+		}
+	}()
+
+	// 保持连接直到客户端断开
+	select {
+	case <-done:
+	case <-r.Context().Done():
+	}
+}
+
+// handleDelete 处理DELETE请求 (关闭会话)
+func (h *HTTPHandler) handleDelete(w http.ResponseWriter, r *http.Request) {
+	sessionID := r.Header.Get(MCPSessionIDHeader)
+	if sessionID == "" {
+		http.Error(w, "Missing session ID", http.StatusBadRequest)
+		return
+	}
+
+	h.mu.Lock()
+	info, exists := h.sessions[sessionID]
+	if exists {
+		if info.transport != nil {
+			info.transport.Close()
+		}
+		delete(h.sessions, sessionID)
+	}
+	h.mu.Unlock()
+
+	w.WriteHeader(http.StatusOK)
+}
+
+func (h *HTTPHandler) validateProtocolVersion(r *http.Request) error {
+	clientVersion := r.Header.Get(MCPProtocolVersionHeader)
+	if clientVersion == "" {
+		return nil
+	}
+
+	supportedVersions := []string{
+		"2025-06-18",
+		"2025-03-26",
+		"2024-11-05",
+	}
+
+	for _, version := range supportedVersions {
+		if clientVersion == version {
+			return nil
+		}
+	}
+
+	return fmt.Errorf("unsupported protocol version: %s", clientVersion)
+}
+
+func (h *HTTPHandler) cleanupSessions() {
+	ticker := time.NewTicker(5 * time.Minute)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		h.mu.Lock()
+		now := time.Now()
+		for id, info := range h.sessions {
+			if now.Sub(info.lastActive) > 30*time.Minute {
+				if info.transport != nil {
+					info.transport.Close()
+				}
+				delete(h.sessions, id)
+			}
+		}
+		h.mu.Unlock()
+	}
+}
+
+func NewSessionID() string {
+	b := make([]byte, 16)
+	rand.Read(b)
+	return hex.EncodeToString(b)
+}

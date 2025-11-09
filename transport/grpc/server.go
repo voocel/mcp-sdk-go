@@ -12,36 +12,31 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/reflection"
 
-	"github.com/voocel/mcp-sdk-go/transport"
+	"github.com/voocel/mcp-sdk-go/protocol"
 	pb "github.com/voocel/mcp-sdk-go/transport/grpc/proto"
 )
 
+type Handler interface {
+	HandleMessage(ctx context.Context, msg *protocol.JSONRPCMessage) (*protocol.JSONRPCMessage, error)
+}
+
 type MCPServiceServer struct {
 	pb.UnimplementedMCPServiceServer
-	handler transport.Handler
+	handler Handler
 }
 
 func (s *MCPServiceServer) ProcessMessage(ctx context.Context, req *pb.Request) (*pb.Response, error) {
-	message := map[string]interface{}{
-		"id":        req.Id,
-		"method":    req.Method,
-		"timestamp": time.Unix(0, req.Timestamp),
+	msg := &protocol.JSONRPCMessage{
+		JSONRPC: "2.0",
+		ID:      json.RawMessage(fmt.Sprintf(`"%s"`, req.Id)),
+		Method:  req.Method,
 	}
 
 	if req.Params != nil {
-		var params interface{}
-		if err := json.Unmarshal(req.Params, &params); err != nil {
-			return nil, fmt.Errorf("invalid parameters: %w", err)
-		}
-		message["params"] = params
+		msg.Params = req.Params
 	}
 
-	data, err := json.Marshal(message)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal message: %w", err)
-	}
-
-	responseData, err := s.handler.HandleMessage(ctx, data)
+	response, err := s.handler.HandleMessage(ctx, msg)
 	if err != nil {
 		return &pb.Response{
 			Id:        req.Id,
@@ -53,17 +48,36 @@ func (s *MCPServiceServer) ProcessMessage(ctx context.Context, req *pb.Request) 
 		}, nil
 	}
 
-	var response map[string]interface{}
-	if err := json.Unmarshal(responseData, &response); err != nil {
+	if response == nil {
+		return &pb.Response{
+			Id:        req.Id,
+			Timestamp: time.Now().UnixNano(),
+		}, nil
+	}
+
+	responseData, err := json.Marshal(response)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal response: %w", err)
+	}
+
+	var responseMap map[string]interface{}
+	if err := json.Unmarshal(responseData, &responseMap); err != nil {
 		return nil, fmt.Errorf("invalid response format: %w", err)
 	}
 
+	var idStr string
+	if id, ok := responseMap["id"]; ok {
+		idStr = fmt.Sprintf("%v", id)
+	} else {
+		idStr = req.Id
+	}
+
 	resp := &pb.Response{
-		Id:        response["id"].(string),
+		Id:        idStr,
 		Timestamp: time.Now().UnixNano(),
 	}
 
-	if errObj, ok := response["error"]; ok {
+	if errObj, ok := responseMap["error"]; ok {
 		errMap := errObj.(map[string]interface{})
 		resp.Error = &pb.Error{
 			Code:    int32(errMap["code"].(float64)),
@@ -73,7 +87,7 @@ func (s *MCPServiceServer) ProcessMessage(ctx context.Context, req *pb.Request) 
 			dataBytes, _ := json.Marshal(data)
 			resp.Error.Data = dataBytes
 		}
-	} else if result, ok := response["result"]; ok {
+	} else if result, ok := responseMap["result"]; ok {
 		resultBytes, _ := json.Marshal(result)
 		resp.Result = resultBytes
 	}
@@ -109,14 +123,14 @@ func (s *MCPServiceServer) StreamMessages(stream pb.MCPService_StreamMessagesSer
 }
 
 type Server struct {
-	handler    transport.Handler
+	handler    Handler
 	grpcServer *grpc.Server
 	addr       string
 	mu         sync.Mutex
 	started    bool
 }
 
-func NewServer(addr string, handler transport.Handler) *Server {
+func NewServer(addr string, handler Handler) *Server {
 	return &Server{
 		handler: handler,
 		addr:    addr,

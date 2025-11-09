@@ -325,11 +325,38 @@ type InitializeRequest struct {
 	ClientInfo      ClientInfo         `json:"clientInfo"`
 }
 
+// InitializeParams initialize 请求参数
+type InitializeParams struct {
+	Meta            map[string]any     `json:"_meta,omitempty"`
+	ProtocolVersion string             `json:"protocolVersion"`
+	Capabilities    ClientCapabilities `json:"capabilities"`
+	ClientInfo      ClientInfo         `json:"clientInfo"`
+}
+
+// InitializeResult initialize 响应
 type InitializeResult struct {
 	ProtocolVersion string             `json:"protocolVersion"`
 	Capabilities    ServerCapabilities `json:"capabilities"`
 	ServerInfo      ServerInfo         `json:"serverInfo"`
 	Instructions    string             `json:"instructions,omitempty"`
+}
+
+type InitializedParams struct {
+	Meta map[string]any `json:"_meta,omitempty"`
+}
+
+type EmptyResult struct{}
+
+type ToolListChangedParams struct {
+	Meta map[string]any `json:"_meta,omitempty"`
+}
+
+type ResourceListChangedParams struct {
+	Meta map[string]any `json:"_meta,omitempty"`
+}
+
+type PromptListChangedParams struct {
+	Meta map[string]any `json:"_meta,omitempty"`
 }
 
 type JSONSchema map[string]interface{}

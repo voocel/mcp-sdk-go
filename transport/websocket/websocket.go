@@ -9,8 +9,12 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
-	"github.com/voocel/mcp-sdk-go/transport"
+	"github.com/voocel/mcp-sdk-go/protocol"
 )
+
+type Handler interface {
+	HandleMessage(ctx context.Context, msg *protocol.JSONRPCMessage) (*protocol.JSONRPCMessage, error)
+}
 
 type Transport struct {
 	url            string
@@ -161,13 +165,13 @@ var upgrader = websocket.Upgrader{
 }
 
 type Server struct {
-	handler    transport.Handler
+	handler    Handler
 	httpServer *http.Server
 	clients    map[*websocket.Conn]bool
 	mu         sync.RWMutex
 }
 
-func NewServer(addr string, handler transport.Handler) *Server {
+func NewServer(addr string, handler Handler) *Server {
 	s := &Server{
 		handler: handler,
 		clients: make(map[*websocket.Conn]bool),
@@ -209,17 +213,31 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 
-		response, err := s.handler.HandleMessage(ctx, message)
-		if err != nil {
-			errorResp := struct {
-				Error string `json:"error"`
-			}{
-				Error: err.Error(),
-			}
-			response, _ = json.Marshal(errorResp)
+		var msg protocol.JSONRPCMessage
+		if err := json.Unmarshal(message, &msg); err != nil {
+			continue
 		}
-		if err := conn.WriteMessage(websocket.TextMessage, response); err != nil {
-			break
+
+		response, err := s.handler.HandleMessage(ctx, &msg)
+		if err != nil {
+			errorResp := protocol.JSONRPCMessage{
+				JSONRPC: "2.0",
+				ID:      msg.ID,
+				Error: &protocol.JSONRPCError{
+					Code:    protocol.InternalError,
+					Message: err.Error(),
+				},
+			}
+			response = &errorResp
+		}
+
+		if response != nil {
+			responseData, err := json.Marshal(response)
+			if err == nil {
+				if err := conn.WriteMessage(websocket.TextMessage, responseData); err != nil {
+					break
+				}
+			}
 		}
 	}
 }

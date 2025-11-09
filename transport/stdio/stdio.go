@@ -7,220 +7,103 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"sync"
+	"sync/atomic"
 
+	"github.com/voocel/mcp-sdk-go/protocol"
 	"github.com/voocel/mcp-sdk-go/transport"
 )
 
-type Transport struct {
-	cmd     *exec.Cmd
-	stdin   io.WriteCloser
-	stdout  io.ReadCloser
-	stderr  io.ReadCloser
+type StdioTransport struct{}
+
+func (*StdioTransport) Connect(ctx context.Context) (transport.Connection, error) {
+	return newStdioConn(), nil
+}
+
+type stdioConn struct {
 	scanner *bufio.Scanner
 	mu      sync.Mutex
-	closed  bool
+	closed  atomic.Bool
 }
 
-func NewWithCommand(command string, args []string) (*Transport, error) {
-	return NewWithCommandAndEnv(command, args, nil)
-}
-
-func NewWithCommandAndEnv(command string, args []string, env []string) (*Transport, error) {
-	return NewWithCommandEnvAndDir(command, args, env, "")
-}
-
-func NewWithCommandEnvAndDir(command string, args []string, env []string, dir string) (*Transport, error) {
-	cmd := exec.Command(command, args...)
-
-	// 继承父进程的环境变量
-	cmd.Env = os.Environ()
-
-	// 添加额外的环境变量
-	if len(env) > 0 {
-		cmd.Env = append(cmd.Env, env...)
-	}
-
-	// 设置工作目录
-	if dir != "" {
-		cmd.Dir = dir
-	}
-
-	stdin, err := cmd.StdinPipe()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get stdin pipe: %w", err)
-	}
-
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get stdout pipe: %w", err)
-	}
-
-	stderr, err := cmd.StderrPipe()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get stderr pipe: %w", err)
-	}
-
-	if err := cmd.Start(); err != nil {
-		return nil, fmt.Errorf("failed to start command: %w", err)
-	}
-
-	return &Transport{
-		cmd:     cmd,
-		stdin:   stdin,
-		stdout:  stdout,
-		stderr:  stderr,
-		scanner: bufio.NewScanner(stdout),
-	}, nil
-}
-
-func NewWithStdio() *Transport {
-	return &Transport{
-		cmd:     nil,
-		stdin:   os.Stdout, // 服务器写入到 stdout
-		stdout:  os.Stdin,  // 服务器从 stdin 读取
+func newStdioConn() *stdioConn {
+	return &stdioConn{
 		scanner: bufio.NewScanner(os.Stdin),
 	}
 }
 
-func (t *Transport) Send(ctx context.Context, data []byte) error {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-
-	if t.closed {
-		return fmt.Errorf("transport is closed")
+func (c *stdioConn) Read(ctx context.Context) (*protocol.JSONRPCMessage, error) {
+	if c.closed.Load() {
+		return nil, transport.ErrConnectionClosed
 	}
 
-	_, err := fmt.Fprintf(t.stdin, "%s\n", data)
-	return err
-}
-
-func (t *Transport) Receive(ctx context.Context) ([]byte, error) {
-	done := make(chan struct{})
-	var data []byte
-	var scanErr error
+	msgChan := make(chan *protocol.JSONRPCMessage, 1)
+	errChan := make(chan error, 1)
 
 	go func() {
-		defer close(done)
-		if t.scanner.Scan() {
-			data = []byte(t.scanner.Text())
-		} else {
-			scanErr = t.scanner.Err()
-			if scanErr == nil {
-				scanErr = io.EOF
+		if !c.scanner.Scan() {
+			if err := c.scanner.Err(); err != nil {
+				errChan <- fmt.Errorf("scanner error: %w", err)
+			} else {
+				errChan <- io.EOF
 			}
+			return
 		}
+
+		data := c.scanner.Bytes()
+		if len(data) == 0 {
+			errChan <- fmt.Errorf("empty message")
+			return
+		}
+
+		var msg protocol.JSONRPCMessage
+		if err := json.Unmarshal(data, &msg); err != nil {
+			errChan <- fmt.Errorf("invalid JSON-RPC message: %w", err)
+			return
+		}
+
+		msgChan <- &msg
 	}()
 
 	select {
 	case <-ctx.Done():
 		return nil, ctx.Err()
-	case <-done:
-		return data, scanErr
+	case err := <-errChan:
+		return nil, err
+	case msg := <-msgChan:
+		return msg, nil
 	}
 }
 
-func (t *Transport) Close() error {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-
-	if t.closed {
-		return nil
-	}
-	t.closed = true
-
-	var errs []error
-
-	if t.stdin != nil {
-		if err := t.stdin.Close(); err != nil {
-			errs = append(errs, fmt.Errorf("failed to close stdin: %w", err))
-		}
-	}
-	if t.stdout != nil {
-		if err := t.stdout.Close(); err != nil {
-			errs = append(errs, fmt.Errorf("failed to close stdout: %w", err))
-		}
-	}
-	if t.stderr != nil {
-		if err := t.stderr.Close(); err != nil {
-			errs = append(errs, fmt.Errorf("failed to close stderr: %w", err))
-		}
-	}
-	if t.cmd != nil {
-		if err := t.cmd.Wait(); err != nil {
-			errs = append(errs, fmt.Errorf("command wait failed: %w", err))
-		}
+func (c *stdioConn) Write(ctx context.Context, msg *protocol.JSONRPCMessage) error {
+	if c.closed.Load() {
+		return transport.ErrConnectionClosed
 	}
 
-	if len(errs) > 0 {
-		return fmt.Errorf("close errors: %v", errs)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	data, err := json.Marshal(msg)
+	if err != nil {
+		return fmt.Errorf("failed to marshal message: %w", err)
 	}
+
+	if _, err := os.Stdout.Write(data); err != nil {
+		return fmt.Errorf("failed to write message: %w", err)
+	}
+
+	if _, err := os.Stdout.Write([]byte("\n")); err != nil {
+		return fmt.Errorf("failed to write newline: %w", err)
+	}
+
 	return nil
 }
 
-func (t *Transport) Stderr() io.ReadCloser {
-	return t.stderr
-}
-
-type Server struct {
-	handler transport.Handler
-}
-
-func NewServer(handler transport.Handler) *Server {
-	return &Server{
-		handler: handler,
-	}
-}
-
-func (s *Server) Serve(ctx context.Context) error {
-	t := NewWithStdio()
-	defer t.Close()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
-			data, err := t.Receive(ctx)
-			if err != nil {
-				if err == io.EOF {
-					return nil
-				}
-				return err
-			}
-
-			response, err := s.handler.HandleMessage(ctx, data)
-			if err != nil {
-				// 如果处理出错但没有响应，尝试解析原始消息获取 ID
-				if response == nil {
-					var msg map[string]interface{}
-					if json.Unmarshal(data, &msg) == nil {
-						if id, ok := msg["id"]; ok {
-							// 创建标准 JSON-RPC 错误响应
-							errorResp := map[string]interface{}{
-								"jsonrpc": "2.0",
-								"id":      id,
-								"error": map[string]interface{}{
-									"code":    -32603, // Internal error
-									"message": err.Error(),
-								},
-							}
-							response, _ = json.Marshal(errorResp)
-						}
-					}
-				}
-			}
-
-			if response != nil {
-				if err := t.Send(ctx, response); err != nil {
-					return err
-				}
-			}
-		}
-	}
-}
-
-func (s *Server) Shutdown(ctx context.Context) error {
+func (c *stdioConn) Close() error {
+	c.closed.Store(true)
 	return nil
+}
+
+func (c *stdioConn) SessionID() string {
+	return ""
 }

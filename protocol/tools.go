@@ -29,6 +29,7 @@ type ToolList struct {
 }
 
 type CallToolParams struct {
+	Meta      map[string]any `json:"_meta,omitempty"`
 	Name      string         `json:"name"`
 	Arguments map[string]any `json:"arguments"`
 }

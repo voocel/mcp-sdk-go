@@ -27,3 +27,19 @@ type CancelledNotificationParams struct {
 	Reason string `json:"reason,omitempty"`
 }
 
+// ResourceTemplateListChangedParams 资源模板列表变更通知参数
+type ResourceTemplateListChangedParams struct {
+	Meta map[string]any `json:"_meta,omitempty"`
+}
+
+// RootsListChangedParams 根目录列表变更通知参数
+type RootsListChangedParams struct {
+	Meta map[string]any `json:"_meta,omitempty"`
+}
+
+// ResourceUpdatedParams 资源更新通知参数
+type ResourceUpdatedParams struct {
+	Meta map[string]any `json:"_meta,omitempty"`
+	// 更新的资源 URI
+	URI string `json:"uri"`
+}

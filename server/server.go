@@ -7,509 +7,475 @@ import (
 	"sync"
 
 	"github.com/voocel/mcp-sdk-go/protocol"
-	"github.com/voocel/mcp-sdk-go/utils"
+	"github.com/voocel/mcp-sdk-go/transport"
 )
 
-type Server interface {
-	RegisterTool(name, description string, inputSchema protocol.JSONSchema, handler ToolHandler) error
-	UnregisterTool(name string) error
+// Server MCP服务器实例, 可以服务一个或多个 MCP 会话
+type Server struct {
+	impl *protocol.ServerInfo
+	opts ServerOptions
 
-	RegisterResource(uri, name, description, mimeType string, handler ResourceHandler) error
-	UnregisterResource(uri string) error
-
-	RegisterPrompt(name, description string, arguments []protocol.PromptArgument, handler PromptHandler) error
-	UnregisterPrompt(name string) error
-
-	GetServerInfo() protocol.ServerInfo
-	GetCapabilities() protocol.ServerCapabilities
-
-	HandleMessage(ctx context.Context, message *protocol.JSONRPCMessage) (*protocol.JSONRPCMessage, error)
-	SendNotification(method string, params interface{}) error
-
-	RequestRootsList(ctx context.Context) (*protocol.ListRootsResult, error)
+	mu                    sync.Mutex
+	tools                 map[string]*serverTool
+	resources             map[string]*serverResource
+	resourceTemplates     map[string]*serverResourceTemplate
+	prompts               map[string]*serverPrompt
+	sessions              []*ServerSession
+	resourceSubscriptions map[string]map[*ServerSession]bool // uri -> session -> bool
 }
 
-type ToolHandler func(ctx context.Context, arguments map[string]interface{}) (*protocol.CallToolResult, error)
-type ResourceHandler func(ctx context.Context) (*protocol.ReadResourceResult, error)
-type PromptHandler func(ctx context.Context, arguments map[string]string) (*protocol.GetPromptResult, error)
-type CompletionHandler func(ctx context.Context, ref protocol.CompletionReference, argument protocol.CompletionArgument, context *protocol.CompletionContext) (*protocol.CompletionResult, error)
+type ServerOptions struct {
+	// 可选的客户端指令
+	Instructions string
 
-type ToolHandlerWithElicitation func(ctx *MCPContext, arguments map[string]interface{}) (*protocol.CallToolResult, error)
-type ResourceHandlerWithElicitation func(ctx *MCPContext) (*protocol.ReadResourceResult, error)
-type PromptHandlerWithElicitation func(ctx *MCPContext, arguments map[string]string) (*protocol.GetPromptResult, error)
+	// 初始化处理函数
+	InitializedHandler func(context.Context, *ServerSession)
 
-type MCPServer struct {
-	serverInfo   protocol.ServerInfo
-	capabilities protocol.ServerCapabilities
+	// 进度通知处理函数
+	ProgressNotificationHandler func(context.Context, *ServerSession, *protocol.ProgressNotificationParams)
 
-	tools             map[string]*ToolRegistration
-	resources         map[string]*ResourceRegistration
-	resourceTemplates map[string]*ResourceTemplateRegistration
-	prompts           map[string]*PromptRegistration
-	completionHandler CompletionHandler // MCP 2025-06-18: 参数自动补全
+	// 补全处理函数
+	CompletionHandler func(context.Context, *protocol.CompleteRequest) (*protocol.CompleteResult, error)
 
-	// 资源订阅管理
-	resourceSubscriptions map[string]map[string]bool // uri -> set of session IDs
+	// 日志级别设置处理函数
+	LoggingSetLevelHandler func(context.Context, *ServerSession, protocol.LoggingLevel) error
 
-	// 日志管理
-	loggingLevel protocol.LoggingLevel // 当前日志级别
-
-	initialized bool
-	clientInfo  *protocol.ClientInfo
-
-	notificationHandler func(method string, params interface{}) error
-	elicitor            Elicitor
-
-	// requestSender Send a request to the client (such as a roots list request)
-	requestSender func(ctx context.Context, method string, params interface{}) (*protocol.JSONRPCMessage, error)
-
-	mu sync.RWMutex
+	// 资源订阅/取消订阅处理函数
+	SubscribeHandler   func(context.Context, *protocol.SubscribeParams) error
+	UnsubscribeHandler func(context.Context, *protocol.UnsubscribeParams) error
 }
 
-type ToolRegistration struct {
-	Tool    protocol.Tool
-	Handler ToolHandler
+type serverTool struct {
+	tool    *protocol.Tool
+	handler ToolHandler
 }
 
-type ResourceRegistration struct {
-	Resource protocol.Resource
-	Handler  ResourceHandler
+type serverResource struct {
+	resource *protocol.Resource
+	handler  ResourceHandler
 }
 
-type ResourceTemplateRegistration struct {
-	Template protocol.ResourceTemplate
+type serverResourceTemplate struct {
+	template *protocol.ResourceTemplate
+	handler  ResourceHandler
 }
 
-type PromptRegistration struct {
-	Prompt  protocol.Prompt
-	Handler PromptHandler
+type serverPrompt struct {
+	prompt  *protocol.Prompt
+	handler PromptHandler
 }
 
-// NewServer creates MCP server
-func NewServer(name, version string) *MCPServer {
-	return &MCPServer{
-		serverInfo: protocol.ServerInfo{
-			Name:    name,
-			Version: version,
-		},
-		capabilities: protocol.ServerCapabilities{
-			Tools:     &protocol.ToolsCapability{ListChanged: true},
-			Resources: &protocol.ResourcesCapability{ListChanged: true, Subscribe: true, Templates: true},
-			Prompts:   &protocol.PromptsCapability{ListChanged: true},
-			Logging:   &protocol.LoggingCapability{}, // 支持日志功能
-		},
-		tools:                 make(map[string]*ToolRegistration),
-		resources:             make(map[string]*ResourceRegistration),
-		resourceTemplates:     make(map[string]*ResourceTemplateRegistration),
-		prompts:               make(map[string]*PromptRegistration),
-		resourceSubscriptions: make(map[string]map[string]bool),
-		loggingLevel:          protocol.LogLevelInfo, // 默认日志级别为 info
+type ResourceHandler func(ctx context.Context, req *ReadResourceRequest) (*protocol.ReadResourceResult, error)
+type PromptHandler func(ctx context.Context, req *GetPromptRequest) (*protocol.GetPromptResult, error)
+
+type ReadResourceRequest struct {
+	Session *ServerSession
+	Params  *protocol.ReadResourceParams
+}
+
+type GetPromptRequest struct {
+	Session *ServerSession
+	Params  *protocol.GetPromptParams
+}
+
+func NewServer(impl *protocol.ServerInfo, opts *ServerOptions) *Server {
+	s := &Server{
+		impl:                  impl,
+		tools:                 make(map[string]*serverTool),
+		resources:             make(map[string]*serverResource),
+		resourceTemplates:     make(map[string]*serverResourceTemplate),
+		prompts:               make(map[string]*serverPrompt),
+		sessions:              make([]*ServerSession, 0),
+		resourceSubscriptions: make(map[string]map[*ServerSession]bool),
 	}
+	if opts != nil {
+		s.opts = *opts
+	}
+	return s
 }
 
-// ToolOptions tool registration options
-type ToolOptions struct {
-	Title        string              // optional human-friendly title (MCP 2025-06-18)
-	OutputSchema protocol.JSONSchema // optional output schema (MCP 2025-06-18)
-	Meta         map[string]any      // optional metadata (MCP 2025-06-18)
-}
+func (s *Server) AddTool(t *protocol.Tool, h ToolHandler) {
+	if t.InputSchema == nil {
+		panic(fmt.Errorf("AddTool %q: missing input schema", t.Name))
+	}
 
-// RegisterTool registers tool with optional output schema support
-func (s *MCPServer) RegisterTool(name, description string, inputSchema protocol.JSONSchema, handler ToolHandler, opts ...ToolOptions) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	var title string
-	var outputSchema protocol.JSONSchema
-	var meta map[string]any
-	if len(opts) > 0 {
-		if opts[0].Title != "" {
-			title = opts[0].Title
-		}
-		if len(opts[0].OutputSchema) > 0 {
-			outputSchema = opts[0].OutputSchema
-		}
-		if len(opts[0].Meta) > 0 {
-			meta = opts[0].Meta
-		}
+	s.tools[t.Name] = &serverTool{
+		tool:    t,
+		handler: h,
 	}
 
-	var tool protocol.Tool
-	if len(outputSchema) > 0 {
-		tool = protocol.NewToolWithOutput(name, description, inputSchema, outputSchema)
-	} else {
-		tool = protocol.NewTool(name, description, inputSchema)
-	}
-
-	if title != "" {
-		tool.Title = title
-	}
-
-	if len(meta) > 0 {
-		tool.Meta = meta
-	}
-
-	s.tools[name] = &ToolRegistration{
-		Tool:    tool,
-		Handler: handler,
-	}
-
-	// send change notification
-	if s.initialized {
-		go s.SendNotification("notifications/tools/list_changed", &protocol.ToolsListChangedNotification{})
-	}
-
-	return nil
+	// 通知所有会话工具列表已更改
+	s.notifyToolListChanged()
 }
 
-// UnregisterTool unregisters tool
-func (s *MCPServer) UnregisterTool(name string) error {
+func (s *Server) RemoveTool(name string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	delete(s.tools, name)
-
-	// send change notification
-	if s.initialized {
-		go s.SendNotification("notifications/tools/list_changed", &protocol.ToolsListChangedNotification{})
+	if _, exists := s.tools[name]; exists {
+		delete(s.tools, name)
+		s.notifyToolListChanged()
 	}
-
-	return nil
 }
 
-// RegisterResource registers resource
-func (s *MCPServer) RegisterResource(uri, name, description, mimeType string, handler ResourceHandler, meta ...map[string]any) error {
+func (s *Server) AddResource(r *protocol.Resource, h ResourceHandler) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	resource := protocol.NewResource(uri, name, description, mimeType)
-
-	if len(meta) > 0 && len(meta[0]) > 0 {
-		resource.Meta = meta[0]
+	s.resources[r.URI] = &serverResource{
+		resource: r,
+		handler:  h,
 	}
 
-	s.resources[uri] = &ResourceRegistration{
-		Resource: resource,
-		Handler:  handler,
-	}
-
-	// send change notification
-	if s.initialized {
-		go s.SendNotification("notifications/resources/list_changed", &protocol.ResourcesListChangedNotification{})
-	}
-
-	return nil
+	s.notifyResourceListChanged()
 }
 
-// RegisterResourceTemplate registers a resource template
-func (s *MCPServer) RegisterResourceTemplate(uriTemplate, name, description, mimeType string, meta ...map[string]any) error {
+func (s *Server) RemoveResource(uri string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	template := protocol.NewResourceTemplate(uriTemplate, name, description, mimeType)
-
-	if len(meta) > 0 && len(meta[0]) > 0 {
-		template.Meta = meta[0]
+	if _, exists := s.resources[uri]; exists {
+		delete(s.resources, uri)
+		s.notifyResourceListChanged()
 	}
-
-	s.resourceTemplates[uriTemplate] = &ResourceTemplateRegistration{
-		Template: template,
-	}
-
-	if s.initialized {
-		go s.SendNotification("notifications/resources/templates/list_changed", &protocol.ResourceTemplatesListChangedNotification{})
-	}
-
-	return nil
 }
 
-// UnregisterResourceTemplate unregisters a resource template
-func (s *MCPServer) UnregisterResourceTemplate(uriTemplate string) error {
+func (s *Server) AddResourceTemplate(t *protocol.ResourceTemplate, h ResourceHandler) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	delete(s.resourceTemplates, uriTemplate)
-
-	if s.initialized {
-		go s.SendNotification("notifications/resources/templates/list_changed", &protocol.ResourceTemplatesListChangedNotification{})
+	s.resourceTemplates[t.URITemplate] = &serverResourceTemplate{
+		template: t,
+		handler:  h,
 	}
 
-	return nil
+	s.notifyResourceTemplateListChanged()
 }
 
-// UnregisterResource unregisters resource
-func (s *MCPServer) UnregisterResource(uri string) error {
+func (s *Server) RemoveResourceTemplate(uriTemplate string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	delete(s.resources, uri)
-
-	// send change notification
-	if s.initialized {
-		go s.SendNotification("notifications/resources/list_changed", &protocol.ResourcesListChangedNotification{})
+	if _, exists := s.resourceTemplates[uriTemplate]; exists {
+		delete(s.resourceTemplates, uriTemplate)
+		s.notifyResourceTemplateListChanged()
 	}
-
-	return nil
 }
 
-// PromptOptions prompt registration options
-type PromptOptions struct {
-	Title string         // optional human-friendly title (MCP 2025-06-18)
-	Meta  map[string]any // optional metadata (MCP 2025-06-18)
-}
-
-// RegisterPrompt registers prompt template
-func (s *MCPServer) RegisterPrompt(name, description string, arguments []protocol.PromptArgument, handler PromptHandler, opts ...PromptOptions) error {
+func (s *Server) AddPrompt(p *protocol.Prompt, h PromptHandler) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	prompt := protocol.NewPrompt(name, description, arguments...)
-
-	if len(opts) > 0 {
-		if opts[0].Title != "" {
-			prompt.Title = opts[0].Title
-		}
-		if len(opts[0].Meta) > 0 {
-			prompt.Meta = opts[0].Meta
-		}
+	s.prompts[p.Name] = &serverPrompt{
+		prompt:  p,
+		handler: h,
 	}
 
-	s.prompts[name] = &PromptRegistration{
-		Prompt:  prompt,
-		Handler: handler,
-	}
-
-	// send change notification
-	if s.initialized {
-		go s.SendNotification("notifications/prompts/list_changed", &protocol.PromptsListChangedNotification{})
-	}
-
-	return nil
+	s.notifyPromptListChanged()
 }
 
-// UnregisterPrompt unregisters prompt template
-func (s *MCPServer) UnregisterPrompt(name string) error {
+func (s *Server) RemovePrompt(name string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	delete(s.prompts, name)
-
-	// send change notification
-	if s.initialized {
-		go s.SendNotification("notifications/prompts/list_changed", &protocol.PromptsListChangedNotification{})
-	}
-
-	return nil
-}
-
-// RegisterCompletionHandler registers completion handler (MCP 2025-06-18)
-func (s *MCPServer) RegisterCompletionHandler(handler CompletionHandler) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	s.completionHandler = handler
-
-	// 启用 completion 能力
-	if s.capabilities.Completion == nil {
-		s.capabilities.Completion = &protocol.CompletionCapability{}
+	if _, exists := s.prompts[name]; exists {
+		delete(s.prompts, name)
+		s.notifyPromptListChanged()
 	}
 }
 
-// UnregisterCompletionHandler unregisters completion handler
-func (s *MCPServer) UnregisterCompletionHandler() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	s.completionHandler = nil
-	s.capabilities.Completion = nil
-}
-
-// GetServerInfo gets server information
-func (s *MCPServer) GetServerInfo() protocol.ServerInfo {
-	return s.serverInfo
-}
-
-// GetCapabilities gets server capabilities
-func (s *MCPServer) GetCapabilities() protocol.ServerCapabilities {
-	return s.capabilities
-}
-
-// SetElicitor sets elicitation handler
-func (s *MCPServer) SetElicitor(elicitor Elicitor) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.elicitor = elicitor
-}
-
-// CreateMCPContext creates MCP context with elicitation support
-func (s *MCPServer) CreateMCPContext(ctx context.Context) *MCPContext {
-	return NewMCPContext(ctx, s, s.elicitor)
-}
-
-// SetNotificationHandler sets notification handler
-func (s *MCPServer) SetNotificationHandler(handler func(method string, params interface{}) error) {
-	s.notificationHandler = handler
-}
-
-// SetRequestSender sets request sender for server-initiated requests
-func (s *MCPServer) SetRequestSender(sender func(ctx context.Context, method string, params interface{}) (*protocol.JSONRPCMessage, error)) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.requestSender = sender
-}
-
-// SendNotification sends notification
-func (s *MCPServer) SendNotification(method string, params interface{}) error {
-	if s.notificationHandler != nil {
-		return s.notificationHandler(method, params)
-	}
-	return nil
-}
-
-func (s *MCPServer) NotifyProgress(progressToken any, progress, total float64, message string) error {
-	params := protocol.ProgressNotificationParams{
-		ProgressToken: progressToken,
-		Progress:      progress,
-		Total:         total,
-		Message:       message,
-	}
-	return s.SendNotification(protocol.NotificationProgress, params)
-}
-
-func (s *MCPServer) NotifyCancelled(requestID any, reason string) error {
-	params := protocol.CancelledNotificationParams{
-		RequestID: requestID,
-		Reason:    reason,
-	}
-	return s.SendNotification(protocol.NotificationCancelled, params)
-}
-
-// HandleMessage handles JSON-RPC messages
-func (s *MCPServer) HandleMessage(ctx context.Context, message *protocol.JSONRPCMessage) (*protocol.JSONRPCMessage, error) {
-	if err := utils.ValidateJSONRPCMessage(message); err != nil {
-		// if it's a notification message, don't return error response
-		if message.ID == nil {
-			return nil, err
-		}
-		return utils.NewJSONRPCError("", protocol.InvalidRequest, err.Error(), nil)
-	}
-
-	// handle request or notification
-	if message.Method != "" {
-		return s.handleRequest(ctx, message)
-	}
-
-	return nil, fmt.Errorf("unsupported message type")
-}
-
-// handle request
-func (s *MCPServer) handleRequest(ctx context.Context, request *protocol.JSONRPCMessage) (*protocol.JSONRPCMessage, error) {
-	var result interface{}
-	var err error
-
-	switch request.Method {
-	case protocol.MethodInitialize:
-		result, err = s.handleInitialize(ctx, request.Params)
-	case protocol.NotificationInitialized:
-		// handle initialization completed notification
-		err = s.handleInitialized(ctx, request.Params)
-		if err == nil {
-			return nil, nil // notification messages don't need response
-		}
-	case protocol.MethodToolsList:
-		result, err = s.handleListTools(ctx, request.Params)
-	case protocol.MethodToolsCall:
-		result, err = s.handleCallTool(ctx, request.Params)
-	case protocol.MethodResourcesList:
-		result, err = s.handleListResources(ctx, request.Params)
-	case protocol.MethodResourcesRead:
-		result, err = s.handleReadResource(ctx, request.Params)
-	case protocol.MethodResourcesTemplatesList:
-		result, err = s.handleListResourceTemplates(ctx, request.Params)
-	case protocol.MethodResourcesSubscribe:
-		result, err = s.handleSubscribe(ctx, request.Params)
-	case protocol.MethodResourcesUnsubscribe:
-		result, err = s.handleUnsubscribe(ctx, request.Params)
-	case protocol.MethodPromptsList:
-		result, err = s.handleListPrompts(ctx, request.Params)
-	case protocol.MethodPromptsGet:
-		result, err = s.handleGetPrompt(ctx, request.Params)
-	case protocol.MethodCompletionComplete:
-		result, err = s.handleComplete(ctx, request.Params)
-	case protocol.MethodPing:
-		result, err = s.handlePing(ctx, request.Params)
-	case protocol.MethodLoggingSetLevel:
-		result, err = s.handleSetLoggingLevel(ctx, request.Params)
-	default:
-		// for notification messages, don't return error response
-		if request.IsNotification() {
-			return nil, fmt.Errorf("unknown notification method: %s", request.Method)
-		}
-		return utils.NewJSONRPCError(request.GetIDString(), protocol.MethodNotFound,
-			fmt.Sprintf("method not found: %s", request.Method), nil)
-	}
-
-	// if it's a notification message, don't return response
-	if request.IsNotification() {
-		if err != nil {
-			// for notification message errors, only log, don't return response
-			return nil, err
-		}
-		return nil, nil
-	}
-
-	// for request messages, return response
+// Run 在给定的 transport 上运行服务器
+// 这是一个便捷方法,用于处理单个会话(或一次一个会话)
+//
+// Run 会阻塞直到客户端终止连接或提供的 context 被取消
+// 如果 context 被取消,Run 会关闭连接
+func (s *Server) Run(ctx context.Context, t transport.Transport) error {
+	ss, err := s.Connect(ctx, t, nil)
 	if err != nil {
-		return utils.NewJSONRPCError(request.GetIDString(), protocol.InternalError, err.Error(), nil)
+		return err
 	}
 
-	return utils.NewJSONRPCResponse(request.GetIDString(), result)
+	ssClosed := make(chan error)
+	go func() {
+		ssClosed <- ss.Wait()
+	}()
+
+	select {
+	case <-ctx.Done():
+		ss.Close()
+		<-ssClosed // 等待 goroutine 完成
+		return ctx.Err()
+	case err := <-ssClosed:
+		return err
+	}
 }
 
-// initialization request
-func (s *MCPServer) handleInitialize(ctx context.Context, params json.RawMessage) (*protocol.InitializeResult, error) {
-	var req protocol.InitializeRequest
-	if params != nil {
-		if err := json.Unmarshal(params, &req); err != nil {
-			return nil, fmt.Errorf("invalid initialize params: %w", err)
-		}
+// Connect 通过给定的 transport 连接 MCP 服务器并开始处理消息
+//
+// 它返回一个连接对象,可用于终止连接(使用 Close)或等待客户端终止(使用 Wait)
+func (s *Server) Connect(ctx context.Context, t transport.Transport, opts *ServerSessionOptions) (*ServerSession, error) {
+	conn, err := t.Connect(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("transport connect failed: %w", err)
 	}
 
-	// check protocol version compatibility and select appropriate version
-	if !protocol.IsVersionSupported(req.ProtocolVersion) {
-		return nil, fmt.Errorf("unsupported protocol version: %s, supported versions: %v",
-			req.ProtocolVersion, protocol.GetSupportedVersions())
+	ss := &ServerSession{
+		server:  s,
+		conn:    newConnAdapter(conn),
+		waitErr: make(chan error, 1),
 	}
 
-	// use the version requested by client
-	negotiatedVersion := req.ProtocolVersion
+	if opts != nil && opts.State != nil {
+		ss.state = *opts.State
+	}
+
+	if opts != nil && opts.onClose != nil {
+		ss.onClose = opts.onClose
+	}
 
 	s.mu.Lock()
-	s.initialized = true
-	s.clientInfo = &req.ClientInfo
+	s.sessions = append(s.sessions, ss)
 	s.mu.Unlock()
 
+	// 启动消息处理循环
+	go func() {
+		err := s.handleConnection(ctx, ss, conn)
+		ss.waitErr <- err
+		close(ss.waitErr)
+	}()
+
+	return ss, nil
+}
+
+// handleConnection 处理连接的消息循环
+func (s *Server) handleConnection(ctx context.Context, ss *ServerSession, conn transport.Connection) error {
+	defer func() {
+		s.disconnect(ss)
+		conn.Close()
+	}()
+
+	for {
+		msg, err := conn.Read(ctx)
+		if err != nil {
+			return err
+		}
+
+		response := s.handleMessage(ctx, ss, msg)
+		if response != nil {
+			if err := conn.Write(ctx, response); err != nil {
+				return err
+			}
+		}
+	}
+}
+
+// handleMessage 处理单个 JSON-RPC 消息
+func (s *Server) handleMessage(ctx context.Context, ss *ServerSession, msg *protocol.JSONRPCMessage) *protocol.JSONRPCMessage {
+	if msg.Method == "" {
+		return nil // 响应消息,不需要处理
+	}
+
+	if msg.ID != nil {
+		// 请求 - 需要响应
+		result, err := s.handleRequest(ctx, ss, msg.Method, msg.Params)
+		if err != nil {
+			return &protocol.JSONRPCMessage{
+				JSONRPC: "2.0",
+				ID:      msg.ID,
+				Error: &protocol.JSONRPCError{
+					Code:    -32603,
+					Message: err.Error(),
+				},
+			}
+		}
+
+		// 序列化结果
+		resultBytes, err := json.Marshal(result)
+		if err != nil {
+			return &protocol.JSONRPCMessage{
+				JSONRPC: "2.0",
+				ID:      msg.ID,
+				Error: &protocol.JSONRPCError{
+					Code:    -32603,
+					Message: fmt.Sprintf("failed to marshal result: %v", err),
+				},
+			}
+		}
+
+		return &protocol.JSONRPCMessage{
+			JSONRPC: "2.0",
+			ID:      msg.ID,
+			Result:  json.RawMessage(resultBytes),
+		}
+	} else {
+		// 通知 - 不需要响应
+		_ = s.handleNotification(ctx, ss, msg.Method, msg.Params)
+		return nil
+	}
+}
+
+func (s *Server) disconnect(ss *ServerSession) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for i, session := range s.sessions {
+		if session == ss {
+			s.sessions = append(s.sessions[:i], s.sessions[i+1:]...)
+			break
+		}
+	}
+
+	for _, subscribedSessions := range s.resourceSubscriptions {
+		delete(subscribedSessions, ss)
+	}
+}
+
+type ServerSessionOptions struct {
+	State   *ServerSessionState
+	onClose func()
+}
+
+// notifyToolListChanged 通知所有会话工具列表已更改
+func (s *Server) notifyToolListChanged() {
+	for _, ss := range s.sessions {
+		_ = ss.conn.SendNotification(context.Background(), protocol.NotificationToolsListChanged, &protocol.ToolListChangedParams{})
+	}
+}
+
+// notifyResourceListChanged 通知所有会话资源列表已更改
+func (s *Server) notifyResourceListChanged() {
+	for _, ss := range s.sessions {
+		_ = ss.conn.SendNotification(context.Background(), protocol.NotificationResourcesListChanged, &protocol.ResourceListChangedParams{})
+	}
+}
+
+// notifyResourceTemplateListChanged 通知所有会话资源模板列表已更改
+func (s *Server) notifyResourceTemplateListChanged() {
+	for _, ss := range s.sessions {
+		_ = ss.conn.SendNotification(context.Background(), protocol.NotificationResourcesTemplatesListChanged, &protocol.ResourceTemplateListChangedParams{})
+	}
+}
+
+// notifyPromptListChanged 通知所有会话提示列表已更改
+func (s *Server) notifyPromptListChanged() {
+	for _, ss := range s.sessions {
+		_ = ss.conn.SendNotification(context.Background(), protocol.NotificationPromptsListChanged, &protocol.PromptListChangedParams{})
+	}
+}
+
+// handleRequest 处理来自客户端的请求
+func (s *Server) handleRequest(ctx context.Context, ss *ServerSession, method string, params json.RawMessage) (interface{}, error) {
+	switch method {
+	case protocol.MethodInitialize:
+		return s.handleInitialize(ctx, ss, params)
+	case protocol.MethodToolsList:
+		return s.handleListTools(ctx, ss, params)
+	case protocol.MethodToolsCall:
+		return s.handleCallTool(ctx, ss, params)
+	case protocol.MethodResourcesList:
+		return s.handleListResources(ctx, ss, params)
+	case protocol.MethodResourcesRead:
+		return s.handleReadResource(ctx, ss, params)
+	case protocol.MethodResourcesTemplatesList:
+		return s.handleListResourceTemplates(ctx, ss, params)
+	case protocol.MethodPromptsList:
+		return s.handleListPrompts(ctx, ss, params)
+	case protocol.MethodPromptsGet:
+		return s.handleGetPrompt(ctx, ss, params)
+	case protocol.MethodPing:
+		return &protocol.EmptyResult{}, nil
+	case protocol.MethodCompletionComplete:
+		return s.handleComplete(ctx, ss, params)
+	case protocol.MethodLoggingSetLevel:
+		return s.handleSetLoggingLevel(ctx, ss, params)
+	default:
+		return nil, fmt.Errorf("unknown method: %s", method)
+	}
+}
+
+// handleNotification 处理来自客户端的通知
+func (s *Server) handleNotification(ctx context.Context, ss *ServerSession, method string, params json.RawMessage) error {
+	switch method {
+	case protocol.NotificationInitialized:
+		return s.handleInitialized(ctx, ss, params)
+	case protocol.NotificationCancelled:
+		return s.handleCancelled(ctx, ss, params)
+	case protocol.NotificationProgress:
+		return s.handleProgress(ctx, ss, params)
+	case protocol.NotificationRootsListChanged:
+		return s.handleRootsListChanged(ctx, ss, params)
+	default:
+		return fmt.Errorf("unknown notification: %s", method)
+	}
+}
+
+// handleInitialize 处理 initialize 请求
+func (s *Server) handleInitialize(ctx context.Context, ss *ServerSession, params json.RawMessage) (*protocol.InitializeResult, error) {
+	var req protocol.InitializeParams
+	if err := json.Unmarshal(params, &req); err != nil {
+		return nil, fmt.Errorf("invalid initialize params: %w", err)
+	}
+
+	ss.updateState(func(state *ServerSessionState) {
+		state.InitializeParams = &req
+	})
+
+	capabilities := protocol.ServerCapabilities{}
+
+	s.mu.Lock()
+	if len(s.tools) > 0 {
+		capabilities.Tools = &protocol.ToolsCapability{ListChanged: true}
+	}
+	if len(s.resources) > 0 {
+		capabilities.Resources = &protocol.ResourcesCapability{
+			ListChanged: true,
+			Subscribe:   true,
+		}
+	}
+	if len(s.prompts) > 0 {
+		capabilities.Prompts = &protocol.PromptsCapability{ListChanged: true}
+	}
+	s.mu.Unlock()
+
+	capabilities.Logging = &protocol.LoggingCapability{}
+
 	return &protocol.InitializeResult{
-		ProtocolVersion: negotiatedVersion,
-		Capabilities:    s.capabilities,
-		ServerInfo:      s.serverInfo,
+		ProtocolVersion: req.ProtocolVersion,
+		Capabilities:    capabilities,
+		ServerInfo:      *s.impl,
+		Instructions:    s.opts.Instructions,
 	}, nil
 }
 
-// handle initialization completed notification
-func (s *MCPServer) handleInitialized(ctx context.Context, params json.RawMessage) error {
-	// initialization completed notification, client indicates ready to receive notifications
+// handleInitialized 处理 initialized 通知
+func (s *Server) handleInitialized(ctx context.Context, ss *ServerSession, params json.RawMessage) error {
+	var req protocol.InitializedParams
+	if err := json.Unmarshal(params, &req); err != nil {
+		return fmt.Errorf("invalid initialized params: %w", err)
+	}
+
+	ss.updateState(func(state *ServerSessionState) {
+		state.InitializedParams = &req
+	})
+
+	if s.opts.InitializedHandler != nil {
+		s.opts.InitializedHandler(ctx, ss)
+	}
+
 	return nil
 }
 
-// tool list
-func (s *MCPServer) handleListTools(ctx context.Context, params json.RawMessage) (*protocol.ListToolsResult, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+// handleListTools 处理 tools/list 请求
+func (s *Server) handleListTools(ctx context.Context, ss *ServerSession, params json.RawMessage) (*protocol.ListToolsResult, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
 	tools := make([]protocol.Tool, 0, len(s.tools))
-	for _, reg := range s.tools {
-		tools = append(tools, reg.Tool)
+	for _, st := range s.tools {
+		tools = append(tools, *st.tool)
 	}
 
 	return &protocol.ListToolsResult{
@@ -517,59 +483,37 @@ func (s *MCPServer) handleListTools(ctx context.Context, params json.RawMessage)
 	}, nil
 }
 
-// tool call
-func (s *MCPServer) handleCallTool(ctx context.Context, params json.RawMessage) (*protocol.CallToolResult, error) {
+// handleCallTool 处理 tools/call 请求
+func (s *Server) handleCallTool(ctx context.Context, ss *ServerSession, params json.RawMessage) (*protocol.CallToolResult, error) {
 	var req protocol.CallToolParams
 	if err := json.Unmarshal(params, &req); err != nil {
 		return nil, fmt.Errorf("invalid call tool params: %w", err)
 	}
 
-	s.mu.RLock()
-	registration, exists := s.tools[req.Name]
-	s.mu.RUnlock()
+	s.mu.Lock()
+	st, exists := s.tools[req.Name]
+	s.mu.Unlock()
 
 	if !exists {
 		return protocol.NewToolResultError(fmt.Sprintf("tool not found: %s", req.Name)), nil
 	}
 
-	return registration.Handler(ctx, req.Arguments)
+	toolReq := &CallToolRequest{
+		Session: ss,
+		Params:  &req,
+	}
+
+	return st.handler(ctx, toolReq)
 }
 
-// RequestRootsList root list
-func (s *MCPServer) RequestRootsList(ctx context.Context) (*protocol.ListRootsResult, error) {
-	s.mu.RLock()
-	sender := s.requestSender
-	s.mu.RUnlock()
-
-	if sender == nil {
-		return nil, fmt.Errorf("request sender not configured")
-	}
-
-	resp, err := sender(ctx, "roots/list", nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to send roots/list request: %w", err)
-	}
-
-	if resp.Error != nil {
-		return nil, fmt.Errorf("roots/list request failed: %s", resp.Error.Message)
-	}
-
-	var result protocol.ListRootsResult
-	if err := json.Unmarshal(resp.Result, &result); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal roots/list result: %w", err)
-	}
-
-	return &result, nil
-}
-
-// resource list
-func (s *MCPServer) handleListResources(ctx context.Context, params json.RawMessage) (*protocol.ListResourcesResult, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+// handleListResources 处理 resources/list 请求
+func (s *Server) handleListResources(ctx context.Context, ss *ServerSession, params json.RawMessage) (*protocol.ListResourcesResult, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
 	resources := make([]protocol.Resource, 0, len(s.resources))
-	for _, reg := range s.resources {
-		resources = append(resources, reg.Resource)
+	for _, sr := range s.resources {
+		resources = append(resources, *sr.resource)
 	}
 
 	return &protocol.ListResourcesResult{
@@ -577,14 +521,14 @@ func (s *MCPServer) handleListResources(ctx context.Context, params json.RawMess
 	}, nil
 }
 
-// resource template list
-func (s *MCPServer) handleListResourceTemplates(ctx context.Context, params json.RawMessage) (*protocol.ListResourceTemplatesResult, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+// handleListResourceTemplates 处理 resources/templates/list 请求
+func (s *Server) handleListResourceTemplates(ctx context.Context, ss *ServerSession, params json.RawMessage) (*protocol.ListResourceTemplatesResult, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
 	templates := make([]protocol.ResourceTemplate, 0, len(s.resourceTemplates))
-	for _, reg := range s.resourceTemplates {
-		templates = append(templates, reg.Template)
+	for _, srt := range s.resourceTemplates {
+		templates = append(templates, *srt.template)
 	}
 
 	return &protocol.ListResourceTemplatesResult{
@@ -592,124 +536,37 @@ func (s *MCPServer) handleListResourceTemplates(ctx context.Context, params json
 	}, nil
 }
 
-// resource read
-func (s *MCPServer) handleReadResource(ctx context.Context, params json.RawMessage) (*protocol.ReadResourceResult, error) {
+// handleReadResource 处理 resources/read 请求
+func (s *Server) handleReadResource(ctx context.Context, ss *ServerSession, params json.RawMessage) (*protocol.ReadResourceResult, error) {
 	var req protocol.ReadResourceParams
 	if err := json.Unmarshal(params, &req); err != nil {
 		return nil, fmt.Errorf("invalid read resource params: %w", err)
 	}
 
-	s.mu.RLock()
-	registration, exists := s.resources[req.URI]
-	s.mu.RUnlock()
+	s.mu.Lock()
+	sr, exists := s.resources[req.URI]
+	s.mu.Unlock()
 
 	if !exists {
 		return nil, fmt.Errorf("resource not found: %s", req.URI)
 	}
 
-	return registration.Handler(ctx)
+	resourceReq := &ReadResourceRequest{
+		Session: ss,
+		Params:  &req,
+	}
+
+	return sr.handler(ctx, resourceReq)
 }
 
-// handleSubscribe 处理资源订阅请求
-func (s *MCPServer) handleSubscribe(ctx context.Context, params json.RawMessage) (interface{}, error) {
-	var req protocol.SubscribeParams
-	if err := json.Unmarshal(params, &req); err != nil {
-		return nil, fmt.Errorf("invalid subscribe params: %w", err)
-	}
-
-	s.mu.RLock()
-	_, exists := s.resources[req.URI]
-	s.mu.RUnlock()
-
-	if !exists {
-		return nil, &protocol.MCPError{
-			Code:    protocol.ResourceNotFound,
-			Message: fmt.Sprintf("resource not found: %s", req.URI),
-		}
-	}
-
-	// 添加订阅 (这里使用空字符串作为 session ID,实际应用中应该从 context 获取)
-	sessionID := getSessionIDFromContext(ctx)
-
-	s.mu.Lock()
-	if s.resourceSubscriptions[req.URI] == nil {
-		s.resourceSubscriptions[req.URI] = make(map[string]bool)
-	}
-	s.resourceSubscriptions[req.URI][sessionID] = true
-	s.mu.Unlock()
-
-	return struct{}{}, nil
-}
-
-// handleUnsubscribe 处理取消资源订阅请求
-func (s *MCPServer) handleUnsubscribe(ctx context.Context, params json.RawMessage) (interface{}, error) {
-	var req protocol.UnsubscribeParams
-	if err := json.Unmarshal(params, &req); err != nil {
-		return nil, fmt.Errorf("invalid unsubscribe params: %w", err)
-	}
-
-	sessionID := getSessionIDFromContext(ctx)
-
+// handleListPrompts 处理 prompts/list 请求
+func (s *Server) handleListPrompts(ctx context.Context, ss *ServerSession, params json.RawMessage) (*protocol.ListPromptsResult, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if subscribers, ok := s.resourceSubscriptions[req.URI]; ok {
-		delete(subscribers, sessionID)
-		if len(subscribers) == 0 {
-			delete(s.resourceSubscriptions, req.URI)
-		}
-	}
-
-	return struct{}{}, nil
-}
-
-// NotifyResourceUpdated 通知所有订阅者资源已更新
-func (s *MCPServer) NotifyResourceUpdated(uri string) error {
-	s.mu.RLock()
-	subscribers := s.resourceSubscriptions[uri]
-	if len(subscribers) == 0 {
-		s.mu.RUnlock()
-		return nil
-	}
-
-	// 复制订阅者列表,避免持有锁时间过长
-	sessionIDs := make([]string, 0, len(subscribers))
-	for sessionID := range subscribers {
-		sessionIDs = append(sessionIDs, sessionID)
-	}
-	s.mu.RUnlock()
-
-	// 发送通知给所有订阅者
-	params := protocol.ResourceUpdatedNotificationParams{
-		URI: uri,
-	}
-
-	if s.notificationHandler != nil {
-		return s.notificationHandler(protocol.NotificationResourcesUpdated, params)
-	}
-
-	return nil
-}
-
-// getSessionIDFromContext 从 context 获取 session ID
-// 这是一个辅助函数,实际应用中应该从传输层的 context 中获取
-func getSessionIDFromContext(ctx context.Context) string {
-	// TODO: 从 context 中获取真实的 session ID
-	// 这里暂时返回默认值,实际使用时需要传输层支持
-	if sessionID, ok := ctx.Value("sessionID").(string); ok {
-		return sessionID
-	}
-	return "default-session"
-}
-
-// prompt template list
-func (s *MCPServer) handleListPrompts(ctx context.Context, params json.RawMessage) (*protocol.ListPromptsResult, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
 	prompts := make([]protocol.Prompt, 0, len(s.prompts))
-	for _, reg := range s.prompts {
-		prompts = append(prompts, reg.Prompt)
+	for _, sp := range s.prompts {
+		prompts = append(prompts, *sp.prompt)
 	}
 
 	return &protocol.ListPromptsResult{
@@ -717,153 +574,99 @@ func (s *MCPServer) handleListPrompts(ctx context.Context, params json.RawMessag
 	}, nil
 }
 
-// get prompt template
-func (s *MCPServer) handleGetPrompt(ctx context.Context, params json.RawMessage) (*protocol.GetPromptResult, error) {
+// handleGetPrompt 处理 prompts/get 请求
+func (s *Server) handleGetPrompt(ctx context.Context, ss *ServerSession, params json.RawMessage) (*protocol.GetPromptResult, error) {
 	var req protocol.GetPromptParams
 	if err := json.Unmarshal(params, &req); err != nil {
 		return nil, fmt.Errorf("invalid get prompt params: %w", err)
 	}
 
-	s.mu.RLock()
-	registration, exists := s.prompts[req.Name]
-	s.mu.RUnlock()
+	s.mu.Lock()
+	sp, exists := s.prompts[req.Name]
+	s.mu.Unlock()
 
 	if !exists {
 		return nil, fmt.Errorf("prompt not found: %s", req.Name)
 	}
 
-	return registration.Handler(ctx, req.Arguments)
+	promptReq := &GetPromptRequest{
+		Session: ss,
+		Params:  &req,
+	}
+
+	return sp.handler(ctx, promptReq)
 }
 
-// handle completion request (MCP 2025-06-18)
-func (s *MCPServer) handleComplete(ctx context.Context, params json.RawMessage) (*protocol.CompleteResult, error) {
+// handleComplete 处理 completion/complete 请求
+func (s *Server) handleComplete(ctx context.Context, ss *ServerSession, params json.RawMessage) (*protocol.CompleteResult, error) {
+	if s.opts.CompletionHandler == nil {
+		return nil, fmt.Errorf("completion not supported")
+	}
+
 	var req protocol.CompleteRequest
 	if err := json.Unmarshal(params, &req); err != nil {
-		return nil, &protocol.MCPError{
-			Code:    -32602,
-			Message: "Invalid completion params",
-			Data:    err.Error(),
-		}
+		return nil, fmt.Errorf("invalid complete params: %w", err)
 	}
 
-	s.mu.RLock()
-	handler := s.completionHandler
-	s.mu.RUnlock()
-
-	if handler == nil {
-		return nil, &protocol.MCPError{
-			Code:    -32601,
-			Message: "Completion not supported",
-		}
-	}
-
-	ref, err := protocol.UnmarshalCompletionReference(req.Ref)
-	if err != nil {
-		return nil, err
-	}
-
-	result, err := handler(ctx, ref, req.Argument, req.Context)
-	if err != nil {
-		return nil, err
-	}
-
-	return &protocol.CompleteResult{
-		Completion: *result,
-	}, nil
+	return s.opts.CompletionHandler(ctx, &req)
 }
 
-func (s *MCPServer) handlePing(ctx context.Context, params json.RawMessage) (interface{}, error) {
-	// ping 请求只需要返回空对象即可
-	return struct{}{}, nil
+// handleCancelled 处理 notifications/cancelled 通知
+func (s *Server) handleCancelled(ctx context.Context, ss *ServerSession, params json.RawMessage) error {
+	// TODO: 实现取消逻辑
+	return nil
+}
+
+// handleProgress 处理 notifications/progress 通知
+func (s *Server) handleProgress(ctx context.Context, ss *ServerSession, params json.RawMessage) error {
+	if s.opts.ProgressNotificationHandler == nil {
+		return nil
+	}
+
+	var req protocol.ProgressNotificationParams
+	if err := json.Unmarshal(params, &req); err != nil {
+		return fmt.Errorf("invalid progress params: %w", err)
+	}
+
+	s.opts.ProgressNotificationHandler(ctx, ss, &req)
+	return nil
+}
+
+// handleRootsListChanged 处理 notifications/roots/list_changed 通知
+func (s *Server) handleRootsListChanged(ctx context.Context, ss *ServerSession, params json.RawMessage) error {
+	// 客户端通知根目录列表已更改,服务器可以选择重新查询
+	return nil
 }
 
 // handleSetLoggingLevel 处理 logging/setLevel 请求
-func (s *MCPServer) handleSetLoggingLevel(ctx context.Context, params json.RawMessage) (interface{}, error) {
+func (s *Server) handleSetLoggingLevel(ctx context.Context, ss *ServerSession, params json.RawMessage) (*protocol.EmptyResult, error) {
 	var req protocol.SetLoggingLevelParams
 	if err := json.Unmarshal(params, &req); err != nil {
-		return nil, fmt.Errorf("invalid logging level params: %w", err)
+		return nil, fmt.Errorf("invalid set level params: %w", err)
 	}
 
-	// 验证日志级别
-	validLevels := map[protocol.LoggingLevel]bool{
-		protocol.LogLevelDebug:     true,
-		protocol.LogLevelInfo:      true,
-		protocol.LogLevelNotice:    true,
-		protocol.LogLevelWarning:   true,
-		protocol.LogLevelError:     true,
-		protocol.LogLevelCritical:  true,
-		protocol.LogLevelAlert:     true,
-		protocol.LogLevelEmergency: true,
+	ss.updateState(func(state *ServerSessionState) {
+		state.LogLevel = req.Level
+	})
+
+	if s.opts.LoggingSetLevelHandler != nil {
+		if err := s.opts.LoggingSetLevelHandler(ctx, ss, req.Level); err != nil {
+			return nil, err
+		}
 	}
 
-	if !validLevels[req.Level] {
-		return nil, fmt.Errorf("invalid logging level: %s", req.Level)
-	}
-
-	// 设置日志级别
-	s.mu.Lock()
-	s.loggingLevel = req.Level
-	s.mu.Unlock()
-
-	// 返回空对象
-	return struct{}{}, nil
+	return &protocol.EmptyResult{}, nil
 }
 
-// GetLoggingLevel 获取当前日志级别
-func (s *MCPServer) GetLoggingLevel() protocol.LoggingLevel {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.loggingLevel
-}
-
-// SetLoggingLevel 设置日志级别
-func (s *MCPServer) SetLoggingLevel(level protocol.LoggingLevel) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.loggingLevel = level
-}
-
-// SendLog 发送日志消息到客户端
-// 只有当日志级别大于等于当前设置的级别时才会发送
-func (s *MCPServer) SendLog(level protocol.LoggingLevel, data any, logger string) error {
-	// 检查日志级别
-	if !s.shouldLog(level) {
-		return nil // 不发送低于当前级别的日志
+// HandleMessage 实现 SSE Handler 接口 (用于向后兼容)
+func (s *Server) HandleMessage(ctx context.Context, msg *protocol.JSONRPCMessage) (*protocol.JSONRPCMessage, error) {
+	// 创建一个临时的 session (SSE 使用旧的单会话模式)
+	ss := &ServerSession{
+		server: s,
+		conn:   nil, // SSE 不使用 connection
 	}
 
-	params := protocol.LoggingMessageParams{
-		Level:  level,
-		Data:   data,
-		Logger: logger,
-	}
-
-	return s.SendNotification(protocol.NotificationLoggingMessage, params)
-}
-
-// shouldLog 检查是否应该发送此级别的日志
-func (s *MCPServer) shouldLog(level protocol.LoggingLevel) bool {
-	s.mu.RLock()
-	currentLevel := s.loggingLevel
-	s.mu.RUnlock()
-
-	// 日志级别优先级 (从低到高)
-	levelPriority := map[protocol.LoggingLevel]int{
-		protocol.LogLevelDebug:     0,
-		protocol.LogLevelInfo:      1,
-		protocol.LogLevelNotice:    2,
-		protocol.LogLevelWarning:   3,
-		protocol.LogLevelError:     4,
-		protocol.LogLevelCritical:  5,
-		protocol.LogLevelAlert:     6,
-		protocol.LogLevelEmergency: 7,
-	}
-
-	currentPriority, ok1 := levelPriority[currentLevel]
-	messagePriority, ok2 := levelPriority[level]
-
-	if !ok1 || !ok2 {
-		return false
-	}
-
-	return messagePriority >= currentPriority
+	// 处理消息
+	response := s.handleMessage(ctx, ss, msg)
+	return response, nil
 }
