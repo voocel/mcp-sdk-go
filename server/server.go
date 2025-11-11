@@ -16,6 +16,7 @@ type Server struct {
 	opts ServerOptions
 
 	mu                    sync.Mutex
+	middlewares           []Middleware // 中间件链
 	tools                 map[string]*serverTool
 	resources             map[string]*serverResource
 	resourceTemplates     map[string]*serverResourceTemplate
@@ -102,9 +103,12 @@ func (s *Server) AddTool(t *protocol.Tool, h ToolHandler) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	// 应用中间件
+	wrappedHandler := applyMiddleware(h, s.middlewares)
+
 	s.tools[t.Name] = &serverTool{
 		tool:    t,
-		handler: h,
+		handler: wrappedHandler,
 	}
 
 	// 通知所有会话工具列表已更改
