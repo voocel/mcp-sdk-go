@@ -95,6 +95,25 @@ func NewServer(impl *protocol.ServerInfo, opts *ServerOptions) *Server {
 	return s
 }
 
+// AddTool 添加工具到服务器，或替换同名工具（低级 API）。
+// Tool 参数在调用后不得修改。
+//
+// 工具的输入 schema 必须非 nil 且类型为 "object"。对于不接受输入的工具，
+// 或接受任何输入的工具，将 [Tool.InputSchema] 设置为 `{"type": "object"}`，
+// 使用你喜欢的库或 `json.RawMessage`。
+//
+// 如果存在 [Tool.OutputSchema]，它也必须类型为 "object"。
+//
+// 当处理函数作为 CallTool 请求的一部分被调用时，req.Params.Arguments
+// 将是 json.RawMessage。
+//
+// 反序列化参数并根据输入 schema 验证它们是调用者的责任。
+//
+// 根据输出 schema（如有）验证结果是调用者的责任。
+//
+// 设置结果的 Content、StructuredContent 和 IsError 字段是调用者的责任。
+//
+// 大多数用户应该使用顶级函数 [AddTool]，它会处理所有这些责任。
 func (s *Server) AddTool(t *protocol.Tool, h ToolHandler) {
 	if t.InputSchema == nil {
 		panic(fmt.Errorf("AddTool %q: missing input schema", t.Name))
