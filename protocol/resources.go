@@ -53,6 +53,9 @@ type ListResourceTemplatesRequest struct {
 	Cursor string `json:"cursor,omitempty"`
 }
 
+// ListResourceTemplatesParams is an alias for ListResourceTemplatesRequest
+type ListResourceTemplatesParams = ListResourceTemplatesRequest
+
 type ResourceTemplate struct {
 	URITemplate string         `json:"uriTemplate"`
 	Name        string         `json:"name"`

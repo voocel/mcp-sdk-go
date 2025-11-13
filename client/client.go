@@ -236,7 +236,6 @@ func (cs *ClientSession) ID() string {
 	return cs.conn.SessionID()
 }
 
-// Close 关闭客户端会话,优雅地清理所有资源
 func (cs *ClientSession) Close() error {
 	if cs.keepaliveCancel != nil {
 		cs.keepaliveCancel()
@@ -245,7 +244,7 @@ func (cs *ClientSession) Close() error {
 	// 清理所有 pending 请求(在关闭连接之前)
 	cs.mu.Lock()
 	pending := cs.pending
-	cs.pending = make(map[string]*pendingRequest) // 重置 map
+	cs.pending = make(map[string]*pendingRequest)
 	cs.mu.Unlock()
 
 	// 通知所有 pending 请求连接已关闭

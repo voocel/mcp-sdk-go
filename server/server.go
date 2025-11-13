@@ -265,7 +265,7 @@ func (s *Server) Connect(ctx context.Context, t transport.Transport, opts *Serve
 
 	// 启动消息处理循环
 	go func() {
-		err := s.handleConnection(ctx, ss, conn)
+		err := s.handleConnection(ctx, ss, ss.conn)
 		ss.waitErr <- err
 		close(ss.waitErr)
 	}()
@@ -274,21 +274,40 @@ func (s *Server) Connect(ctx context.Context, t transport.Transport, opts *Serve
 }
 
 // handleConnection 处理连接的消息循环
-func (s *Server) handleConnection(ctx context.Context, ss *ServerSession, conn transport.Connection) error {
+func (s *Server) handleConnection(ctx context.Context, ss *ServerSession, conn Connection) error {
 	defer func() {
 		s.disconnect(ss)
 		conn.Close()
 	}()
 
+	// 获取底层的 connAdapter 用于处理响应消息
+	adapter, ok := conn.(*connAdapter)
+	if !ok {
+		return fmt.Errorf("invalid connection type")
+	}
+
 	for {
-		msg, err := conn.Read(ctx)
+		// 显式检查上下文取消
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+
+		msg, err := adapter.conn.Read(ctx)
 		if err != nil {
 			return err
 		}
 
+		// 如果是响应消息,路由到 connAdapter
+		if msg.Method == "" && msg.ID != nil {
+			adapter.handleResponse(msg)
+			continue
+		}
+
 		response := s.handleMessage(ctx, ss, msg)
 		if response != nil {
-			if err := conn.Write(ctx, response); err != nil {
+			if err := adapter.conn.Write(ctx, response); err != nil {
 				return err
 			}
 		}
@@ -297,10 +316,6 @@ func (s *Server) handleConnection(ctx context.Context, ss *ServerSession, conn t
 
 // handleMessage 处理单个 JSON-RPC 消息
 func (s *Server) handleMessage(ctx context.Context, ss *ServerSession, msg *protocol.JSONRPCMessage) *protocol.JSONRPCMessage {
-	if msg.Method == "" {
-		return nil // 响应消息,不需要处理
-	}
-
 	if msg.ID != nil {
 		// 请求 - 需要响应
 		result, err := s.handleRequest(ctx, ss, msg.Method, msg.Params)
@@ -309,7 +324,7 @@ func (s *Server) handleMessage(ctx context.Context, ss *ServerSession, msg *prot
 				JSONRPC: "2.0",
 				ID:      msg.ID,
 				Error: &protocol.JSONRPCError{
-					Code:    -32603,
+					Code:    protocol.InternalError,
 					Message: err.Error(),
 				},
 			}
@@ -322,7 +337,7 @@ func (s *Server) handleMessage(ctx context.Context, ss *ServerSession, msg *prot
 				JSONRPC: "2.0",
 				ID:      msg.ID,
 				Error: &protocol.JSONRPCError{
-					Code:    -32603,
+					Code:    protocol.InternalError,
 					Message: fmt.Sprintf("failed to marshal result: %v", err),
 				},
 			}
@@ -440,6 +455,11 @@ func (s *Server) handleInitialize(ctx context.Context, ss *ServerSession, params
 	var req protocol.InitializeParams
 	if err := json.Unmarshal(params, &req); err != nil {
 		return nil, fmt.Errorf("invalid initialize params: %w", err)
+	}
+
+	if !protocol.IsVersionSupported(req.ProtocolVersion) {
+		return nil, fmt.Errorf("unsupported protocol version: %s (supported: %v)",
+			req.ProtocolVersion, protocol.GetSupportedVersions())
 	}
 
 	ss.updateState(func(state *ServerSessionState) {

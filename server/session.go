@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"sync"
 	"sync/atomic"
 
@@ -158,13 +159,28 @@ type ToolHandler func(ctx context.Context, req *CallToolRequest) (*protocol.Call
 
 // ========== connAdapter: 将 transport.Connection 适配到 server.Connection ==========
 
+// pendingRequest 表示一个待处理的请求
+type pendingRequest struct {
+	method   string
+	response chan *protocol.JSONRPCMessage
+	err      chan error
+}
+
 // connAdapter 将 transport.Connection 适配为 server.Connection
 type connAdapter struct {
 	conn transport.Connection
+
+	// 请求/响应机制
+	mu      sync.Mutex
+	pending map[string]*pendingRequest
+	nextID  int64
 }
 
 func newConnAdapter(conn transport.Connection) *connAdapter {
-	return &connAdapter{conn: conn}
+	return &connAdapter{
+		conn:    conn,
+		pending: make(map[string]*pendingRequest),
+	}
 }
 
 func (a *connAdapter) SendNotification(ctx context.Context, method string, params interface{}) error {
@@ -183,13 +199,111 @@ func (a *connAdapter) SendNotification(ctx context.Context, method string, param
 }
 
 func (a *connAdapter) SendRequest(ctx context.Context, method string, params interface{}, result interface{}) error {
-	// TODO: 实现请求/响应机制
-	// 需要生成 ID,发送请求,等待响应
-	return fmt.Errorf("SendRequest not implemented yet")
+	a.mu.Lock()
+	a.nextID++
+	id := strconv.FormatInt(a.nextID, 10)
+	a.mu.Unlock()
+
+	idJSON, _ := json.Marshal(id)
+	msg := &protocol.JSONRPCMessage{
+		JSONRPC: "2.0",
+		ID:      idJSON,
+		Method:  method,
+	}
+
+	if params != nil {
+		paramsJSON, err := json.Marshal(params)
+		if err != nil {
+			return fmt.Errorf("failed to marshal params: %w", err)
+		}
+		msg.Params = paramsJSON
+	}
+
+	pending := &pendingRequest{
+		method:   method,
+		response: make(chan *protocol.JSONRPCMessage, 1),
+		err:      make(chan error, 1),
+	}
+
+	a.mu.Lock()
+	a.pending[id] = pending
+	a.mu.Unlock()
+
+	if err := a.conn.Write(ctx, msg); err != nil {
+		a.mu.Lock()
+		delete(a.pending, id)
+		a.mu.Unlock()
+		return fmt.Errorf("failed to write request: %w", err)
+	}
+
+	select {
+	case <-ctx.Done():
+		a.mu.Lock()
+		delete(a.pending, id)
+		a.mu.Unlock()
+		return ctx.Err()
+	case err := <-pending.err:
+		return err
+	case resp := <-pending.response:
+		if resp.Error != nil {
+			return fmt.Errorf("RPC error %d: %s", resp.Error.Code, resp.Error.Message)
+		}
+
+		if result != nil && resp.Result != nil {
+			if err := json.Unmarshal(resp.Result, result); err != nil {
+				return fmt.Errorf("failed to unmarshal result: %w", err)
+			}
+		}
+
+		return nil
+	}
 }
 
 func (a *connAdapter) Close() error {
+	// 清理所有 pending 请求
+	a.mu.Lock()
+	pending := a.pending
+	a.pending = make(map[string]*pendingRequest)
+	a.mu.Unlock()
+
+	// 通知所有 pending 请求连接已关闭
+	for _, req := range pending {
+		select {
+		case req.err <- fmt.Errorf("connection closed"):
+		default:
+		}
+	}
+
 	return a.conn.Close()
+}
+
+// handleResponse 处理来自客户端的响应消息
+func (a *connAdapter) handleResponse(msg *protocol.JSONRPCMessage) {
+	if msg.ID == nil {
+		return
+	}
+
+	var id string
+	if err := json.Unmarshal(msg.ID, &id); err != nil {
+		return
+	}
+
+	a.mu.Lock()
+	pending, ok := a.pending[id]
+	if ok {
+		delete(a.pending, id)
+	}
+	a.mu.Unlock()
+
+	if !ok {
+		return
+	}
+
+	if msg.Error != nil {
+		pending.err <- fmt.Errorf("RPC error %d: %s", msg.Error.Code, msg.Error.Message)
+	} else {
+		pending.response <- msg
+	}
 }
 
 func (a *connAdapter) SessionID() string {
