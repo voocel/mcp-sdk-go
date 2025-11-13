@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strconv"
 	"time"
 
@@ -97,6 +98,12 @@ func (cs *ClientSession) sendNotification(ctx context.Context, method string, pa
 // handleMessages 处理来自服务器的消息
 func (cs *ClientSession) handleMessages(ctx context.Context) error {
 	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+
 		msg, err := cs.conn.Read(ctx)
 		if err != nil {
 			return err
@@ -146,23 +153,23 @@ func (cs *ClientSession) handleResponse(msg *protocol.JSONRPCMessage) {
 // handleRequest 处理来自服务器的请求或通知
 func (cs *ClientSession) handleRequest(ctx context.Context, msg *protocol.JSONRPCMessage) {
 	switch msg.Method {
-	case "sampling/createMessage":
+	case protocol.MethodSamplingCreateMessage:
 		cs.handleCreateMessage(ctx, msg)
-	case "elicitation/create":
+	case protocol.MethodElicitationCreate:
 		cs.handleElicitation(ctx, msg)
-	case "notifications/tools/list_changed":
+	case protocol.NotificationToolsListChanged:
 		cs.handleToolListChanged(ctx, msg)
-	case "notifications/prompts/list_changed":
+	case protocol.NotificationPromptsListChanged:
 		cs.handlePromptListChanged(ctx, msg)
-	case "notifications/resources/list_changed":
+	case protocol.NotificationResourcesListChanged:
 		cs.handleResourceListChanged(ctx, msg)
-	case "notifications/resources/updated":
+	case protocol.NotificationResourcesUpdated:
 		cs.handleResourceUpdated(ctx, msg)
-	case "notifications/message":
+	case protocol.NotificationLoggingMessage:
 		cs.handleLoggingMessage(ctx, msg)
-	case "notifications/progress":
+	case protocol.NotificationProgress:
 		cs.handleProgressNotification(ctx, msg)
-	case "roots/list":
+	case protocol.MethodRootsList:
 		cs.handleListRoots(ctx, msg)
 	}
 }
@@ -170,19 +177,19 @@ func (cs *ClientSession) handleRequest(ctx context.Context, msg *protocol.JSONRP
 // handleCreateMessage 处理 sampling/createMessage 请求
 func (cs *ClientSession) handleCreateMessage(ctx context.Context, msg *protocol.JSONRPCMessage) {
 	if cs.client.opts.CreateMessageHandler == nil {
-		cs.sendErrorResponse(ctx, msg, -32601, "Method not found")
+		cs.sendErrorResponse(ctx, msg, protocol.MethodNotFound, "Method not found")
 		return
 	}
 
 	var params protocol.CreateMessageRequest
 	if err := json.Unmarshal(msg.Params, &params); err != nil {
-		cs.sendErrorResponse(ctx, msg, -32602, "Invalid params")
+		cs.sendErrorResponse(ctx, msg, protocol.InvalidParams, "Invalid params")
 		return
 	}
 
 	result, err := cs.client.opts.CreateMessageHandler(ctx, &params)
 	if err != nil {
-		cs.sendErrorResponse(ctx, msg, -32603, err.Error())
+		cs.sendErrorResponse(ctx, msg, protocol.InternalError, err.Error())
 		return
 	}
 
@@ -192,19 +199,19 @@ func (cs *ClientSession) handleCreateMessage(ctx context.Context, msg *protocol.
 // handleElicitation 处理 elicitation/create 请求
 func (cs *ClientSession) handleElicitation(ctx context.Context, msg *protocol.JSONRPCMessage) {
 	if cs.client.opts.ElicitationHandler == nil {
-		cs.sendErrorResponse(ctx, msg, -32601, "Method not found")
+		cs.sendErrorResponse(ctx, msg, protocol.MethodNotFound, "Method not found")
 		return
 	}
 
 	var params protocol.ElicitationCreateParams
 	if err := json.Unmarshal(msg.Params, &params); err != nil {
-		cs.sendErrorResponse(ctx, msg, -32602, "Invalid params")
+		cs.sendErrorResponse(ctx, msg, protocol.InvalidParams, "Invalid params")
 		return
 	}
 
 	result, err := cs.client.opts.ElicitationHandler(ctx, &params)
 	if err != nil {
-		cs.sendErrorResponse(ctx, msg, -32603, err.Error())
+		cs.sendErrorResponse(ctx, msg, protocol.InternalError, err.Error())
 		return
 	}
 
@@ -314,14 +321,34 @@ func (cs *ClientSession) sendSuccessResponse(ctx context.Context, req *protocol.
 		return
 	}
 
-	resultJSON, _ := json.Marshal(result)
+	resultJSON, err := json.Marshal(result)
+	if err != nil {
+		// 记录 JSON 序列化错误
+		fmt.Fprintf(os.Stderr, "[ERROR] Failed to marshal response result: %v\n", err)
+		// 直接构建错误响应，避免递归
+		errResp := &protocol.JSONRPCMessage{
+			JSONRPC: "2.0",
+			ID:      req.ID,
+			Error: &protocol.JSONRPCError{
+				Code:    protocol.InternalError,
+				Message: fmt.Sprintf("Failed to marshal result: %v", err),
+			},
+		}
+		if writeErr := cs.conn.Write(ctx, errResp); writeErr != nil {
+			fmt.Fprintf(os.Stderr, "[ERROR] Failed to write error response: %v\n", writeErr)
+		}
+		return
+	}
+
 	resp := &protocol.JSONRPCMessage{
 		JSONRPC: "2.0",
 		ID:      req.ID,
 		Result:  resultJSON,
 	}
 
-	_ = cs.conn.Write(ctx, resp)
+	if err := cs.conn.Write(ctx, resp); err != nil {
+		fmt.Fprintf(os.Stderr, "[ERROR] Failed to write response: %v\n", err)
+	}
 }
 
 // sendErrorResponse 发送错误响应
@@ -339,7 +366,9 @@ func (cs *ClientSession) sendErrorResponse(ctx context.Context, req *protocol.JS
 		},
 	}
 
-	_ = cs.conn.Write(ctx, resp)
+	if err := cs.conn.Write(ctx, resp); err != nil {
+		fmt.Fprintf(os.Stderr, "[ERROR] Failed to write error response: %v\n", err)
+	}
 }
 
 // startKeepalive 启动 keepalive 机制

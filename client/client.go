@@ -120,21 +120,24 @@ func (c *Client) Connect(ctx context.Context, t transport.Transport, _ *ClientSe
 	}
 
 	var initResult protocol.InitializeResult
-	if err := cs.sendRequest(ctx, "initialize", initParams, &initResult); err != nil {
+	if err := cs.sendRequest(ctx, protocol.MethodInitialize, initParams, &initResult); err != nil {
 		_ = cs.Close()
 		return nil, fmt.Errorf("initialize failed: %w", err)
 	}
 
-	// 保存初始化结果
+	if !protocol.IsVersionSupported(initResult.ProtocolVersion) {
+		_ = cs.Close()
+		return nil, fmt.Errorf("unsupported protocol version: %s (supported: %v)",
+			initResult.ProtocolVersion, protocol.GetSupportedVersions())
+	}
+
 	cs.state.InitializeResult = &initResult
 
-	// 发送 initialized 通知
-	if err := cs.sendNotification(ctx, "notifications/initialized", &protocol.InitializedParams{}); err != nil {
+	if err := cs.sendNotification(ctx, protocol.NotificationInitialized, &protocol.InitializedParams{}); err != nil {
 		_ = cs.Close()
 		return nil, fmt.Errorf("send initialized notification failed: %w", err)
 	}
 
-	// 启动 keepalive (如果配置了)
 	if c.opts.KeepAlive > 0 {
 		cs.startKeepalive(c.opts.KeepAlive)
 	}
@@ -142,23 +145,39 @@ func (c *Client) Connect(ctx context.Context, t transport.Transport, _ *ClientSe
 	return cs, nil
 }
 
-// AddRoot 添加一个根目录
+// AddRoot 添加一个根目录并通知所有会话
 func (c *Client) AddRoot(root *protocol.Root) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	c.roots = append(c.roots, root)
-	// TODO: 通知所有会话
+	sessions := make([]*ClientSession, len(c.sessions))
+	copy(sessions, c.sessions)
+	c.mu.Unlock()
+
+	// 通知所有会话根目录列表已更改
+	for _, cs := range sessions {
+		_ = cs.NotifyRootsListChanged(context.Background())
+	}
 }
 
-// RemoveRoot 移除一个根目录
+// RemoveRoot 移除一个根目录并通知所有会话
 func (c *Client) RemoveRoot(uri string) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
+	var changed bool
 	for i, root := range c.roots {
 		if root.URI == uri {
 			c.roots = append(c.roots[:i], c.roots[i+1:]...)
-			// TODO: 通知所有会话
+			changed = true
 			break
+		}
+	}
+	sessions := make([]*ClientSession, len(c.sessions))
+	copy(sessions, c.sessions)
+	c.mu.Unlock()
+
+	// 只有在根目录真的变化时才通知
+	if changed {
+		for _, cs := range sessions {
+			_ = cs.NotifyRootsListChanged(context.Background())
 		}
 	}
 }
@@ -217,9 +236,24 @@ func (cs *ClientSession) ID() string {
 	return cs.conn.SessionID()
 }
 
+// Close 关闭客户端会话,优雅地清理所有资源
 func (cs *ClientSession) Close() error {
 	if cs.keepaliveCancel != nil {
 		cs.keepaliveCancel()
+	}
+
+	// 清理所有 pending 请求(在关闭连接之前)
+	cs.mu.Lock()
+	pending := cs.pending
+	cs.pending = make(map[string]*pendingRequest) // 重置 map
+	cs.mu.Unlock()
+
+	// 通知所有 pending 请求连接已关闭
+	for _, req := range pending {
+		select {
+		case req.err <- fmt.Errorf("connection closed"):
+		default:
+		}
 	}
 
 	err := cs.conn.Close()
