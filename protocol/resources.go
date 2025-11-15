@@ -79,20 +79,10 @@ type UnsubscribeParams struct {
 	URI string `json:"uri"`
 }
 
-// ResourceUpdatedNotificationParams 资源更新通知参数
-type ResourceUpdatedNotificationParams struct {
-	URI string `json:"uri"`
-}
-
 // ResourcesListChangedNotification 资源变更通知
 type ResourcesListChangedNotification struct{}
 
 type ResourceTemplatesListChangedNotification struct{}
-
-type ResourcesUpdatedNotification struct {
-	URI   string `json:"uri"`
-	Title string `json:"title,omitempty"`
-}
 
 func NewResource(uri, name, description, mimeType string) Resource {
 	return Resource{
@@ -132,13 +122,4 @@ func NewResourceTemplate(uriTemplate, name, description, mimeType string) Resour
 		Description: description,
 		MimeType:    mimeType,
 	}
-}
-
-// NewResourcesUpdatedNotification 创建资源更新通知
-func NewResourcesUpdatedNotification(uri string, title ...string) ResourcesUpdatedNotification {
-	notification := ResourcesUpdatedNotification{URI: uri}
-	if len(title) > 0 && title[0] != "" {
-		notification.Title = title[0]
-	}
-	return notification
 }

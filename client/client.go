@@ -32,7 +32,7 @@ type ClientOptions struct {
 	ToolListChangedHandler      func(context.Context, *protocol.ToolsListChangedNotification)
 	PromptListChangedHandler    func(context.Context, *protocol.PromptListChangedParams)
 	ResourceListChangedHandler  func(context.Context, *protocol.ResourceListChangedParams)
-	ResourceUpdatedHandler      func(context.Context, *protocol.ResourceUpdatedParams)
+	ResourceUpdatedHandler      func(context.Context, *protocol.ResourceUpdatedNotificationParams)
 	LoggingMessageHandler       func(context.Context, *protocol.LoggingMessageParams)
 	ProgressNotificationHandler func(context.Context, *protocol.ProgressNotificationParams)
 
@@ -110,7 +110,7 @@ func (c *Client) Connect(ctx context.Context, t transport.Transport, _ *ClientSe
 	}()
 
 	// 执行初始化握手
-	initParams := &protocol.InitializeRequest{
+	initParams := &protocol.InitializeParams{
 		ProtocolVersion: protocol.MCPVersion,
 		ClientInfo: protocol.ClientInfo{
 			Name:    c.info.Name,

@@ -309,20 +309,34 @@ type LoggingCapability struct{}
 // Elicitation 能力声明
 type ElicitationCapability struct{}
 
+// Icon 图标定义,用于资源、工具、提示和实现的视觉标识
+type Icon struct {
+	// Source 指向图标资源的 URI (必需)，可以是:
+	// - HTTP/HTTPS URL 指向图像文件
+	// - data URI 包含 base64 编码的图像数据
+	Source string `json:"src"`
+	// MIMEType 可选的 MIME 类型
+	MIMEType string `json:"mimeType,omitempty"`
+	// Sizes 可选的尺寸规范 (如 ["48x48"], ["any"] 用于 SVG 等可缩放格式)
+	Sizes []string `json:"sizes,omitempty"`
+	// Theme 可选的主题,如 "light" 或 "dark"
+	Theme string `json:"theme,omitempty"`
+}
+
 type ClientInfo struct {
-	Name    string `json:"name"`
-	Version string `json:"version"`
+	Name       string `json:"name"`
+	Title      string `json:"title,omitempty"`
+	Version    string `json:"version"`
+	WebsiteURL string `json:"websiteUrl,omitempty"`
+	Icons      []Icon `json:"icons,omitempty"`
 }
 
 type ServerInfo struct {
-	Name    string `json:"name"`
-	Version string `json:"version"`
-}
-
-type InitializeRequest struct {
-	ProtocolVersion string             `json:"protocolVersion"`
-	Capabilities    ClientCapabilities `json:"capabilities"`
-	ClientInfo      ClientInfo         `json:"clientInfo"`
+	Name       string `json:"name"`
+	Title      string `json:"title,omitempty"`
+	Version    string `json:"version"`
+	WebsiteURL string `json:"websiteUrl,omitempty"`
+	Icons      []Icon `json:"icons,omitempty"`
 }
 
 // InitializeParams initialize 请求参数

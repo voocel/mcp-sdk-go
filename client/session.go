@@ -279,7 +279,7 @@ func (cs *ClientSession) handleResourceUpdated(ctx context.Context, msg *protoco
 		return
 	}
 
-	var params protocol.ResourceUpdatedParams
+	var params protocol.ResourceUpdatedNotificationParams
 	if err := json.Unmarshal(msg.Params, &params); err != nil {
 		return
 	}

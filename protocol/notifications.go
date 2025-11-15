@@ -37,8 +37,8 @@ type RootsListChangedParams struct {
 	Meta map[string]any `json:"_meta,omitempty"`
 }
 
-// ResourceUpdatedParams 资源更新通知参数
-type ResourceUpdatedParams struct {
+// ResourceUpdatedNotificationParams 资源更新通知参数
+type ResourceUpdatedNotificationParams struct {
 	Meta map[string]any `json:"_meta,omitempty"`
 	// 更新的资源 URI
 	URI string `json:"uri"`
