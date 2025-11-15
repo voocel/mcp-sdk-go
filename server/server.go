@@ -251,9 +251,10 @@ func (s *Server) Connect(ctx context.Context, t transport.Transport, opts *Serve
 	}
 
 	ss := &ServerSession{
-		server:  s,
-		conn:    newConnAdapter(conn),
-		waitErr: make(chan error, 1),
+		server:          s,
+		conn:            newConnAdapter(conn),
+		waitErr:         make(chan error, 1),
+		pendingRequests: make(map[string]context.CancelFunc),
 	}
 
 	if opts != nil && opts.State != nil {
@@ -323,7 +324,23 @@ func (s *Server) handleConnection(ctx context.Context, ss *ServerSession, conn C
 func (s *Server) handleMessage(ctx context.Context, ss *ServerSession, msg *protocol.JSONRPCMessage) *protocol.JSONRPCMessage {
 	if msg.ID != nil {
 		// 请求 - 需要响应
-		result, err := s.handleRequest(ctx, ss, msg.Method, msg.Params)
+		// 创建可取消的 context 并跟踪请求
+		requestID := protocol.IDToString(msg.ID)
+		requestCtx, cancel := context.WithCancel(ctx)
+
+		ss.mu.Lock()
+		ss.pendingRequests[requestID] = cancel
+		ss.mu.Unlock()
+
+		// 确保请求完成后清理
+		defer func() {
+			ss.mu.Lock()
+			delete(ss.pendingRequests, requestID)
+			ss.mu.Unlock()
+			cancel()
+		}()
+
+		result, err := s.handleRequest(requestCtx, ss, msg.Method, msg.Params)
 		if err != nil {
 			return &protocol.JSONRPCMessage{
 				JSONRPC: "2.0",
@@ -424,6 +441,10 @@ func (s *Server) handleRequest(ctx context.Context, ss *ServerSession, method st
 		return s.handleReadResource(ctx, ss, params)
 	case protocol.MethodResourcesTemplatesList:
 		return s.handleListResourceTemplates(ctx, ss, params)
+	case protocol.MethodResourcesSubscribe:
+		return s.handleSubscribe(ctx, ss, params)
+	case protocol.MethodResourcesUnsubscribe:
+		return s.handleUnsubscribe(ctx, ss, params)
 	case protocol.MethodPromptsList:
 		return s.handleListPrompts(ctx, ss, params)
 	case protocol.MethodPromptsGet:
@@ -489,6 +510,10 @@ func (s *Server) handleInitialize(ctx context.Context, ss *ServerSession, params
 	s.mu.Unlock()
 
 	capabilities.Logging = &protocol.LoggingCapability{}
+
+	if s.opts.CompletionHandler != nil {
+		capabilities.Completion = &protocol.CompletionCapability{}
+	}
 
 	return &protocol.InitializeResult{
 		ProtocolVersion: req.ProtocolVersion,
@@ -612,6 +637,55 @@ func (s *Server) handleReadResource(ctx context.Context, ss *ServerSession, para
 	return sr.handler(ctx, resourceReq)
 }
 
+// handleSubscribe 处理 resources/subscribe 请求
+func (s *Server) handleSubscribe(ctx context.Context, ss *ServerSession, params json.RawMessage) (*protocol.EmptyResult, error) {
+	if s.opts.SubscribeHandler == nil {
+		return nil, fmt.Errorf("resource subscription not supported")
+	}
+
+	var req protocol.SubscribeParams
+	if err := json.Unmarshal(params, &req); err != nil {
+		return nil, fmt.Errorf("invalid subscribe params: %w", err)
+	}
+
+	if err := s.opts.SubscribeHandler(ctx, &req); err != nil {
+		return nil, err
+	}
+
+	s.mu.Lock()
+	if s.resourceSubscriptions[req.URI] == nil {
+		s.resourceSubscriptions[req.URI] = make(map[*ServerSession]bool)
+	}
+	s.resourceSubscriptions[req.URI][ss] = true
+	s.mu.Unlock()
+
+	return &protocol.EmptyResult{}, nil
+}
+
+// handleUnsubscribe 处理 resources/unsubscribe 请求
+func (s *Server) handleUnsubscribe(ctx context.Context, ss *ServerSession, params json.RawMessage) (*protocol.EmptyResult, error) {
+	if s.opts.UnsubscribeHandler == nil {
+		return nil, fmt.Errorf("resource unsubscription not supported")
+	}
+
+	var req protocol.UnsubscribeParams
+	if err := json.Unmarshal(params, &req); err != nil {
+		return nil, fmt.Errorf("invalid unsubscribe params: %w", err)
+	}
+
+	if err := s.opts.UnsubscribeHandler(ctx, &req); err != nil {
+		return nil, err
+	}
+
+	s.mu.Lock()
+	if s.resourceSubscriptions[req.URI] != nil {
+		delete(s.resourceSubscriptions[req.URI], ss)
+	}
+	s.mu.Unlock()
+
+	return &protocol.EmptyResult{}, nil
+}
+
 // handleListPrompts 处理 prompts/list 请求
 func (s *Server) handleListPrompts(ctx context.Context, ss *ServerSession, params json.RawMessage) (*protocol.ListPromptsResult, error) {
 	s.mu.Lock()
@@ -666,7 +740,32 @@ func (s *Server) handleComplete(ctx context.Context, ss *ServerSession, params j
 
 // handleCancelled 处理 notifications/cancelled 通知
 func (s *Server) handleCancelled(ctx context.Context, ss *ServerSession, params json.RawMessage) error {
-	// TODO: 实现取消逻辑
+	var req protocol.CancelledNotificationParams
+	if err := json.Unmarshal(params, &req); err != nil {
+		return fmt.Errorf("invalid cancelled params: %w", err)
+	}
+
+	requestID := ""
+	switch v := req.RequestID.(type) {
+	case string:
+		requestID = v
+	case float64:
+		requestID = fmt.Sprintf("%.0f", v)
+	case json.Number:
+		requestID = v.String()
+	default:
+		return fmt.Errorf("invalid requestId type: %T", req.RequestID)
+	}
+
+	ss.mu.Lock()
+	cancel, exists := ss.pendingRequests[requestID]
+	ss.mu.Unlock()
+
+	if exists {
+		cancel()
+	}
+
+	// 即使请求不存在也不返回错误,因为请求可能已经完成
 	return nil
 }
 

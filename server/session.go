@@ -24,9 +24,10 @@ type ServerSession struct {
 	// keepalive
 	keepaliveCancel context.CancelFunc
 
-	mu      sync.Mutex
-	state   ServerSessionState
-	waitErr chan error
+	mu              sync.Mutex
+	state           ServerSessionState
+	waitErr         chan error
+	pendingRequests map[string]context.CancelFunc // 跟踪正在处理的请求,用于取消
 }
 
 // ServerSessionState 会话状态
@@ -115,7 +116,11 @@ func (ss *ServerSession) Log(ctx context.Context, params *protocol.LoggingMessag
 		return nil
 	}
 
-	// TODO: 实现日志级别过滤
+	// 根据日志级别过滤
+	if !protocol.ShouldLog(params.Level, logLevel) {
+		return nil
+	}
+
 	return ss.conn.SendNotification(ctx, protocol.NotificationLoggingMessage, params)
 }
 

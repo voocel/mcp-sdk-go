@@ -153,6 +153,8 @@ func (cs *ClientSession) handleResponse(msg *protocol.JSONRPCMessage) {
 // handleRequest 处理来自服务器的请求或通知
 func (cs *ClientSession) handleRequest(ctx context.Context, msg *protocol.JSONRPCMessage) {
 	switch msg.Method {
+	case protocol.MethodPing:
+		cs.handlePing(ctx, msg)
 	case protocol.MethodSamplingCreateMessage:
 		cs.handleCreateMessage(ctx, msg)
 	case protocol.MethodElicitationCreate:
@@ -169,9 +171,17 @@ func (cs *ClientSession) handleRequest(ctx context.Context, msg *protocol.JSONRP
 		cs.handleLoggingMessage(ctx, msg)
 	case protocol.NotificationProgress:
 		cs.handleProgressNotification(ctx, msg)
+	case protocol.NotificationCancelled:
+		cs.handleCancelled(ctx, msg)
 	case protocol.MethodRootsList:
 		cs.handleListRoots(ctx, msg)
 	}
+}
+
+// handlePing 处理 ping 请求
+func (cs *ClientSession) handlePing(ctx context.Context, msg *protocol.JSONRPCMessage) {
+	// Ping 请求不需要参数,直接返回成功响应
+	cs.sendSuccessResponse(ctx, msg, &protocol.EmptyResult{})
 }
 
 // handleCreateMessage 处理 sampling/createMessage 请求
@@ -187,7 +197,23 @@ func (cs *ClientSession) handleCreateMessage(ctx context.Context, msg *protocol.
 		return
 	}
 
-	result, err := cs.client.opts.CreateMessageHandler(ctx, &params)
+	// 跟踪请求并支持取消
+	requestID := protocol.IDToString(msg.ID)
+	requestCtx, cancel := context.WithCancel(ctx)
+
+	cs.mu.Lock()
+	cs.incomingRequests[requestID] = cancel
+	cs.mu.Unlock()
+
+	// 确保请求完成后清理
+	defer func() {
+		cs.mu.Lock()
+		delete(cs.incomingRequests, requestID)
+		cs.mu.Unlock()
+		cancel()
+	}()
+
+	result, err := cs.client.opts.CreateMessageHandler(requestCtx, &params)
 	if err != nil {
 		cs.sendErrorResponse(ctx, msg, protocol.InternalError, err.Error())
 		return
@@ -209,7 +235,21 @@ func (cs *ClientSession) handleElicitation(ctx context.Context, msg *protocol.JS
 		return
 	}
 
-	result, err := cs.client.opts.ElicitationHandler(ctx, &params)
+	requestID := protocol.IDToString(msg.ID)
+	requestCtx, cancel := context.WithCancel(ctx)
+
+	cs.mu.Lock()
+	cs.incomingRequests[requestID] = cancel
+	cs.mu.Unlock()
+
+	defer func() {
+		cs.mu.Lock()
+		delete(cs.incomingRequests, requestID)
+		cs.mu.Unlock()
+		cancel()
+	}()
+
+	result, err := cs.client.opts.ElicitationHandler(requestCtx, &params)
 	if err != nil {
 		cs.sendErrorResponse(ctx, msg, protocol.InternalError, err.Error())
 		return
@@ -313,6 +353,34 @@ func (cs *ClientSession) handleProgressNotification(ctx context.Context, msg *pr
 	}
 
 	cs.client.opts.ProgressNotificationHandler(ctx, &params)
+}
+
+// handleCancelled 处理取消通知
+func (cs *ClientSession) handleCancelled(ctx context.Context, msg *protocol.JSONRPCMessage) {
+	var params protocol.CancelledNotificationParams
+	if err := json.Unmarshal(msg.Params, &params); err != nil {
+		return
+	}
+
+	requestID := ""
+	switch v := params.RequestID.(type) {
+	case string:
+		requestID = v
+	case float64:
+		requestID = fmt.Sprintf("%.0f", v)
+	case json.Number:
+		requestID = v.String()
+	default:
+		return
+	}
+
+	cs.mu.Lock()
+	cancel, exists := cs.incomingRequests[requestID]
+	cs.mu.Unlock()
+
+	if exists {
+		cancel()
+	}
 }
 
 // sendSuccessResponse 发送成功响应

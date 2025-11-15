@@ -93,10 +93,11 @@ func (c *Client) Connect(ctx context.Context, t transport.Transport, _ *ClientSe
 	}
 
 	cs := &ClientSession{
-		conn:    conn,
-		client:  c,
-		waitErr: make(chan error, 1),
-		pending: make(map[string]*pendingRequest),
+		conn:             conn,
+		client:           c,
+		waitErr:          make(chan error, 1),
+		pending:          make(map[string]*pendingRequest),
+		incomingRequests: make(map[string]context.CancelFunc),
 	}
 
 	c.mu.Lock()
@@ -212,9 +213,10 @@ type ClientSession struct {
 	state clientSessionState
 
 	// 待处理的请求
-	mu      sync.Mutex
-	pending map[string]*pendingRequest
-	nextID  int64
+	mu               sync.Mutex
+	pending          map[string]*pendingRequest          // 客户端发送的请求
+	incomingRequests map[string]context.CancelFunc       // 服务器发送的请求(用于取消)
+	nextID           int64
 }
 
 type clientSessionState struct {
