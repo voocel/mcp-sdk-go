@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/voocel/mcp-sdk-go/protocol"
 	"github.com/voocel/mcp-sdk-go/transport"
@@ -19,6 +20,9 @@ type ServerSession struct {
 
 	server *Server
 	conn   Connection // 底层连接(来自transport)
+
+	// keepalive
+	keepaliveCancel context.CancelFunc
 
 	mu      sync.Mutex
 	state   ServerSessionState
@@ -58,6 +62,10 @@ func (ss *ServerSession) ID() string {
 }
 
 func (ss *ServerSession) Close() error {
+	if ss.keepaliveCancel != nil {
+		ss.keepaliveCancel()
+	}
+
 	if ss.calledOnClose.CompareAndSwap(false, true) {
 		if ss.onClose != nil {
 			ss.onClose()
@@ -308,4 +316,32 @@ func (a *connAdapter) handleResponse(msg *protocol.JSONRPCMessage) {
 
 func (a *connAdapter) SessionID() string {
 	return a.conn.SessionID()
+}
+
+// startKeepalive 启动 keepalive 机制
+func (ss *ServerSession) startKeepalive(interval time.Duration) {
+	ctx, cancel := context.WithCancel(context.Background())
+	ss.keepaliveCancel = cancel
+
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				pingCtx, cancel := context.WithTimeout(ctx, interval)
+				err := ss.Ping(pingCtx)
+				cancel()
+
+				if err != nil {
+					// Ping 失败,关闭连接
+					_ = ss.Close()
+					return
+				}
+			}
+		}
+	}()
 }

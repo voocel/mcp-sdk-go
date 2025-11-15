@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/voocel/mcp-sdk-go/protocol"
 	"github.com/voocel/mcp-sdk-go/transport"
@@ -44,6 +45,10 @@ type ServerOptions struct {
 	// 资源订阅/取消订阅处理函数
 	SubscribeHandler   func(context.Context, *protocol.SubscribeParams) error
 	UnsubscribeHandler func(context.Context, *protocol.UnsubscribeParams) error
+
+	// KeepAlive 定义定期 "ping" 请求的间隔
+	// 如果对等方未能响应 keepalive 检查发起的 ping,会话将自动关闭
+	KeepAlive time.Duration
 }
 
 type serverTool struct {
@@ -503,6 +508,11 @@ func (s *Server) handleInitialized(ctx context.Context, ss *ServerSession, param
 	ss.updateState(func(state *ServerSessionState) {
 		state.InitializedParams = &req
 	})
+
+	// 启动 keepalive
+	if s.opts.KeepAlive > 0 {
+		ss.startKeepalive(s.opts.KeepAlive)
+	}
 
 	if s.opts.InitializedHandler != nil {
 		s.opts.InitializedHandler(ctx, ss)
