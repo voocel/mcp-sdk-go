@@ -247,14 +247,21 @@ func (cs *ClientSession) Close() error {
 	cs.mu.Lock()
 	pending := cs.pending
 	cs.pending = make(map[string]*pendingRequest)
+	incomingRequests := cs.incomingRequests
+	cs.incomingRequests = make(map[string]context.CancelFunc)
 	cs.mu.Unlock()
 
-	// 通知所有 pending 请求连接已关闭
+	// 通知所有客户端发出的请求连接已关闭
 	for _, req := range pending {
 		select {
 		case req.err <- fmt.Errorf("connection closed"):
 		default:
 		}
+	}
+
+	// 取消所有服务器发来的正在处理的请求
+	for _, cancel := range incomingRequests {
+		cancel()
 	}
 
 	err := cs.conn.Close()

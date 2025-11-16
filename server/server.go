@@ -426,6 +426,34 @@ func (s *Server) notifyPromptListChanged() {
 	}
 }
 
+// NotifyResourceUpdated 通知订阅了指定资源的所有会话,该资源已更新
+// 只有之前调用 resources/subscribe 订阅了此 URI 的客户端会收到通知
+func (s *Server) NotifyResourceUpdated(uri string) {
+	s.mu.Lock()
+	subscribedSessions, exists := s.resourceSubscriptions[uri]
+	if !exists || len(subscribedSessions) == 0 {
+		s.mu.Unlock()
+		return
+	}
+
+	// 复制会话列表以避免长时间持有锁
+	sessions := make([]*ServerSession, 0, len(subscribedSessions))
+	for ss := range subscribedSessions {
+		sessions = append(sessions, ss)
+	}
+	s.mu.Unlock()
+
+	// 发送通知
+	params := &protocol.ResourceUpdatedNotificationParams{
+		URI: uri,
+	}
+	for _, ss := range sessions {
+		if ss.conn != nil {
+			_ = ss.conn.SendNotification(context.Background(), protocol.NotificationResourcesUpdated, params)
+		}
+	}
+}
+
 // handleRequest 处理来自客户端的请求
 func (s *Server) handleRequest(ctx context.Context, ss *ServerSession, method string, params json.RawMessage) (interface{}, error) {
 	switch method {

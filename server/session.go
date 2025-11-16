@@ -67,6 +67,16 @@ func (ss *ServerSession) Close() error {
 		ss.keepaliveCancel()
 	}
 
+	// 取消所有正在处理的请求
+	ss.mu.Lock()
+	pendingRequests := ss.pendingRequests
+	ss.pendingRequests = make(map[string]context.CancelFunc)
+	ss.mu.Unlock()
+
+	for _, cancel := range pendingRequests {
+		cancel()
+	}
+
 	if ss.calledOnClose.CompareAndSwap(false, true) {
 		if ss.onClose != nil {
 			ss.onClose()
