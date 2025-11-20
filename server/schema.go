@@ -40,7 +40,10 @@ func inferSchema[T any](customTypes ...map[reflect.Type]*invopop.Schema) (*invop
 		}
 	}
 
-	schema := reflector.Reflect(rt)
+	// Create a zero value of type T to pass to Reflect
+	// invopop/jsonschema's Reflect method requires a value, not a reflect.Type
+	var zero T
+	schema := reflector.Reflect(zero)
 	if schema == nil {
 		return nil, fmt.Errorf("failed to generate schema for type %v", rt)
 	}
