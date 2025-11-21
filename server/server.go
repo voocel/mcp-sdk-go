@@ -842,8 +842,9 @@ func (s *Server) handleSetLoggingLevel(ctx context.Context, ss *ServerSession, p
 func (s *Server) HandleMessage(ctx context.Context, msg *protocol.JSONRPCMessage) (*protocol.JSONRPCMessage, error) {
 	// 创建一个临时的 session (SSE 使用旧的单会话模式)
 	ss := &ServerSession{
-		server: s,
-		conn:   nil, // SSE 不使用 connection
+		server:          s,
+		conn:            nil, // SSE 不使用 connection
+		pendingRequests: make(map[string]context.CancelFunc),
 	}
 
 	// 处理消息

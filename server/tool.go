@@ -129,9 +129,8 @@ func wrapToolHandler[In, Out any](tool *protocol.Tool, handler ToolHandlerFor[In
 
 		// 处理输出
 		if outputSchema != nil {
-			// 检查 typed nil
-			var zeroOut Out
-			if outputZero != nil && any(output) == any(zeroOut) {
+			// 检查 typed nil（使用反射，因为某些类型不可比较）
+			if outputZero != nil && reflect.ValueOf(output).IsZero() {
 				// 使用零值替代 typed nil
 				output = outputZero.(Out)
 			}
@@ -141,15 +140,12 @@ func wrapToolHandler[In, Out any](tool *protocol.Tool, handler ToolHandlerFor[In
 				return nil, fmt.Errorf("failed to marshal output: %w", err)
 			}
 
-			// 添加到 result（作为 Embedded Resource）
-			result.Content = append(result.Content, protocol.EmbeddedResourceContent{
-				Type: protocol.ContentTypeResource,
-				Resource: protocol.ResourceContents{
-					URI:      fmt.Sprintf("output://%s", tool.Name),
-					MimeType: "application/json",
-					Text:     string(outputData),
-				},
-			})
+			var outputMap map[string]interface{}
+			if err := json.Unmarshal(outputData, &outputMap); err != nil {
+				return nil, fmt.Errorf("failed to unmarshal output: %w", err)
+			}
+
+			result.StructuredContent = outputMap
 		}
 
 		return result, nil

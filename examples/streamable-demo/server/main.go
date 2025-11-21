@@ -15,6 +15,39 @@ import (
 	"github.com/voocel/mcp-sdk-go/transport/streamable"
 )
 
+// ========== 泛型 API 类型定义 ==========
+
+// UserInfoInput 用户信息查询输入（泛型 API）
+type UserInfoInput struct {
+	UserID string `json:"user_id" jsonschema:"required,description=用户ID"`
+}
+
+// Address 地址信息
+type Address struct {
+	City    string `json:"city" jsonschema:"required,description=城市"`
+	Country string `json:"country" jsonschema:"required,description=国家"`
+	Zipcode string `json:"zipcode" jsonschema:"required,description=邮编"`
+}
+
+// Metadata 用户元数据
+type Metadata struct {
+	CreatedAt    string `json:"created_at" jsonschema:"required,description=创建时间"`
+	LastLogin    string `json:"last_login" jsonschema:"required,description=最后登录时间"`
+	ProfileViews int    `json:"profile_views" jsonschema:"required,description=个人资料浏览次数"`
+	IsVerified   bool   `json:"is_verified" jsonschema:"required,description=是否已验证"`
+}
+
+// UserInfoOutput 用户信息输出（泛型 API）
+type UserInfoOutput struct {
+	UserID   string   `json:"user_id" jsonschema:"required,description=用户ID"`
+	Name     string   `json:"name" jsonschema:"required,description=姓名"`
+	Age      int      `json:"age" jsonschema:"required,description=年龄"`
+	Email    string   `json:"email" jsonschema:"required,description=邮箱"`
+	Address  Address  `json:"address" jsonschema:"required,description=地址信息"`
+	Skills   []string `json:"skills" jsonschema:"required,description=技能列表"`
+	Metadata Metadata `json:"metadata" jsonschema:"required,description=元数据"`
+}
+
 var (
 	serverStartTime = time.Now()
 	requestCounter  = 0
@@ -139,6 +172,105 @@ func main() {
 		},
 	)
 
+	// 注册结构化输出工具
+	mcpServer.AddTool(
+		&protocol.Tool{
+			Name:        "get_weather",
+			Description: "获取指定城市的天气信息（返回结构化数据）",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"city": map[string]interface{}{
+						"type":        "string",
+						"description": "城市名称",
+					},
+				},
+				"required": []string{"city"},
+			},
+
+			OutputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"city": map[string]interface{}{
+						"type":        "string",
+						"description": "城市名称",
+					},
+					"temperature": map[string]interface{}{
+						"type":        "number",
+						"description": "温度（摄氏度）",
+					},
+					"humidity": map[string]interface{}{
+						"type":        "integer",
+						"description": "湿度（百分比）",
+					},
+					"condition": map[string]interface{}{
+						"type":        "string",
+						"description": "天气状况",
+					},
+					"wind_speed": map[string]interface{}{
+						"type":        "number",
+						"description": "风速（km/h）",
+					},
+					"timestamp": map[string]interface{}{
+						"type":        "string",
+						"description": "查询时间",
+					},
+				},
+				"required": []string{"city", "temperature", "humidity", "condition"},
+			},
+		},
+		func(ctx context.Context, req *server.CallToolRequest) (*protocol.CallToolResult, error) {
+			requestCounter++
+			city, _ := req.Params.Arguments["city"].(string)
+
+			weatherData := map[string]interface{}{
+				"city":        city,
+				"temperature": 22.5 + float64(requestCounter%10), // 模拟变化
+				"humidity":    65 + requestCounter%20,
+				"condition":   []string{"晴朗", "多云", "小雨", "阴天"}[requestCounter%4],
+				"wind_speed":  12.3,
+				"timestamp":   time.Now().Format("2006-01-02 15:04:05"),
+			}
+
+			// 返回结构化内容 (使用 StructuredContent)
+			result := &protocol.CallToolResult{
+				StructuredContent: weatherData,
+				IsError:           false,
+			}
+
+			return result, nil
+		},
+	)
+
+	// 注册用户信息工具（使用泛型 API）
+	server.AddTool(mcpServer, &protocol.Tool{
+		Name:        "get_user_info",
+		Description: "获取用户详细信息（演示泛型 API - 自动生成 Schema）",
+	}, func(ctx context.Context, req *server.CallToolRequest, input UserInfoInput) (*protocol.CallToolResult, UserInfoOutput, error) {
+		requestCounter++
+
+		output := UserInfoOutput{
+			UserID: input.UserID,
+			Name:   "张三",
+			Age:    28,
+			Email:  fmt.Sprintf("user_%s@example.com", input.UserID),
+			Address: Address{
+				City:    "北京",
+				Country: "中国",
+				Zipcode: "100000",
+			},
+			Skills: []string{"Go", "Python", "JavaScript"},
+			Metadata: Metadata{
+				CreatedAt:    "2025-01-15 10:30:00",
+				LastLogin:    time.Now().Format("2006-01-02 15:04:05"),
+				ProfileViews: 1234 + requestCounter,
+				IsVerified:   true,
+			},
+		}
+
+		return nil, output, nil
+	})
+
 	// 注册服务器统计资源
 	mcpServer.AddResource(
 		&protocol.Resource{
@@ -171,7 +303,7 @@ func main() {
 	mux.Handle("/mcp", handler)
 
 	httpServer := &http.Server{
-		Addr:    ":8081",
+		Addr:    ":8083",
 		Handler: mux,
 	}
 
@@ -182,7 +314,7 @@ func main() {
 		log.Println("端点地址: http://localhost:8081/mcp")
 		log.Println("传输协议: Streamable HTTP")
 		log.Println("MCP版本: 2025-06-18")
-		log.Println("可用工具: greet, calculate")
+		log.Println()
 		log.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 		log.Println()
 
