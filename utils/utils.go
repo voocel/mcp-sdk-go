@@ -103,7 +103,7 @@ func createStructSchema(t reflect.Type) protocol.JSONSchema {
 	for i := 0; i < t.NumField(); i++ {
 		field := t.Field(i)
 		if field.PkgPath != "" {
-			continue // 跳过私有字段
+			continue // Skip private fields
 		}
 
 		jsonTag := field.Tag.Get("json")
@@ -122,7 +122,7 @@ func createStructSchema(t reflect.Type) protocol.JSONSchema {
 			required = append(required, jsonName)
 		}
 
-		// 添加字段描述 (从jsonschema tag获取)
+		// Add field description (from jsonschema tag)
 		fieldSchema := createFieldSchema(field.Type)
 		if desc := field.Tag.Get("jsonschema"); desc != "" {
 			parts := strings.Split(desc, ",")
@@ -171,7 +171,7 @@ func createFieldSchema(t reflect.Type) map[string]interface{} {
 	case reflect.Ptr:
 		return createFieldSchema(t.Elem())
 	case reflect.Interface:
-		// 对于interface{}类型，允许任何类型
+		// For interface{} type, allow any type
 		schema = map[string]interface{}{}
 	default:
 		schema["type"] = "string"
@@ -206,19 +206,19 @@ func ValidateJSONRPCMessage(msg *protocol.JSONRPCMessage) error {
 		return fmt.Errorf("invalid jsonrpc version: %s", msg.JSONRPC)
 	}
 
-	// 通知消息：有method但没有id（这是合法的）
+	// Notification message: has method but no id (this is valid)
 	if msg.Method != "" && msg.ID == nil {
-		// 这是通知消息，不需要验证更多
+		// This is a notification message, no further validation needed
 		return nil
 	}
 
-	// 请求消息：有method和id
+	// Request message: has method and id
 	if msg.Method != "" && msg.ID != nil {
-		// 这是请求消息，合法
+		// This is a request message, valid
 		return nil
 	}
 
-	// 响应消息：没有method，但有id和result或error
+	// Response message: no method, but has id and result or error
 	if msg.Method == "" {
 		if msg.ID == nil {
 			return fmt.Errorf("response must have an id")

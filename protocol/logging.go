@@ -1,22 +1,22 @@
 package protocol
 
-// LoggingLevel 日志级别
-// 映射到 syslog 消息严重性,如 RFC-5424 中所述:
+// LoggingLevel logging level
+// Maps to syslog message severity as described in RFC-5424:
 // https://datatracker.ietf.org/doc/html/rfc5424#section-6.2.1
 type LoggingLevel string
 
 const (
-	LogLevelDebug     LoggingLevel = "debug"     // 调试级别消息
-	LogLevelInfo      LoggingLevel = "info"      // 信息级别消息
-	LogLevelNotice    LoggingLevel = "notice"    // 正常但重要的消息
-	LogLevelWarning   LoggingLevel = "warning"   // 警告消息
-	LogLevelError     LoggingLevel = "error"     // 错误消息
-	LogLevelCritical  LoggingLevel = "critical"  // 严重错误消息
-	LogLevelAlert     LoggingLevel = "alert"     // 需要立即采取行动
-	LogLevelEmergency LoggingLevel = "emergency" // 系统不可用
+	LogLevelDebug     LoggingLevel = "debug"     // Debug level messages
+	LogLevelInfo      LoggingLevel = "info"      // Informational messages
+	LogLevelNotice    LoggingLevel = "notice"    // Normal but significant messages
+	LogLevelWarning   LoggingLevel = "warning"   // Warning messages
+	LogLevelError     LoggingLevel = "error"     // Error messages
+	LogLevelCritical  LoggingLevel = "critical"  // Critical error messages
+	LogLevelAlert     LoggingLevel = "alert"     // Action must be taken immediately
+	LogLevelEmergency LoggingLevel = "emergency" // System is unusable
 )
 
-// logLevelSeverity 返回日志级别的严重性数值,数值越大越严重
+// logLevelSeverity returns the severity value of the log level, higher values indicate more severe
 func logLevelSeverity(level LoggingLevel) int {
 	switch level {
 	case LogLevelDebug:
@@ -36,19 +36,19 @@ func logLevelSeverity(level LoggingLevel) int {
 	case LogLevelEmergency:
 		return 7
 	default:
-		return -1 // 未知级别
+		return -1 // Unknown level
 	}
 }
 
-// ShouldLog 判断是否应该发送指定级别的日志
-// messageLevel: 要发送的消息级别
-// minLevel: 客户端设置的最低级别
-// 返回 true 表示应该发送(messageLevel >= minLevel)
+// ShouldLog determines whether a log of the specified level should be sent
+// messageLevel: the level of the message to send
+// minLevel: the minimum level set by the client
+// Returns true if the message should be sent (messageLevel >= minLevel)
 func ShouldLog(messageLevel, minLevel LoggingLevel) bool {
 	msgSeverity := logLevelSeverity(messageLevel)
 	minSeverity := logLevelSeverity(minLevel)
 
-	// 如果级别未知,默认不过滤
+	// If level is unknown, don't filter by default
 	if msgSeverity == -1 || minSeverity == -1 {
 		return true
 	}
@@ -56,23 +56,22 @@ func ShouldLog(messageLevel, minLevel LoggingLevel) bool {
 	return msgSeverity >= minSeverity
 }
 
-// SetLoggingLevelParams logging/setLevel 请求参数
+// SetLoggingLevelParams logging/setLevel request parameters
 type SetLoggingLevelParams struct {
 	Meta map[string]any `json:"_meta,omitempty"`
-	// 客户端希望从服务器接收的日志级别
-	// 服务器应该发送此级别及更高级别(即更严重)的所有日志到客户端
+	// The log level the client wishes to receive from the server
+	// The server should send all logs at this level and higher (i.e., more severe) to the client
 	Level LoggingLevel `json:"level"`
 }
 
-// LoggingMessageParams notifications/message 通知参数
+// LoggingMessageParams notifications/message notification parameters
 type LoggingMessageParams struct {
 	Meta map[string]any `json:"_meta,omitempty"`
-	// 要记录的数据,例如字符串消息或对象
-	// 允许任何 JSON 可序列化类型
+	// Data to log, such as a string message or object
+	// Allows any JSON-serializable type
 	Data any `json:"data"`
-	// 此日志消息的严重性级别
+	// Severity level of this log message
 	Level LoggingLevel `json:"level"`
-	// 发出此消息的日志记录器的可选名称
+	// Optional name of the logger that emitted this message
 	Logger string `json:"logger,omitempty"`
 }
-

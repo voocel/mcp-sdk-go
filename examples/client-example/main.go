@@ -49,48 +49,47 @@ func printUsage() {
 	fmt.Println("  client-example <command> [args...]")
 	fmt.Println()
 	fmt.Println("Examples:")
-	fmt.Println("  # 连接 Python 服务器")
+	fmt.Println("  # Connect to Python server")
 	fmt.Println("  client-example python server.py")
 	fmt.Println()
-	fmt.Println("  # 连接 Node.js 服务器")
+	fmt.Println("  # Connect to Node.js server")
 	fmt.Println("  client-example node server.js")
 	fmt.Println()
-	fmt.Println("  # 连接 Go 服务器")
+	fmt.Println("  # Connect to Go server")
 	fmt.Println("  client-example ./calculator-server")
 }
 
-// createClient 创建配置好的 MCP 客户端
 func createClient() *client.Client {
 	return client.NewClient(&client.ClientInfo{
 		Name:    "MCP Client Example",
 		Version: "1.0.0",
 	}, &client.ClientOptions{
-		// 处理工具列表变更通知
+		// Handle tool list change notifications
 		ToolListChangedHandler: func(ctx context.Context, notification *protocol.ToolsListChangedNotification) {
 			log.Println("Tool list changed notification received")
 		},
-		// 处理资源列表变更通知
+		// Handle resource list change notifications
 		ResourceListChangedHandler: func(ctx context.Context, notification *protocol.ResourceListChangedParams) {
 			log.Println("Resource list changed notification received")
 		},
-		// 处理提示列表变更通知
+		// Handle prompt list change notifications
 		PromptListChangedHandler: func(ctx context.Context, notification *protocol.PromptListChangedParams) {
 			log.Println("Prompt list changed notification received")
 		},
-		// 处理服务器日志消息
+		// Handle server log messages
 		LoggingMessageHandler: func(ctx context.Context, notification *protocol.LoggingMessageParams) {
 			log.Printf("Server log [%s]: %v", notification.Level, notification.Data)
 		},
-		// 处理进度通知
+		// Handle progress notifications
 		ProgressNotificationHandler: func(ctx context.Context, notification *protocol.ProgressNotificationParams) {
 			log.Printf("Progress: %.0f/%.0f - %s", notification.Progress, notification.Total, notification.Message)
 		},
-		// 启用 keepalive (每 30 秒 ping 一次)
+		// Enable keepalive (ping every 30 seconds)
 		KeepAlive: 30 * time.Second,
 	})
 }
 
-// printServerInfo 打印服务器信息和能力
+// printServerInfo prints server information and capabilities
 func printServerInfo(session *client.ClientSession) {
 	info := session.InitializeResult()
 
@@ -103,7 +102,7 @@ func printServerInfo(session *client.ClientSession) {
 		log.Printf("  Instructions: %s", info.Instructions)
 	}
 
-	// 打印服务器能力
+	// Print server capabilities
 	caps := info.Capabilities
 	log.Printf("\nServer Capabilities:")
 
@@ -149,12 +148,12 @@ func demonstrateAllFeatures(ctx context.Context, session *client.ClientSession) 
 	// Prompts
 	demonstratePrompts(ctx, session)
 
-	// 等待通知
+	// Wait for notifications
 	log.Println("\nWaiting for notifications (3 seconds)...")
 	time.Sleep(3 * time.Second)
 }
 
-// demonstratePing Ping 功能
+// demonstratePing demonstrates Ping functionality
 func demonstratePing(ctx context.Context, session *client.ClientSession) {
 	log.Println("\nTesting Ping...")
 	if err := session.Ping(ctx, nil); err != nil {
@@ -164,11 +163,11 @@ func demonstratePing(ctx context.Context, session *client.ClientSession) {
 	}
 }
 
-// demonstrateTools 工具相关功能
+// demonstrateTools demonstrates tool-related functionality
 func demonstrateTools(ctx context.Context, session *client.ClientSession) {
 	log.Println("\nTesting Tools...")
 
-	// 列出工具
+	// List tools
 	tools, err := session.ListTools(ctx, nil)
 	if err != nil {
 		log.Printf("   Failed to list tools: %v", err)
@@ -180,12 +179,10 @@ func demonstrateTools(ctx context.Context, session *client.ClientSession) {
 		log.Printf("      %d. %s - %s", i+1, tool.Name, tool.Description)
 	}
 
-	// 如果有工具,尝试调用第一个
 	if len(tools.Tools) > 0 {
 		tool := tools.Tools[0]
 		log.Printf("\n   Calling tool: %s", tool.Name)
 
-		// 构造参数 (根据 schema 或使用空参数)
 		args := make(map[string]any)
 
 		result, err := session.CallTool(ctx, &protocol.CallToolParams{
@@ -206,11 +203,11 @@ func demonstrateTools(ctx context.Context, session *client.ClientSession) {
 	}
 }
 
-// demonstrateResources 资源相关功能
+// demonstrateResources demonstrates resource-related functionality
 func demonstrateResources(ctx context.Context, session *client.ClientSession) {
 	log.Println("\nTesting Resources...")
 
-	// 列出资源
+	// List resources
 	resources, err := session.ListResources(ctx, nil)
 	if err != nil {
 		log.Printf("   Failed to list resources: %v", err)
@@ -226,7 +223,7 @@ func demonstrateResources(ctx context.Context, session *client.ClientSession) {
 		}
 	}
 
-	// 如果有资源,尝试读取第一个
+	// If there are resources, try reading the first one
 	if len(resources.Resources) > 0 {
 		resource := resources.Resources[0]
 		log.Printf("\n   Reading resource: %s", resource.URI)
@@ -248,11 +245,11 @@ func demonstrateResources(ctx context.Context, session *client.ClientSession) {
 	}
 }
 
-// demonstratePrompts Prompts相关功能
+// demonstratePrompts demonstrates prompt-related functionality
 func demonstratePrompts(ctx context.Context, session *client.ClientSession) {
 	log.Println("\nTesting Prompts...")
 
-	// 列出提示
+	// List prompts
 	prompts, err := session.ListPrompts(ctx, nil)
 	if err != nil {
 		log.Printf("   Failed to list prompts: %v", err)
@@ -267,7 +264,7 @@ func demonstratePrompts(ctx context.Context, session *client.ClientSession) {
 		}
 	}
 
-	// 如果有提示,尝试获取第一个
+	// If there are prompts, try getting the first one
 	if len(prompts.Prompts) > 0 {
 		prompt := prompts.Prompts[0]
 		log.Printf("\n   Getting prompt: %s", prompt.Name)

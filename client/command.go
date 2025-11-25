@@ -16,16 +16,16 @@ import (
 	"github.com/voocel/mcp-sdk-go/transport"
 )
 
-// CommandTransport 是一个运行命令并通过 stdin/stdout 与之通信的 Transport
-// 使用换行符分隔的 JSON
+// CommandTransport is a Transport that runs a command and communicates with it via stdin/stdout
+// using newline-delimited JSON
 type CommandTransport struct {
 	Command *exec.Cmd
-	// TerminateDuration 控制在关闭 stdin 后等待进程退出多长时间,然后发送 SIGTERM
-	// 如果为零或负数,则使用默认值 5 秒
+	// TerminateDuration controls how long to wait for the process to exit after closing stdin before sending SIGTERM
+	// If zero or negative, defaults to 5 seconds
 	TerminateDuration time.Duration
 }
 
-// NewCommandTransport 创建一个新的 CommandTransport
+// NewCommandTransport creates a new CommandTransport
 func NewCommandTransport(command string, args ...string) *CommandTransport {
 	return &CommandTransport{
 		Command:           exec.Command(command, args...),
@@ -33,7 +33,7 @@ func NewCommandTransport(command string, args ...string) *CommandTransport {
 	}
 }
 
-// Connect 启动命令并通过 stdin/stdout 连接到它
+// Connect starts the command and connects to it via stdin/stdout
 func (t *CommandTransport) Connect(ctx context.Context) (transport.Connection, error) {
 	stdout, err := t.Command.StdoutPipe()
 	if err != nil {
@@ -63,7 +63,7 @@ func (t *CommandTransport) Connect(ctx context.Context) (transport.Connection, e
 	}, nil
 }
 
-// commandConn 实现 transport.Connection 接口
+// commandConn implements the transport.Connection interface
 type commandConn struct {
 	cmd               *exec.Cmd
 	stdout            io.ReadCloser
@@ -79,7 +79,7 @@ func (c *commandConn) Read(ctx context.Context) (*protocol.JSONRPCMessage, error
 		return nil, transport.ErrConnectionClosed
 	}
 
-	// 使用 channel 来支持 context 取消
+	// Use channels to support context cancellation
 	msgChan := make(chan *protocol.JSONRPCMessage, 1)
 	errChan := make(chan error, 1)
 
@@ -142,20 +142,20 @@ func (c *commandConn) Write(ctx context.Context, msg *protocol.JSONRPCMessage) e
 	return nil
 }
 
-// Close 关闭到子进程的输入流,并等待命令正常终止
-// 如果命令没有退出,则发送信号终止它,最终杀死它
+// Close closes the input stream to the subprocess and waits for the command to terminate gracefully
+// If the command doesn't exit, it sends signals to terminate it, ultimately killing it
 //
-// 参考 MCP 规范:
-// "对于 stdio transport,客户端应该通过以下方式启动关闭:
-//  1. 首先,关闭到子进程(服务器)的输入流
-//  2. 等待服务器退出,或者如果服务器在合理时间内没有退出则发送 SIGTERM
-//  3. 如果服务器在 SIGTERM 后的合理时间内没有退出则发送 SIGKILL"
+// Per MCP specification:
+// "For stdio transport, clients should initiate shutdown by:
+//  1. First, closing the input stream to the subprocess (server)
+//  2. Waiting for the server to exit, or sending SIGTERM if it doesn't exit within a reasonable time
+//  3. Sending SIGKILL if the server doesn't exit within a reasonable time after SIGTERM"
 func (c *commandConn) Close() error {
 	if !c.closed.CompareAndSwap(false, true) {
 		return nil
 	}
 
-	// 关闭 stdin
+	// Close stdin
 	if err := c.stdin.Close(); err != nil {
 		return fmt.Errorf("closing stdin: %w", err)
 	}
@@ -174,20 +174,19 @@ func (c *commandConn) Close() error {
 		}
 	}
 
-	// 等待服务器退出
 	if err, ok := wait(); ok {
 		return err
 	}
 
-	// 发送 SIGTERM
-	// 注意:如果发送 SIGTERM 失败,不等待直接进入 SIGKILL
+	// Send SIGTERM
+	// Note: if sending SIGTERM fails, proceed directly to SIGKILL without waiting
 	if err := c.cmd.Process.Signal(syscall.SIGTERM); err == nil {
 		if err, ok := wait(); ok {
 			return err
 		}
 	}
 
-	// 发送 SIGKILL
+	// Send SIGKILL
 	if err := c.cmd.Process.Kill(); err != nil {
 		return fmt.Errorf("failed to kill process: %w", err)
 	}
@@ -200,6 +199,6 @@ func (c *commandConn) Close() error {
 }
 
 func (c *commandConn) SessionID() string {
-	// Command 连接没有会话 ID
+	// Command connections don't have session IDs
 	return ""
 }

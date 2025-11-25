@@ -27,11 +27,11 @@ const (
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 //
-// MCPService 定义了MCP的gRPC服务
+// MCPService defines the gRPC service for MCP
 type MCPServiceClient interface {
-	// ProcessMessage 处理MCP消息
+	// ProcessMessage processes MCP messages
 	ProcessMessage(ctx context.Context, in *Request, opts ...grpc.CallOption) (*Response, error)
-	// StreamMessages 建立双向流通信
+	// StreamMessages establishes bidirectional streaming communication
 	StreamMessages(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[Request, Response], error)
 }
 
@@ -70,11 +70,11 @@ type MCPService_StreamMessagesClient = grpc.BidiStreamingClient[Request, Respons
 // All implementations must embed UnimplementedMCPServiceServer
 // for forward compatibility.
 //
-// MCPService 定义了MCP的gRPC服务
+// MCPService defines the gRPC service for MCP
 type MCPServiceServer interface {
-	// ProcessMessage 处理MCP消息
+	// ProcessMessage processes MCP messages
 	ProcessMessage(context.Context, *Request) (*Response, error)
-	// StreamMessages 建立双向流通信
+	// StreamMessages establishes bidirectional streaming communication
 	StreamMessages(grpc.BidiStreamingServer[Request, Response]) error
 	mustEmbedUnimplementedMCPServiceServer()
 }

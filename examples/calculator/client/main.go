@@ -19,33 +19,33 @@ func main() {
 		Version: "1.0.0",
 	}, nil)
 
-	// 创建 CommandTransport 连接到计算器服务
+	// Create CommandTransport to connect to calculator service
 	transport := client.NewCommandTransport("go", "run", "../server/main.go")
 
-	fmt.Println("连接到计算器服务...")
+	fmt.Println("Connecting to calculator service...")
 	session, err := mcpClient.Connect(ctx, transport, nil)
 	if err != nil {
-		log.Fatalf("连接失败: %v", err)
+		log.Fatalf("Connection failed: %v", err)
 	}
 	defer session.Close()
 
 	initResult := session.InitializeResult()
-	fmt.Printf("连接成功！服务器: %s v%s\n",
+	fmt.Printf("Connection successful! Server: %s v%s\n",
 		initResult.ServerInfo.Name, initResult.ServerInfo.Version)
 
 	toolsResult, err := session.ListTools(ctx, nil)
 	if err != nil {
-		log.Fatalf("获取工具列表失败: %v", err)
+		log.Fatalf("Failed to get tools list: %v", err)
 	}
 
-	fmt.Println("\n可用工具:")
+	fmt.Println("\nAvailable tools:")
 	for _, tool := range toolsResult.Tools {
 		fmt.Printf("  - %s: %s\n", tool.Name, tool.Description)
 	}
 	fmt.Println()
 
-	// 测试加法
-	fmt.Println("测试计算功能:")
+	// Test addition
+	fmt.Println("Testing calculation functions:")
 	result, err := session.CallTool(ctx, &protocol.CallToolParams{
 		Name: "add",
 		Arguments: map[string]any{
@@ -54,7 +54,7 @@ func main() {
 		},
 	})
 	if err != nil {
-		log.Fatalf("调用 add 工具失败: %v", err)
+		log.Fatalf("Failed to call add tool: %v", err)
 	}
 
 	if len(result.Content) > 0 {
@@ -63,7 +63,7 @@ func main() {
 		}
 	}
 
-	// 测试减法
+	// Test subtraction
 	result, err = session.CallTool(ctx, &protocol.CallToolParams{
 		Name: "subtract",
 		Arguments: map[string]any{
@@ -72,7 +72,7 @@ func main() {
 		},
 	})
 	if err != nil {
-		log.Fatalf("调用 subtract 工具失败: %v", err)
+		log.Fatalf("Failed to call subtract tool: %v", err)
 	}
 
 	if len(result.Content) > 0 {
@@ -81,7 +81,7 @@ func main() {
 		}
 	}
 
-	// 测试乘法
+	// Test multiplication
 	result, err = session.CallTool(ctx, &protocol.CallToolParams{
 		Name: "multiply",
 		Arguments: map[string]any{
@@ -90,7 +90,7 @@ func main() {
 		},
 	})
 	if err != nil {
-		log.Fatalf("调用 multiply 工具失败: %v", err)
+		log.Fatalf("Failed to call multiply tool: %v", err)
 	}
 
 	if len(result.Content) > 0 {
@@ -99,7 +99,7 @@ func main() {
 		}
 	}
 
-	// 测试除法
+	// Test division
 	result, err = session.CallTool(ctx, &protocol.CallToolParams{
 		Name: "divide",
 		Arguments: map[string]any{
@@ -108,7 +108,7 @@ func main() {
 		},
 	})
 	if err != nil {
-		log.Fatalf("调用 divide 工具失败: %v", err)
+		log.Fatalf("Failed to call divide tool: %v", err)
 	}
 
 	if len(result.Content) > 0 {
@@ -117,7 +117,7 @@ func main() {
 		}
 	}
 
-	// 测试除零错误
+	// Test division by zero error
 	result, err = session.CallTool(ctx, &protocol.CallToolParams{
 		Name: "divide",
 		Arguments: map[string]any{
@@ -126,25 +126,25 @@ func main() {
 		},
 	})
 	if err != nil {
-		fmt.Printf("  除零错误: %v\n", err)
+		fmt.Printf("  Division by zero error: %v\n", err)
 	} else if result.IsError && len(result.Content) > 0 {
 		if textContent, ok := result.Content[0].(protocol.TextContent); ok {
-			fmt.Printf("  除零错误: %s\n", textContent.Text)
+			fmt.Printf("  Division by zero error: %s\n", textContent.Text)
 		}
 	}
 
-	// 获取帮助提示模板
-	fmt.Println("\n获取帮助信息:")
+	// Get help prompt template
+	fmt.Println("\nGetting help information:")
 	promptResult, err := session.GetPrompt(ctx, &protocol.GetPromptParams{
 		Name:      "calculator_help",
 		Arguments: map[string]string{},
 	})
 	if err != nil {
-		log.Fatalf("获取提示模板失败: %v", err)
+		log.Fatalf("Failed to get prompt template: %v", err)
 	}
 
-	fmt.Printf("  描述: %s\n", promptResult.Description)
-	fmt.Println("  对话示例:")
+	fmt.Printf("  Description: %s\n", promptResult.Description)
+	fmt.Println("  Conversation example:")
 	for i, msg := range promptResult.Messages {
 		if textContent, ok := msg.Content.(protocol.TextContent); ok {
 			fmt.Printf("    %d. [%s]: %s\n", i+1, msg.Role, textContent.Text)

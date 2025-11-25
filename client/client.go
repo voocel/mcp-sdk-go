@@ -16,19 +16,19 @@ type ClientInfo struct {
 	Version string
 }
 
-// ClientOptions 配置客户端的行为
+// ClientOptions configures client behavior
 type ClientOptions struct {
-	// CreateMessageHandler 处理来自服务器的 sampling/createMessage 请求
+	// CreateMessageHandler handles sampling/createMessage requests from the server
 	//
-	// 设置为非 nil 值会使客户端声明 sampling 能力
+	// Setting this to a non-nil value causes the client to declare sampling capability
 	CreateMessageHandler func(context.Context, *protocol.CreateMessageRequest) (*protocol.CreateMessageResult, error)
 
-	// ElicitationHandler 处理来自服务器的 elicitation/create 请求
+	// ElicitationHandler handles elicitation/create requests from the server
 	//
-	// 设置为非 nil 值会使客户端声明 elicitation 能力
+	// Setting this to a non-nil value causes the client to declare elicitation capability
 	ElicitationHandler func(context.Context, *protocol.ElicitationCreateParams) (*protocol.ElicitationResult, error)
 
-	// 来自服务器的通知处理器
+	// Notification handlers from server
 	ToolListChangedHandler      func(context.Context, *protocol.ToolsListChangedNotification)
 	PromptListChangedHandler    func(context.Context, *protocol.PromptListChangedParams)
 	ResourceListChangedHandler  func(context.Context, *protocol.ResourceListChangedParams)
@@ -36,8 +36,8 @@ type ClientOptions struct {
 	LoggingMessageHandler       func(context.Context, *protocol.LoggingMessageParams)
 	ProgressNotificationHandler func(context.Context, *protocol.ProgressNotificationParams)
 
-	// KeepAlive 定义定期 "ping" 请求的间隔
-	// 如果对等方未能响应 keepalive 检查发起的 ping,会话将自动关闭
+	// KeepAlive defines the interval for periodic "ping" requests
+	// If the peer fails to respond to a keepalive-initiated ping, the session will automatically close
 	KeepAlive time.Duration
 }
 
@@ -65,7 +65,7 @@ func NewClient(info *ClientInfo, opts *ClientOptions) *Client {
 
 type ClientSessionOptions struct{}
 
-// capabilities 返回客户端的能力声明
+// capabilities returns the client's capability declaration
 func (c *Client) capabilities() *protocol.ClientCapabilities {
 	caps := &protocol.ClientCapabilities{
 		Roots: &protocol.RootsCapability{
@@ -81,11 +81,11 @@ func (c *Client) capabilities() *protocol.ClientCapabilities {
 	return caps
 }
 
-// Connect 通过给定的 transport 开始 MCP 会话
-// 返回的会话已初始化并可以使用
+// Connect starts an MCP session via the given transport
+// The returned session is initialized and ready to use
 //
-// 通常,客户端负责在不再需要时关闭连接
-// 但是,如果连接被服务器关闭,调用或通知将返回包装 ErrConnectionClosed 的错误
+// Typically, the client is responsible for closing the connection when no longer needed
+// However, if the connection is closed by the server, calls or notifications will return errors wrapping ErrConnectionClosed
 func (c *Client) Connect(ctx context.Context, t transport.Transport, _ *ClientSessionOptions) (*ClientSession, error) {
 	conn, err := t.Connect(ctx)
 	if err != nil {
@@ -110,7 +110,7 @@ func (c *Client) Connect(ctx context.Context, t transport.Transport, _ *ClientSe
 		close(cs.waitErr)
 	}()
 
-	// 执行初始化握手
+	// Perform initialization handshake
 	initParams := &protocol.InitializeParams{
 		ProtocolVersion: protocol.MCPVersion,
 		ClientInfo: protocol.ClientInfo{
@@ -146,7 +146,7 @@ func (c *Client) Connect(ctx context.Context, t transport.Transport, _ *ClientSe
 	return cs, nil
 }
 
-// AddRoot 添加一个根目录并通知所有会话
+// AddRoot adds a root directory and notifies all sessions
 func (c *Client) AddRoot(root *protocol.Root) {
 	c.mu.Lock()
 	c.roots = append(c.roots, root)
@@ -154,13 +154,13 @@ func (c *Client) AddRoot(root *protocol.Root) {
 	copy(sessions, c.sessions)
 	c.mu.Unlock()
 
-	// 通知所有会话根目录列表已更改
+	// Notify all sessions that the roots list has changed
 	for _, cs := range sessions {
 		_ = cs.NotifyRootsListChanged(context.Background())
 	}
 }
 
-// RemoveRoot 移除一个根目录并通知所有会话
+// RemoveRoot removes a root directory and notifies all sessions
 func (c *Client) RemoveRoot(uri string) {
 	c.mu.Lock()
 	var changed bool
@@ -175,7 +175,7 @@ func (c *Client) RemoveRoot(uri string) {
 	copy(sessions, c.sessions)
 	c.mu.Unlock()
 
-	// 只有在根目录真的变化时才通知
+	// Only notify if the roots actually changed
 	if changed {
 		for _, cs := range sessions {
 			_ = cs.NotifyRootsListChanged(context.Background())
@@ -183,7 +183,7 @@ func (c *Client) RemoveRoot(uri string) {
 	}
 }
 
-// ListRoots 列出所有根目录
+// ListRoots lists all root directories
 func (c *Client) ListRoots() []*protocol.Root {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -192,13 +192,13 @@ func (c *Client) ListRoots() []*protocol.Root {
 	return roots
 }
 
-// ClientSession 是与 MCP 服务器的逻辑连接
-// 可用于向服务器发送请求或通知
-// 通过调用 Client.Connect 创建会话
+// ClientSession is a logical connection to an MCP server
+// Can be used to send requests or notifications to the server
+// Sessions are created by calling Client.Connect
 //
-// 调用 ClientSession.Close 关闭连接,或使用 ClientSession.Wait 等待服务器终止
+// Call ClientSession.Close to close the connection, or use ClientSession.Wait to wait for server termination
 type ClientSession struct {
-	// 确保 onClose 最多被调用一次
+	// Ensure onClose is called at most once
 	calledOnClose atomic.Bool
 	onClose       func()
 
@@ -209,13 +209,13 @@ type ClientSession struct {
 	// keepalive
 	keepaliveCancel context.CancelFunc
 
-	// 会话状态
+	// Session state
 	state clientSessionState
 
-	// 待处理的请求
+	// Pending requests
 	mu               sync.Mutex
-	pending          map[string]*pendingRequest          // 客户端发送的请求
-	incomingRequests map[string]context.CancelFunc       // 服务器发送的请求(用于取消)
+	pending          map[string]*pendingRequest    // Requests sent by client
+	incomingRequests map[string]context.CancelFunc // Requests sent by server (for cancellation)
 	nextID           int64
 }
 
@@ -229,7 +229,7 @@ type pendingRequest struct {
 	err      chan error
 }
 
-// InitializeResult 返回初始化结果
+// InitializeResult returns the initialization result
 func (cs *ClientSession) InitializeResult() *protocol.InitializeResult {
 	return cs.state.InitializeResult
 }
@@ -243,7 +243,7 @@ func (cs *ClientSession) Close() error {
 		cs.keepaliveCancel()
 	}
 
-	// 清理所有 pending 请求(在关闭连接之前)
+	// Clean up all pending requests (before closing connection)
 	cs.mu.Lock()
 	pending := cs.pending
 	cs.pending = make(map[string]*pendingRequest)
@@ -251,7 +251,7 @@ func (cs *ClientSession) Close() error {
 	cs.incomingRequests = make(map[string]context.CancelFunc)
 	cs.mu.Unlock()
 
-	// 通知所有客户端发出的请求连接已关闭
+	// Notify all client-initiated requests that connection is closed
 	for _, req := range pending {
 		select {
 		case req.err <- fmt.Errorf("connection closed"):
@@ -259,7 +259,7 @@ func (cs *ClientSession) Close() error {
 		}
 	}
 
-	// 取消所有服务器发来的正在处理的请求
+	// Cancel all server-initiated requests currently being processed
 	for _, cancel := range incomingRequests {
 		cancel()
 	}
@@ -282,7 +282,7 @@ func (cs *ClientSession) Close() error {
 	return err
 }
 
-// Wait 等待连接被服务器关闭 通常,客户端应该负责关闭连接
+// Wait waits for the connection to be closed by the server. Typically, the client should be responsible for closing the connection
 func (cs *ClientSession) Wait() error {
 	return <-cs.waitErr
 }

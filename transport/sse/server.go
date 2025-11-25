@@ -68,26 +68,26 @@ func (h *HTTPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	switch r.Method {
 	case http.MethodGet:
-		// SSE 连接
+		// SSE connection
 		h.handleSSE(w, r)
 	case http.MethodPost:
-		// 消息发送
+		// Message sending
 		h.handleMessage(w, r)
 	default:
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 	}
 }
 
-// validateProtocolVersion 验证协议版本
+// validateProtocolVersion validates the protocol version
 func (h *HTTPHandler) validateProtocolVersion(r *http.Request) error {
 	clientVersion := r.Header.Get(MCPProtocolVersionHeader)
 
-	// 如果没有头部,假设为最新版本
+	// If no header, assume latest version
 	if clientVersion == "" {
 		return nil
 	}
 
-	// 验证支持的版本
+	// Validate supported versions
 	supportedVersions := []string{
 		"2025-06-18",
 		"2025-03-26",
@@ -103,7 +103,7 @@ func (h *HTTPHandler) validateProtocolVersion(r *http.Request) error {
 	return fmt.Errorf("unsupported protocol version: %s", clientVersion)
 }
 
-// handleSSE 处理 SSE 连接
+// handleSSE handles SSE connections
 func (h *HTTPHandler) handleSSE(w http.ResponseWriter, r *http.Request) {
 	sessionID := r.Header.Get(MCPSessionIDHeader)
 	if sessionID == "" {
@@ -125,7 +125,7 @@ func (h *HTTPHandler) handleSSE(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 发送 endpoint 事件
+	// Send endpoint event
 	endpointURL := fmt.Sprintf("/message?sessionId=%s", session.ID)
 	fmt.Fprintf(w, "event: endpoint\ndata: %s\n\n", endpointURL)
 	flusher.Flush()
@@ -141,7 +141,7 @@ func (h *HTTPHandler) handleSSE(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 
-			// 发送 SSE 格式的消息事件
+			// Send message event in SSE format
 			fmt.Fprintf(w, "event: message\ndata: %s\n\n", event)
 			flusher.Flush()
 
@@ -152,7 +152,7 @@ func (h *HTTPHandler) handleSSE(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// handleMessage 处理消息发送
+// handleMessage handles message sending
 func (h *HTTPHandler) handleMessage(w http.ResponseWriter, r *http.Request) {
 	sessionID := r.URL.Query().Get("sessionId")
 	if sessionID == "" {
@@ -181,15 +181,15 @@ func (h *HTTPHandler) handleMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 立即返回 202 Accepted,响应将通过 SSE 发送
+	// Return 202 Accepted immediately, response will be sent via SSE
 	w.Header().Set(MCPSessionIDHeader, session.ID)
 	w.WriteHeader(http.StatusAccepted)
 
 	select {
 	case session.Transport.incoming <- &message:
-		// 消息已发送
+		// Message sent
 	default:
-		// 缓冲区满
+		// Buffer full
 		fmt.Printf("Session %s buffer full, dropping message\n", sessionID)
 	}
 
@@ -228,7 +228,7 @@ func (h *HTTPHandler) getOrCreateSession(sessionID string, r *http.Request) *ser
 	return session
 }
 
-// handleServerSession 处理服务器会话
+// handleServerSession handles the server session
 func (h *HTTPHandler) handleServerSession(ctx context.Context, session *serverSession, r *http.Request) {
 	mcpServer := h.serverFactory(r)
 
@@ -244,7 +244,7 @@ func (h *HTTPHandler) handleServerSession(ctx context.Context, session *serverSe
 	}
 }
 
-// cleanupSessions 清理过期会话
+// cleanupSessions cleans up expired sessions
 func (h *HTTPHandler) cleanupSessions() {
 	ticker := time.NewTicker(5 * time.Minute)
 	defer ticker.Stop()
@@ -269,7 +269,7 @@ func (h *HTTPHandler) cleanupSessions() {
 	}
 }
 
-// sendJSONRPCError 发送 JSON-RPC 错误响应
+// sendJSONRPCError sends a JSON-RPC error response
 func (h *HTTPHandler) sendJSONRPCError(w http.ResponseWriter, id string, code int, message string, data interface{}) {
 	errorResp := protocol.JSONRPCMessage{
 		JSONRPC: "2.0",
@@ -286,7 +286,7 @@ func (h *HTTPHandler) sendJSONRPCError(w http.ResponseWriter, id string, code in
 	json.NewEncoder(w).Encode(errorResp)
 }
 
-// Shutdown 关闭处理器
+// Shutdown shuts down the handler
 func (h *HTTPHandler) Shutdown(ctx context.Context) error {
 	if h.cancel != nil {
 		h.cancel()
@@ -348,7 +348,7 @@ func (c *serverConnection) Write(ctx context.Context, msg *protocol.JSONRPCMessa
 		return fmt.Errorf("failed to marshal message: %w", err)
 	}
 
-	// 发送到 SSE 流
+	// Send to SSE stream
 	select {
 	case <-ctx.Done():
 		return ctx.Err()

@@ -1,32 +1,30 @@
 package protocol
 
-// Completion 参数自动补全 (MCP 2025-06-18)
-// 为提示和资源 URI 参数提供智能补全建议
+// Completion parameter auto-completion (MCP 2025-06-18)
+// Provides intelligent completion suggestions for prompt and resource URI parameters
 
-// CompletionCapability 补全能力声明
+// CompletionCapability completion capability declaration
 type CompletionCapability struct{}
 
-// ReferenceType 引用类型
 type ReferenceType string
 
 const (
-	ReferenceTypePrompt   ReferenceType = "ref/prompt"   // 提示引用
-	ReferenceTypeResource ReferenceType = "ref/resource" // 资源引用
+	ReferenceTypePrompt   ReferenceType = "ref/prompt"   // Prompt reference
+	ReferenceTypeResource ReferenceType = "ref/resource" // Resource reference
 )
 
-// PromptReference 提示引用
 type PromptReference struct {
-	Type ReferenceType `json:"type"` // 必须是 "ref/prompt"
-	Name string        `json:"name"` // 提示名称
+	Type ReferenceType `json:"type"` // Must be "ref/prompt"
+	Name string        `json:"name"` // Prompt name
 }
 
-// ResourceReference 资源引用
+// ResourceReference resource reference
 type ResourceReference struct {
-	Type ReferenceType `json:"type"` // 必须是 "ref/resource"
-	URI  string        `json:"uri"`  // 资源 URI (可能包含模板变量)
+	Type ReferenceType `json:"type"` // Must be "ref/resource"
+	URI  string        `json:"uri"`  // Resource URI (may contain template variables)
 }
 
-// CompletionReference 补全引用 (PromptReference 或 ResourceReference)
+// CompletionReference completion reference (PromptReference or ResourceReference)
 type CompletionReference interface {
 	GetType() ReferenceType
 }
@@ -39,37 +37,35 @@ func (r ResourceReference) GetType() ReferenceType {
 	return r.Type
 }
 
-// CompletionArgument 补全参数
 type CompletionArgument struct {
-	Name  string `json:"name"`  // 参数名称
-	Value string `json:"value"` // 当前值
+	Name  string `json:"name"`
+	Value string `json:"value"`
 }
 
-// CompletionContext 补全上下文
 type CompletionContext struct {
-	Arguments map[string]string `json:"arguments,omitempty"` // 已解析的参数映射
+	Arguments map[string]string `json:"arguments,omitempty"`
 }
 
-// CompleteRequest 补全请求 (completion/complete)
+// CompleteRequest represents the completion request (completion/complete)
 type CompleteRequest struct {
-	Ref      map[string]any      `json:"ref"`                // 引用 (PromptReference 或 ResourceReference)
-	Argument CompletionArgument  `json:"argument"`           // 要补全的参数
-	Context  *CompletionContext  `json:"context,omitempty"`  // 可选的上下文
+	Ref      map[string]any     `json:"ref"`               // Reference (PromptReference or ResourceReference)
+	Argument CompletionArgument `json:"argument"`          // Argument to complete
+	Context  *CompletionContext `json:"context,omitempty"` // Optional context
 }
 
-// CompletionResult 补全结果
+// CompletionResult represents completion result
 type CompletionResult struct {
-	Values  []string `json:"values"`           // 补全建议列表 (最多 100 个)
-	Total   *int     `json:"total,omitempty"`  // 可选: 总匹配数
-	HasMore bool     `json:"hasMore"`          // 是否有更多结果
+	Values  []string `json:"values"`          // Completion suggestions (max 100)
+	Total   *int     `json:"total,omitempty"` // Optional: total matches count
+	HasMore bool     `json:"hasMore"`         // Whether there are more results
 }
 
-// CompleteResult 补全响应
+// CompleteResult represents the completion response
 type CompleteResult struct {
-	Completion CompletionResult `json:"completion"` // 补全结果
+	Completion CompletionResult `json:"completion"` // Completion result
 }
 
-// UnmarshalCompletionReference 反序列化补全引用
+// UnmarshalCompletionReference deserializes completion reference
 func UnmarshalCompletionReference(data map[string]any) (CompletionReference, error) {
 	refType, ok := data["type"].(string)
 	if !ok {
@@ -114,7 +110,6 @@ func UnmarshalCompletionReference(data map[string]any) (CompletionReference, err
 	}
 }
 
-// NewPromptReference 创建提示引用
 func NewPromptReference(name string) PromptReference {
 	return PromptReference{
 		Type: ReferenceTypePrompt,
@@ -122,7 +117,6 @@ func NewPromptReference(name string) PromptReference {
 	}
 }
 
-// NewResourceReference 创建资源引用
 func NewResourceReference(uri string) ResourceReference {
 	return ResourceReference{
 		Type: ReferenceTypeResource,
@@ -130,9 +124,8 @@ func NewResourceReference(uri string) ResourceReference {
 	}
 }
 
-// NewCompletionResult 创建补全结果
 func NewCompletionResult(values []string, hasMore bool) CompletionResult {
-	// 限制最多 100 个结果
+	// Limit to maximum 100 results
 	if len(values) > 100 {
 		values = values[:100]
 		hasMore = true
@@ -144,9 +137,8 @@ func NewCompletionResult(values []string, hasMore bool) CompletionResult {
 	}
 }
 
-// NewCompletionResultWithTotal 创建带总数的补全结果
 func NewCompletionResultWithTotal(values []string, total int, hasMore bool) CompletionResult {
-	// 限制最多 100 个结果
+	// Limit to maximum 100 results
 	if len(values) > 100 {
 		values = values[:100]
 		hasMore = true
@@ -158,4 +150,3 @@ func NewCompletionResultWithTotal(values []string, total int, hasMore bool) Comp
 		HasMore: hasMore,
 	}
 }
-

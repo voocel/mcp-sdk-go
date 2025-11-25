@@ -9,33 +9,33 @@ import (
 
 var ErrConnectionClosed = errors.New("connection closed")
 
-// Transport 用于创建客户端和服务器之间的双向连接
+// Transport is used to create bidirectional connections between client and server
 type Transport interface {
-	// Connect 返回逻辑 JSON-RPC 连接
-	// 它会被 Server.Connect 或 Client.Connect 精确调用一次
+	// Connect returns a logical JSON-RPC connection
+	// It will be called exactly once by Server.Connect or Client.Connect
 	Connect(ctx context.Context) (Connection, error)
 }
 
-// Connection 是一个逻辑双向 JSON-RPC 连接
+// Connection is a logical bidirectional JSON-RPC connection
 type Connection interface {
-	// Read 从连接读取下一条要处理的消息
+	// Read reads the next message to be processed from the connection
 	//
-	// Connection 必须允许 Read 与 Close 并发调用
-	// 特别是,调用 Close 应该解除正在等待输入的 Read
+	// Connection must allow Read to be called concurrently with Close.
+	// In particular, calling Close should unblock a Read waiting for input.
 	Read(ctx context.Context) (*protocol.JSONRPCMessage, error)
 
-	// Write 向连接写入新消息
+	// Write writes a new message to the connection
 	//
-	// Write 可以并发调用,因为调用或响应可能在用户代码中并发发生
+	// Write can be called concurrently because calls or responses may occur concurrently in user code.
 	Write(ctx context.Context, msg *protocol.JSONRPCMessage) error
 
-	// Close 关闭连接
-	// 当 Read 或 Write 失败时会隐式调用
+	// Close closes the connection.
+	// Called implicitly when Read or Write fails.
 	//
-	// Close 可能被多次调用,可能并发调用
+	// Close may be called multiple times, possibly concurrently.
 	Close() error
 
-	// SessionID 返回会话 ID
-	// 如果没有会话 ID,返回空字符串
+	// SessionID returns the session ID.
+	// Returns empty string if there is no session ID.
 	SessionID() string
 }

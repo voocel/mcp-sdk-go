@@ -20,104 +20,104 @@ func main() {
 	ctx := context.Background()
 
 	log.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-	log.Println("Streamable HTTP 客户端测试")
+	log.Println("Streamable HTTP Client Test")
 	log.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 	log.Println()
 
 	// ========== Initialize ==========
-	log.Println("初始化连接")
+	log.Println("Initializing connection")
 	initResult, sid, err := sendRequestWithSession(ctx, "initialize", map[string]interface{}{
 		"protocolVersion": "2025-06-18",
 		"capabilities":    map[string]interface{}{},
 		"clientInfo": map[string]interface{}{
-			"name":    "HTTP测试客户端",
+			"name":    "HTTP Test Client",
 			"version": "1.0.0",
 		},
 	})
 	if err != nil {
-		log.Fatalf("初始化失败: %v", err)
+		log.Fatalf("Initialization failed: %v", err)
 	}
 	sessionID = sid
-	log.Printf("初始化成功 (Session ID: %s)\n", sessionID)
-	log.Printf("响应: %s\n\n", prettyJSON(initResult))
+	log.Printf("Initialization successful (Session ID: %s)\n", sessionID)
+	log.Printf("Response: %s\n\n", prettyJSON(initResult))
 
-	// ========== 列出工具 ==========
+	// ========== List Tools ==========
 	log.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-	log.Println("列出所有工具")
+	log.Println("Listing all tools")
 	toolsResult, err := sendRequest(ctx, "tools/list", map[string]interface{}{})
 	if err != nil {
-		log.Fatalf("列出工具失败: %v", err)
+		log.Fatalf("Failed to list tools: %v", err)
 	}
 
 	var toolsList struct {
 		Tools []protocol.Tool `json:"tools"`
 	}
 	if err := json.Unmarshal(toolsResult, &toolsList); err != nil {
-		log.Fatalf("解析工具列表失败: %v", err)
+		log.Fatalf("Failed to parse tools list: %v", err)
 	}
 
-	log.Printf("找到 %d 个工具:\n", len(toolsList.Tools))
+	log.Printf("Found %d tools:\n", len(toolsList.Tools))
 	for i, tool := range toolsList.Tools {
 		log.Printf("  %d. %s - %s", i+1, tool.Name, tool.Description)
 		if tool.OutputSchema != nil {
-			log.Printf("     支持结构化输出")
+			log.Printf("     Supports structured output")
 		}
 	}
 	log.Println()
 
-	// ========== 调用普通文本工具 ==========
+	// ========== Call Text Output Tool ==========
 	log.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-	log.Println("调用 greet 工具 (文本输出)")
+	log.Println("Calling greet tool (text output)")
 	greetResult, err := sendRequest(ctx, "tools/call", map[string]interface{}{
 		"name": "greet",
 		"arguments": map[string]interface{}{
-			"name":     "测试用户",
-			"language": "zh",
+			"name":     "Test User",
+			"language": "en",
 		},
 	})
 	if err != nil {
-		log.Printf("调用失败: %v\n", err)
+		log.Printf("Call failed: %v\n", err)
 	} else {
-		log.Printf("调用成功\n")
-		log.Printf("响应: %s\n", prettyJSON(greetResult))
+		log.Printf("Call successful\n")
+		log.Printf("Response: %s\n", prettyJSON(greetResult))
 	}
 	log.Println()
 
-	// ========== 调用结构化输出工具 - 天气 ==========
+	// ========== Call Structured Output Tool - Weather ==========
 	log.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-	log.Println("调用 get_weather 工具 (结构化输出)")
+	log.Println("Calling get_weather tool (structured output)")
 	weatherResult, err := sendRequest(ctx, "tools/call", map[string]interface{}{
 		"name": "get_weather",
 		"arguments": map[string]interface{}{
-			"city": "北京",
+			"city": "Beijing",
 		},
 	})
 	if err != nil {
-		log.Printf("调用失败: %v\n", err)
+		log.Printf("Call failed: %v\n", err)
 	} else {
-		log.Printf("调用成功\n")
-		log.Printf("原始响应:\n%s\n", prettyJSON(weatherResult))
+		log.Printf("Call successful\n")
+		log.Printf("Raw response:\n%s\n", prettyJSON(weatherResult))
 
-		// 解析结构化数据
+		// Parse structured data
 		var toolResult protocol.CallToolResult
 		if err := json.Unmarshal(weatherResult, &toolResult); err == nil {
 			if toolResult.StructuredContent != nil {
-				log.Println("\n解析结构化数据:")
+				log.Println("\nParsed structured data:")
 				data := toolResult.StructuredContent.(map[string]interface{})
-				log.Printf("  城市: %v", data["city"])
-				log.Printf("  温度: %.1f°C", data["temperature"])
-				log.Printf("  湿度: %v%%", data["humidity"])
-				log.Printf("  天气: %v", data["condition"])
-				log.Printf("  风速: %.1f km/h", data["wind_speed"])
-				log.Printf("  时间: %v", data["timestamp"])
+				log.Printf("  City: %v", data["city"])
+				log.Printf("  Temperature: %.1f°C", data["temperature"])
+				log.Printf("  Humidity: %v%%", data["humidity"])
+				log.Printf("  Condition: %v", data["condition"])
+				log.Printf("  Wind Speed: %.1f km/h", data["wind_speed"])
+				log.Printf("  Timestamp: %v", data["timestamp"])
 			}
 		}
 	}
 	log.Println()
 
-	// ========== 调用嵌套结构化输出工具 ==========
+	// ========== Call Nested Structured Output Tool ==========
 	log.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-	log.Println("调用 get_user_info 工具 (嵌套结构化输出)")
+	log.Println("Calling get_user_info tool (nested structured output)")
 	userResult, err := sendRequest(ctx, "tools/call", map[string]interface{}{
 		"name": "get_user_info",
 		"arguments": map[string]interface{}{
@@ -125,50 +125,50 @@ func main() {
 		},
 	})
 	if err != nil {
-		log.Printf("调用失败: %v\n", err)
+		log.Printf("Call failed: %v\n", err)
 	} else {
-		log.Printf("调用成功\n")
-		log.Printf("原始响应:\n%s\n", prettyJSON(userResult))
+		log.Printf("Call successful\n")
+		log.Printf("Raw response:\n%s\n", prettyJSON(userResult))
 
-		// 解析嵌套结构化数据
+		// Parse nested structured data
 		var toolResult protocol.CallToolResult
 		if err := json.Unmarshal(userResult, &toolResult); err == nil {
 			if toolResult.StructuredContent != nil {
-				log.Println("\n解析嵌套结构化数据:")
+				log.Println("\nParsed nested structured data:")
 				data := toolResult.StructuredContent.(map[string]interface{})
 
-				log.Printf("  用户ID: %v", data["user_id"])
-				log.Printf("  姓名: %v", data["name"])
-				log.Printf("  年龄: %v", data["age"])
-				log.Printf("  邮箱: %v", data["email"])
+				log.Printf("  User ID: %v", data["user_id"])
+				log.Printf("  Name: %v", data["name"])
+				log.Printf("  Age: %v", data["age"])
+				log.Printf("  Email: %v", data["email"])
 
 				if address, ok := data["address"].(map[string]interface{}); ok {
-					log.Printf("  地址:")
-					log.Printf("     城市: %v", address["city"])
-					log.Printf("     国家: %v", address["country"])
-					log.Printf("     邮编: %v", address["zipcode"])
+					log.Printf("  Address:")
+					log.Printf("     City: %v", address["city"])
+					log.Printf("     Country: %v", address["country"])
+					log.Printf("     Zipcode: %v", address["zipcode"])
 				}
 
 				if skills, ok := data["skills"].([]interface{}); ok {
-					log.Printf("  技能: %v", skills)
+					log.Printf("  Skills: %v", skills)
 				}
 
 				if metadata, ok := data["metadata"].(map[string]interface{}); ok {
-					log.Printf("  元数据:")
-					log.Printf("     创建时间: %v", metadata["created_at"])
-					log.Printf("     最后登录: %v", metadata["last_login"])
-					log.Printf("     浏览次数: %v", metadata["profile_views"])
-					log.Printf("     已验证: %v", metadata["is_verified"])
+					log.Printf("  Metadata:")
+					log.Printf("     Created At: %v", metadata["created_at"])
+					log.Printf("     Last Login: %v", metadata["last_login"])
+					log.Printf("     Profile Views: %v", metadata["profile_views"])
+					log.Printf("     Verified: %v", metadata["is_verified"])
 				}
 			}
 		}
 	}
 	log.Println()
 
-	// ========== 批量调用 ==========
+	// ========== Batch Calls ==========
 	log.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-	log.Println("批量调用 get_weather (多个城市)")
-	cities := []string{"上海", "深圳", "杭州", "广州", "成都"}
+	log.Println("Batch calling get_weather (multiple cities)")
+	cities := []string{"Shanghai", "Shenzhen", "Hangzhou", "Guangzhou", "Chengdu"}
 	for i, city := range cities {
 		result, err := sendRequest(ctx, "tools/call", map[string]interface{}{
 			"name": "get_weather",
@@ -177,14 +177,14 @@ func main() {
 			},
 		})
 		if err != nil {
-			log.Printf("  [%d] %s: 失败 - %v\n", i+1, city, err)
+			log.Printf("  [%d] %s: Failed - %v\n", i+1, city, err)
 			continue
 		}
 
 		var toolResult protocol.CallToolResult
 		if err := json.Unmarshal(result, &toolResult); err == nil {
 			if data, ok := toolResult.StructuredContent.(map[string]interface{}); ok {
-				log.Printf("  [%d] %s: %.1f°C, %v%% 湿度, %v",
+				log.Printf("  [%d] %s: %.1f°C, %v%% humidity, %v",
 					i+1, data["city"], data["temperature"], data["humidity"], data["condition"])
 			}
 		}

@@ -46,7 +46,6 @@ func New(target string, options ...Option) *Transport {
 }
 
 func (t *Transport) Connect(ctx context.Context) error {
-	// 创建连接选项
 	opts := []grpc.DialOption{
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 		grpc.WithBlock(),
@@ -132,7 +131,6 @@ func (t *Transport) Send(ctx context.Context, data []byte) error {
 		return fmt.Errorf("gRPC stream not established")
 	}
 
-	// 解析JSON消息
 	var message map[string]interface{}
 	if err := json.Unmarshal(data, &message); err != nil {
 		return fmt.Errorf("invalid message format: %w", err)

@@ -10,64 +10,64 @@ import (
 	"github.com/voocel/mcp-sdk-go/protocol"
 )
 
-// ToolHandlerFor 是一个处理 tools/call 请求的类型安全处理函数。
+// ToolHandlerFor is a type-safe handler function for tools/call requests.
 //
-// 与 [ToolHandler] 不同，ToolHandlerFor 提供了大量开箱即用的功能，
-// 并强制工具符合 MCP 规范：
-//   - In 类型为工具提供默认的输入 schema（可在 AddTool 中覆盖）
-//   - 输入值会自动从 req.Params.Arguments 反序列化
-//   - 输入值会自动根据其 schema 进行验证，无效输入在到达处理函数前就被拒绝
-//   - 如果 Out 类型不是 [any]，它会为工具提供默认的输出 schema（同样可覆盖）
-//   - Out 值用于填充 result.StructuredContent
-//   - 如果 [CallToolResult.Content] 未设置，它会用输出的 JSON 内容填充
-//   - 错误结果被视为工具错误而非协议错误，因此会被打包到 CallToolResult.Content 中，
-//     并设置 IsError 标志
+// Unlike [ToolHandler], ToolHandlerFor provides many out-of-the-box features,
+// and enforces that tools conform to the MCP specification:
+//   - The In type provides a default input schema for the tool (can be overridden in AddTool)
+//   - Input values are automatically deserialized from req.Params.Arguments
+//   - Input values are automatically validated against their schema, and invalid inputs are rejected before reaching the handler
+//   - If the Out type is not [any], it provides a default output schema for the tool (can also be overridden)
+//   - The Out value is used to populate result.StructuredContent
+//   - If [CallToolResult.Content] is not set, it is populated with the JSON content of the output
+//   - Error results are treated as tool errors rather than protocol errors, so they are wrapped in CallToolResult.Content,
+//     and the IsError flag is set
 //
-// 因此，大多数用户可以完全忽略 [CallToolRequest] 参数和 [CallToolResult] 返回值。
-// 实际上，如果你只关心返回输出值或错误，返回 nil CallToolResult 也是允许的。
-// 有效结果会按上述描述自动填充。
+// Therefore, most users can completely ignore the [CallToolRequest] parameter and [CallToolResult] return value.
+// In fact, if you only care about returning an output value or error, returning a nil CallToolResult is allowed.
+// Valid results are automatically populated as described above.
 //
-// 使用 [AddTool] 将 ToolHandlerFor 添加到服务器。
+// Use [AddTool] to add a ToolHandlerFor to a server.
 type ToolHandlerFor[In, Out any] func(
 	ctx context.Context,
 	req *CallToolRequest,
 	input In,
 ) (result *protocol.CallToolResult, output Out, err error)
 
-// AddTool 添加工具和类型安全的工具处理函数到服务器。
+// AddTool adds a tool and type-safe tool handler to the server.
 //
-// 这是一个包级函数而非 Server 的方法，因为 Go 不支持方法级别的类型参数。
-// 有关更多信息，请参阅 Go 泛型提案：
+// This is a package-level function rather than a method on Server, because Go does not support method-level type parameters.
+// For more information, see the Go generics proposal:
 // https://go.googlesource.com/proposal/+/refs/heads/master/design/43651-type-parameters.md#no-parameterized-methods
 //
-// 如果工具的输入 schema 为 nil，它会从 In 类型参数推断设置。类型从 Go 类型推断，
-// 属性描述从 'jsonschema' 结构体标签读取。在内部，SDK 使用 github.com/invopop/jsonschema
-// 包进行推断和验证。In 类型参数必须是 map 或 struct，以便其推断的 JSON Schema 具有
-// 规范要求的 "object" 类型。作为特例，如果 In 类型是 'any'，工具的输入 schema
-// 会设置为空对象 schema 值。
+// If the tool's input schema is nil, it is inferred from the In type parameter. Types are inferred from Go types,
+// and property descriptions are read from 'jsonschema' struct tags. Internally, the SDK uses the github.com/invopop/jsonschema
+// package for inference and validation. The In type parameter must be a map or struct so that its inferred JSON Schema has
+// the "object" type required by the specification. As a special case, if the In type is 'any', the tool's input schema
+// is set to an empty object schema value.
 //
-// 如果工具的输出 schema 为 nil，且 Out 类型不是 'any'，输出 schema 会从 Out 类型
-// 参数推断设置，Out 类型也必须是 map 或 struct。如果 Out 类型是 'any'，则省略输出 schema。
+// If the tool's output schema is nil, and the Out type is not 'any', the output schema is inferred from the Out type
+// parameter, which must also be a map or struct. If the Out type is 'any', the output schema is omitted.
 //
-// 与 [Server.AddTool] 不同，AddTool 会自动完成许多工作，并强制工具符合 MCP 规范。
-// 详细的自动行为请参阅 [ToolHandlerFor] 的文档。
+// Unlike [Server.AddTool], AddTool automatically handles many things and enforces that tools conform to the MCP specification.
+// For detailed automatic behaviors, see the documentation for [ToolHandlerFor].
 //
-// 示例：
+// Example:
 //
 //	type Input struct {
-//	    Name string `json:"name" jsonschema:"required,description=用户名称"`
+//	    Name string `json:"name" jsonschema:"required,description=User name"`
 //	}
 //	type Output struct {
-//	    Greeting string `json:"greeting" jsonschema:"required,description=问候语"`
+//	    Greeting string `json:"greeting" jsonschema:"required,description=Greeting message"`
 //	}
 //
 //	server.AddTool[Input, Output](s, &protocol.Tool{
 //	    Name:        "greet",
-//	    Description: "向用户问候",
+//	    Description: "Greet the user",
 //	}, func(ctx context.Context, req *server.CallToolRequest, input Input) (
 //	    *protocol.CallToolResult, Output, error,
 //	) {
-//	    return nil, Output{Greeting: "你好，" + input.Name}, nil
+//	    return nil, Output{Greeting: "Hello, " + input.Name}, nil
 //	})
 func AddTool[In, Out any](s *Server, tool *protocol.Tool, handler ToolHandlerFor[In, Out]) {
 	wrappedTool, wrappedHandler, err := wrapToolHandler(tool, handler)
@@ -78,7 +78,7 @@ func AddTool[In, Out any](s *Server, tool *protocol.Tool, handler ToolHandlerFor
 	s.AddTool(wrappedTool, wrappedHandler)
 }
 
-// wrapToolHandler 包装类型安全的 handler 为低层 handler
+// wrapToolHandler wraps a type-safe handler into a low-level handler
 func wrapToolHandler[In, Out any](tool *protocol.Tool, handler ToolHandlerFor[In, Out]) (*protocol.Tool, ToolHandler, error) {
 	toolCopy := *tool
 
@@ -92,13 +92,13 @@ func wrapToolHandler[In, Out any](tool *protocol.Tool, handler ToolHandlerFor[In
 		return nil, nil, fmt.Errorf("output schema: %w", err)
 	}
 
-	// 获取零值（用于处理 typed nil）
+	// Get zero value (for handling typed nil)
 	var outputZero interface{}
 	if outputSchema != nil {
 		outputZero = getZeroValue[Out]()
 	}
 
-	// 创建包装的 handler
+	// Create wrapped handler
 	wrappedHandler := func(ctx context.Context, req *CallToolRequest) (*protocol.CallToolResult, error) {
 		inputData := req.Params.Arguments
 		if inputData == nil {
@@ -110,28 +110,28 @@ func wrapToolHandler[In, Out any](tool *protocol.Tool, handler ToolHandlerFor[In
 			return nil, fmt.Errorf("invalid parameters: %w", err)
 		}
 
-		// 调用用户 handler
+		// Call user handler
 		result, output, err := handler(ctx, req, input)
 
 		if err != nil {
-			// 如果已经有 result，说明是工具级错误（包装在 result 中）
+			// If there's already a result, it's a tool-level error (wrapped in result)
 			if result != nil {
 				return result, nil
 			}
-			// 否则是协议级错误，直接返回
+			// Otherwise it's a protocol-level error, return directly
 			return nil, err
 		}
 
-		// 如果 result 为 nil，创建一个
+		// If result is nil, create one
 		if result == nil {
 			result = &protocol.CallToolResult{}
 		}
 
-		// 处理输出
+		// Process output
 		if outputSchema != nil {
-			// 检查 typed nil（使用反射，因为某些类型不可比较）
+			// Check for typed nil (use reflection because some types are not comparable)
 			if outputZero != nil && reflect.ValueOf(output).IsZero() {
-				// 使用零值替代 typed nil
+				// Use zero value instead of typed nil
 				output = outputZero.(Out)
 			}
 
@@ -154,9 +154,9 @@ func wrapToolHandler[In, Out any](tool *protocol.Tool, handler ToolHandlerFor[In
 	return &toolCopy, wrappedHandler, nil
 }
 
-// setupInputSchema 设置输入 schema
+// setupInputSchema sets up the input schema
 func setupInputSchema[In any](tool *protocol.Tool) (*jsonschema.Schema, error) {
-	// 如果用户已提供 schema, 直接使用
+	// If user has provided schema, use it directly
 	if tool.InputSchema != nil {
 		schemaBytes, err := json.Marshal(tool.InputSchema)
 		if err != nil {
@@ -175,17 +175,17 @@ func setupInputSchema[In any](tool *protocol.Tool) (*jsonschema.Schema, error) {
 		return &schema, nil
 	}
 
-	// 自动生成 schema
+	// Auto-generate schema
 	schema, err := inferSchema[In]()
 	if err != nil {
-		// 自动生成失败，使用基本 object schema
-		// 注意：这意味着不会有参数验证，但工具仍能运行
+		// Auto-generation failed, use basic object schema
+		// Note: This means no parameter validation, but tool can still run
 		return &jsonschema.Schema{
 			Type: "object",
 		}, nil
 	}
 
-	// 转换为 protocol.JSONSchema（map[string]interface{}）
+	// Convert to protocol.JSONSchema (map[string]interface{})
 	schemaBytes, err := json.Marshal(schema)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal schema: %w", err)
@@ -200,14 +200,14 @@ func setupInputSchema[In any](tool *protocol.Tool) (*jsonschema.Schema, error) {
 	return schema, nil
 }
 
-// setupOutputSchema 设置输出 schema
+// setupOutputSchema sets up the output schema
 func setupOutputSchema[Out any](tool *protocol.Tool) (*jsonschema.Schema, error) {
-	// 如果是 any 类型，不生成 output schema
+	// If it's 'any' type, don't generate output schema
 	if reflect.TypeFor[Out]() == reflect.TypeFor[any]() {
 		return nil, nil
 	}
 
-	// 如果用户已提供 schema, 直接使用
+	// If user has provided schema, use it directly
 	if tool.OutputSchema != nil {
 		schemaBytes, err := json.Marshal(tool.OutputSchema)
 		if err != nil {
@@ -226,14 +226,13 @@ func setupOutputSchema[Out any](tool *protocol.Tool) (*jsonschema.Schema, error)
 		return &schema, nil
 	}
 
-	// 尝试自动生成 schema
+	// Auto-generate schema
 	schema, err := inferSchema[Out]()
 	if err != nil {
-		// 自动生成失败，返回 nil（不使用 output schema）
+		// Auto-generation failed, return nil (don't use output schema)
 		return nil, nil
 	}
 
-	// 转换为 protocol.JSONSchema（map[string]interface{}）
 	schemaBytes, err := json.Marshal(schema)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal schema: %w", err)

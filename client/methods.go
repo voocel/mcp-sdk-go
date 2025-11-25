@@ -6,7 +6,7 @@ import (
 	"github.com/voocel/mcp-sdk-go/protocol"
 )
 
-// Ping 向服务器发送 ping 请求
+// Ping sends a ping request to the server
 func (cs *ClientSession) Ping(ctx context.Context, params *protocol.PingParams) error {
 	if params == nil {
 		params = &protocol.PingParams{}
@@ -15,7 +15,7 @@ func (cs *ClientSession) Ping(ctx context.Context, params *protocol.PingParams) 
 	return cs.sendRequest(ctx, protocol.MethodPing, params, &result)
 }
 
-// ListTools 列出服务器上当前可用的工具
+// ListTools lists the currently available tools on the server
 func (cs *ClientSession) ListTools(ctx context.Context, params *protocol.ListToolsParams) (*protocol.ListToolsResult, error) {
 	if params == nil {
 		params = &protocol.ListToolsParams{}
@@ -27,7 +27,7 @@ func (cs *ClientSession) ListTools(ctx context.Context, params *protocol.ListToo
 	return &result, nil
 }
 
-// CallTool 调用服务器上的工具
+// CallTool invokes a tool on the server
 func (cs *ClientSession) CallTool(ctx context.Context, params *protocol.CallToolParams) (*protocol.CallToolResult, error) {
 	var result protocol.CallToolResult
 	if err := cs.sendRequest(ctx, protocol.MethodToolsCall, params, &result); err != nil {
@@ -36,7 +36,7 @@ func (cs *ClientSession) CallTool(ctx context.Context, params *protocol.CallTool
 	return &result, nil
 }
 
-// ListResources 列出服务器上当前可用的资源
+// ListResources lists the currently available resources on the server
 func (cs *ClientSession) ListResources(ctx context.Context, params *protocol.ListResourcesParams) (*protocol.ListResourcesResult, error) {
 	if params == nil {
 		params = &protocol.ListResourcesParams{}
@@ -48,7 +48,7 @@ func (cs *ClientSession) ListResources(ctx context.Context, params *protocol.Lis
 	return &result, nil
 }
 
-// ReadResource 读取服务器上的资源
+// ReadResource reads a resource from the server
 func (cs *ClientSession) ReadResource(ctx context.Context, params *protocol.ReadResourceParams) (*protocol.ReadResourceResult, error) {
 	var result protocol.ReadResourceResult
 	if err := cs.sendRequest(ctx, protocol.MethodResourcesRead, params, &result); err != nil {
@@ -57,7 +57,7 @@ func (cs *ClientSession) ReadResource(ctx context.Context, params *protocol.Read
 	return &result, nil
 }
 
-// ListResourceTemplates 列出服务器上的资源模板
+// ListResourceTemplates lists the resource templates on the server
 func (cs *ClientSession) ListResourceTemplates(ctx context.Context, params *protocol.ListResourceTemplatesParams) (*protocol.ListResourceTemplatesResult, error) {
 	if params == nil {
 		params = &protocol.ListResourceTemplatesParams{}
@@ -69,19 +69,19 @@ func (cs *ClientSession) ListResourceTemplates(ctx context.Context, params *prot
 	return &result, nil
 }
 
-// SubscribeResource 订阅资源更新
+// SubscribeResource subscribes to resource updates
 func (cs *ClientSession) SubscribeResource(ctx context.Context, params *protocol.SubscribeParams) error {
 	var result protocol.EmptyResult
 	return cs.sendRequest(ctx, protocol.MethodResourcesSubscribe, params, &result)
 }
 
-// UnsubscribeResource 取消订阅资源更新
+// UnsubscribeResource unsubscribes from resource updates
 func (cs *ClientSession) UnsubscribeResource(ctx context.Context, params *protocol.UnsubscribeParams) error {
 	var result protocol.EmptyResult
 	return cs.sendRequest(ctx, protocol.MethodResourcesUnsubscribe, params, &result)
 }
 
-// ListPrompts 列出服务器上当前可用的提示
+// ListPrompts lists the currently available prompts on the server
 func (cs *ClientSession) ListPrompts(ctx context.Context, params *protocol.ListPromptsParams) (*protocol.ListPromptsResult, error) {
 	if params == nil {
 		params = &protocol.ListPromptsParams{}
@@ -93,7 +93,7 @@ func (cs *ClientSession) ListPrompts(ctx context.Context, params *protocol.ListP
 	return &result, nil
 }
 
-// GetPrompt 获取服务器上的提示
+// GetPrompt retrieves a prompt from the server
 func (cs *ClientSession) GetPrompt(ctx context.Context, params *protocol.GetPromptParams) (*protocol.GetPromptResult, error) {
 	var result protocol.GetPromptResult
 	if err := cs.sendRequest(ctx, protocol.MethodPromptsGet, params, &result); err != nil {
@@ -102,13 +102,13 @@ func (cs *ClientSession) GetPrompt(ctx context.Context, params *protocol.GetProm
 	return &result, nil
 }
 
-// SetLoggingLevel 设置服务器的日志级别
+// SetLoggingLevel sets the logging level on the server
 func (cs *ClientSession) SetLoggingLevel(ctx context.Context, params *protocol.SetLoggingLevelParams) error {
 	var result protocol.EmptyResult
 	return cs.sendRequest(ctx, protocol.MethodLoggingSetLevel, params, &result)
 }
 
-// Complete 请求自动补全
+// Complete requests auto-completion
 func (cs *ClientSession) Complete(ctx context.Context, params *protocol.CompleteRequest) (*protocol.CompleteResult, error) {
 	var result protocol.CompleteResult
 	if err := cs.sendRequest(ctx, protocol.MethodCompletionComplete, params, &result); err != nil {
@@ -117,17 +117,17 @@ func (cs *ClientSession) Complete(ctx context.Context, params *protocol.Complete
 	return &result, nil
 }
 
-// NotifyRootsListChanged 通知服务器根目录列表已更改
+// NotifyRootsListChanged notifies the server that the roots list has changed
 func (cs *ClientSession) NotifyRootsListChanged(ctx context.Context) error {
 	return cs.sendNotification(ctx, protocol.NotificationRootsListChanged, &protocol.RootsListChangedNotification{})
 }
 
-// NotifyProgress 发送进度通知
+// NotifyProgress sends a progress notification
 func (cs *ClientSession) NotifyProgress(ctx context.Context, params *protocol.ProgressNotificationParams) error {
 	return cs.sendNotification(ctx, protocol.NotificationProgress, params)
 }
 
-// NotifyCancelled 发送取消通知
+// NotifyCancelled sends a cancellation notification
 func (cs *ClientSession) NotifyCancelled(ctx context.Context, params *protocol.CancelledNotificationParams) error {
 	return cs.sendNotification(ctx, protocol.NotificationCancelled, params)
 }

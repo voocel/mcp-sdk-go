@@ -11,7 +11,7 @@ import (
 	"github.com/voocel/mcp-sdk-go/protocol"
 )
 
-// sendRequest 发送请求并等待响应
+// sendRequest sends a request and waits for a response
 func (cs *ClientSession) sendRequest(ctx context.Context, method string, params interface{}, result interface{}) error {
 	cs.mu.Lock()
 	cs.nextID++
@@ -73,7 +73,7 @@ func (cs *ClientSession) sendRequest(ctx context.Context, method string, params 
 	}
 }
 
-// sendNotification 发送通知
+// sendNotification sends a notification
 func (cs *ClientSession) sendNotification(ctx context.Context, method string, params interface{}) error {
 	msg := &protocol.JSONRPCMessage{
 		JSONRPC: "2.0",
@@ -95,7 +95,7 @@ func (cs *ClientSession) sendNotification(ctx context.Context, method string, pa
 	return nil
 }
 
-// handleMessages 处理来自服务器的消息
+// handleMessages handles messages from the server
 func (cs *ClientSession) handleMessages(ctx context.Context) error {
 	for {
 		select {
@@ -121,7 +121,7 @@ func (cs *ClientSession) handleMessages(ctx context.Context) error {
 	}
 }
 
-// handleResponse 处理响应消息
+// handleResponse handles response messages
 func (cs *ClientSession) handleResponse(msg *protocol.JSONRPCMessage) {
 	if msg.ID == nil {
 		return
@@ -150,7 +150,7 @@ func (cs *ClientSession) handleResponse(msg *protocol.JSONRPCMessage) {
 	}
 }
 
-// handleRequest 处理来自服务器的请求或通知
+// handleRequest handles requests or notifications from the server
 func (cs *ClientSession) handleRequest(ctx context.Context, msg *protocol.JSONRPCMessage) {
 	switch msg.Method {
 	case protocol.MethodPing:
@@ -178,13 +178,13 @@ func (cs *ClientSession) handleRequest(ctx context.Context, msg *protocol.JSONRP
 	}
 }
 
-// handlePing 处理 ping 请求
+// handlePing handles ping requests
 func (cs *ClientSession) handlePing(ctx context.Context, msg *protocol.JSONRPCMessage) {
-	// Ping 请求不需要参数,直接返回成功响应
+	// Ping requests don't need parameters, return success response directly
 	cs.sendSuccessResponse(ctx, msg, &protocol.EmptyResult{})
 }
 
-// handleCreateMessage 处理 sampling/createMessage 请求
+// handleCreateMessage handles sampling/createMessage requests
 func (cs *ClientSession) handleCreateMessage(ctx context.Context, msg *protocol.JSONRPCMessage) {
 	if cs.client.opts.CreateMessageHandler == nil {
 		cs.sendErrorResponse(ctx, msg, protocol.MethodNotFound, "Method not found")
@@ -197,7 +197,7 @@ func (cs *ClientSession) handleCreateMessage(ctx context.Context, msg *protocol.
 		return
 	}
 
-	// 跟踪请求并支持取消
+	// Track request and support cancellation
 	requestID := protocol.IDToString(msg.ID)
 	requestCtx, cancel := context.WithCancel(ctx)
 
@@ -205,7 +205,7 @@ func (cs *ClientSession) handleCreateMessage(ctx context.Context, msg *protocol.
 	cs.incomingRequests[requestID] = cancel
 	cs.mu.Unlock()
 
-	// 确保请求完成后清理
+	// Ensure cleanup after request completes
 	defer func() {
 		cs.mu.Lock()
 		delete(cs.incomingRequests, requestID)
@@ -222,7 +222,7 @@ func (cs *ClientSession) handleCreateMessage(ctx context.Context, msg *protocol.
 	cs.sendSuccessResponse(ctx, msg, result)
 }
 
-// handleElicitation 处理 elicitation/create 请求
+// handleElicitation handles elicitation/create requests
 func (cs *ClientSession) handleElicitation(ctx context.Context, msg *protocol.JSONRPCMessage) {
 	if cs.client.opts.ElicitationHandler == nil {
 		cs.sendErrorResponse(ctx, msg, protocol.MethodNotFound, "Method not found")
@@ -258,7 +258,7 @@ func (cs *ClientSession) handleElicitation(ctx context.Context, msg *protocol.JS
 	cs.sendSuccessResponse(ctx, msg, result)
 }
 
-// handleListRoots 处理 roots/list 请求
+// handleListRoots handles roots/list requests
 func (cs *ClientSession) handleListRoots(ctx context.Context, msg *protocol.JSONRPCMessage) {
 	rootPtrs := cs.client.ListRoots()
 	roots := make([]protocol.Root, len(rootPtrs))
@@ -271,7 +271,7 @@ func (cs *ClientSession) handleListRoots(ctx context.Context, msg *protocol.JSON
 	cs.sendSuccessResponse(ctx, msg, result)
 }
 
-// handleToolListChanged 处理工具列表变更通知
+// handleToolListChanged handles tool list change notifications
 func (cs *ClientSession) handleToolListChanged(ctx context.Context, msg *protocol.JSONRPCMessage) {
 	if cs.client.opts.ToolListChangedHandler == nil {
 		return
@@ -285,7 +285,7 @@ func (cs *ClientSession) handleToolListChanged(ctx context.Context, msg *protoco
 	cs.client.opts.ToolListChangedHandler(ctx, &params)
 }
 
-// handlePromptListChanged 处理提示列表变更通知
+// handlePromptListChanged handles prompt list change notifications
 func (cs *ClientSession) handlePromptListChanged(ctx context.Context, msg *protocol.JSONRPCMessage) {
 	if cs.client.opts.PromptListChangedHandler == nil {
 		return
@@ -299,7 +299,7 @@ func (cs *ClientSession) handlePromptListChanged(ctx context.Context, msg *proto
 	cs.client.opts.PromptListChangedHandler(ctx, &params)
 }
 
-// handleResourceListChanged 处理资源列表变更通知
+// handleResourceListChanged handles resource list change notifications
 func (cs *ClientSession) handleResourceListChanged(ctx context.Context, msg *protocol.JSONRPCMessage) {
 	if cs.client.opts.ResourceListChangedHandler == nil {
 		return
@@ -313,7 +313,7 @@ func (cs *ClientSession) handleResourceListChanged(ctx context.Context, msg *pro
 	cs.client.opts.ResourceListChangedHandler(ctx, &params)
 }
 
-// handleResourceUpdated 处理资源更新通知
+// handleResourceUpdated handles resource update notifications
 func (cs *ClientSession) handleResourceUpdated(ctx context.Context, msg *protocol.JSONRPCMessage) {
 	if cs.client.opts.ResourceUpdatedHandler == nil {
 		return
@@ -327,7 +327,7 @@ func (cs *ClientSession) handleResourceUpdated(ctx context.Context, msg *protoco
 	cs.client.opts.ResourceUpdatedHandler(ctx, &params)
 }
 
-// handleLoggingMessage 处理日志消息通知
+// handleLoggingMessage handles logging message notifications
 func (cs *ClientSession) handleLoggingMessage(ctx context.Context, msg *protocol.JSONRPCMessage) {
 	if cs.client.opts.LoggingMessageHandler == nil {
 		return
@@ -341,7 +341,7 @@ func (cs *ClientSession) handleLoggingMessage(ctx context.Context, msg *protocol
 	cs.client.opts.LoggingMessageHandler(ctx, &params)
 }
 
-// handleProgressNotification 处理进度通知
+// handleProgressNotification handles progress notifications
 func (cs *ClientSession) handleProgressNotification(ctx context.Context, msg *protocol.JSONRPCMessage) {
 	if cs.client.opts.ProgressNotificationHandler == nil {
 		return
@@ -355,7 +355,7 @@ func (cs *ClientSession) handleProgressNotification(ctx context.Context, msg *pr
 	cs.client.opts.ProgressNotificationHandler(ctx, &params)
 }
 
-// handleCancelled 处理取消通知
+// handleCancelled handles cancellation notifications
 func (cs *ClientSession) handleCancelled(ctx context.Context, msg *protocol.JSONRPCMessage) {
 	var params protocol.CancelledNotificationParams
 	if err := json.Unmarshal(msg.Params, &params); err != nil {
@@ -383,7 +383,7 @@ func (cs *ClientSession) handleCancelled(ctx context.Context, msg *protocol.JSON
 	}
 }
 
-// sendSuccessResponse 发送成功响应
+// sendSuccessResponse sends a success response
 func (cs *ClientSession) sendSuccessResponse(ctx context.Context, req *protocol.JSONRPCMessage, result interface{}) {
 	if req.ID == nil {
 		return
@@ -391,9 +391,8 @@ func (cs *ClientSession) sendSuccessResponse(ctx context.Context, req *protocol.
 
 	resultJSON, err := json.Marshal(result)
 	if err != nil {
-		// 记录 JSON 序列化错误
 		fmt.Fprintf(os.Stderr, "[ERROR] Failed to marshal response result: %v\n", err)
-		// 直接构建错误响应，避免递归
+		// Build error response directly to avoid recursion
 		errResp := &protocol.JSONRPCMessage{
 			JSONRPC: "2.0",
 			ID:      req.ID,
@@ -419,7 +418,7 @@ func (cs *ClientSession) sendSuccessResponse(ctx context.Context, req *protocol.
 	}
 }
 
-// sendErrorResponse 发送错误响应
+// sendErrorResponse sends an error response
 func (cs *ClientSession) sendErrorResponse(ctx context.Context, req *protocol.JSONRPCMessage, code int, message string) {
 	if req.ID == nil {
 		return
@@ -439,7 +438,7 @@ func (cs *ClientSession) sendErrorResponse(ctx context.Context, req *protocol.JS
 	}
 }
 
-// startKeepalive 启动 keepalive 机制
+// startKeepalive starts the keepalive mechanism
 func (cs *ClientSession) startKeepalive(interval time.Duration) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cs.keepaliveCancel = cancel
@@ -458,7 +457,7 @@ func (cs *ClientSession) startKeepalive(interval time.Duration) {
 				cancel()
 
 				if err != nil {
-					// Ping 失败,关闭连接
+					// Ping failed, close connection
 					_ = cs.Close()
 					return
 				}

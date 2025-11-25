@@ -12,7 +12,7 @@ import (
 
 type Middleware func(ToolHandler) ToolHandler
 
-// Use 添加中间件到 Server 中间件按添加顺序执行（洋葱模型）
+// Use adds middleware to the Server. Middleware is executed in the order added (onion model).
 func (s *Server) Use(middleware ...Middleware) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -25,16 +25,16 @@ func (s *Server) Use(middleware ...Middleware) {
 	}
 }
 
-// applyMiddleware 应用中间件链
+// applyMiddleware applies the middleware chain
 func applyMiddleware(handler ToolHandler, middlewares []Middleware) ToolHandler {
-	// 从后向前应用中间件（形成洋葱模型）
+	// Apply middleware from back to front (forming the onion model)
 	for i := len(middlewares) - 1; i >= 0; i-- {
 		handler = middlewares[i](handler)
 	}
 	return handler
 }
 
-// LoggingMiddleware 日志中间件
+// LoggingMiddleware is a logging middleware
 func LoggingMiddleware(logger *slog.Logger) Middleware {
 	return func(next ToolHandler) ToolHandler {
 		return func(ctx context.Context, req *CallToolRequest) (*protocol.CallToolResult, error) {
@@ -69,13 +69,13 @@ func LoggingMiddleware(logger *slog.Logger) Middleware {
 	}
 }
 
-// RecoveryMiddleware 恢复中间件
+// RecoveryMiddleware is a recovery middleware
 func RecoveryMiddleware() Middleware {
 	return func(next ToolHandler) ToolHandler {
 		return func(ctx context.Context, req *CallToolRequest) (result *protocol.CallToolResult, err error) {
 			defer func() {
 				if r := recover(); r != nil {
-					// 捕获 panic
+					// Capture panic
 					stack := debug.Stack()
 					err = fmt.Errorf("panic recovered: %v\n%s", r, stack)
 					result = ErrorResult("Internal server error", err)
@@ -87,15 +87,15 @@ func RecoveryMiddleware() Middleware {
 	}
 }
 
-// TimeoutMiddleware 超时中间件
+// TimeoutMiddleware is a timeout middleware
 func TimeoutMiddleware(timeout time.Duration) Middleware {
 	return func(next ToolHandler) ToolHandler {
 		return func(ctx context.Context, req *CallToolRequest) (*protocol.CallToolResult, error) {
-			// 创建带超时的 context
+			// Create context with timeout
 			timeoutCtx, cancel := context.WithTimeout(ctx, timeout)
 			defer cancel()
 
-			// 使用 channel 接收结果
+			// Use channel to receive result
 			resultCh := make(chan struct {
 				result *protocol.CallToolResult
 				err    error
@@ -122,7 +122,7 @@ func TimeoutMiddleware(timeout time.Duration) Middleware {
 	}
 }
 
-// MetricsMiddleware 指标中间件
+// MetricsMiddleware is a metrics middleware
 func MetricsMiddleware(collector MetricsCollector) Middleware {
 	return func(next ToolHandler) ToolHandler {
 		return func(ctx context.Context, req *CallToolRequest) (*protocol.CallToolResult, error) {
@@ -133,7 +133,7 @@ func MetricsMiddleware(collector MetricsCollector) Middleware {
 
 			duration := time.Since(start)
 
-			// 记录指标
+			// Record metrics
 			collector.RecordToolCall(toolName, duration, err == nil)
 
 			return result, err
@@ -141,18 +141,18 @@ func MetricsMiddleware(collector MetricsCollector) Middleware {
 	}
 }
 
-// MetricsCollector 指标收集器接口
+// MetricsCollector is the metrics collector interface
 type MetricsCollector interface {
 	RecordToolCall(tool string, duration time.Duration, success bool)
 }
 
-// RateLimitMiddleware 速率限制中间件
+// RateLimitMiddleware is a rate limiting middleware
 func RateLimitMiddleware(limiter RateLimiter) Middleware {
 	return func(next ToolHandler) ToolHandler {
 		return func(ctx context.Context, req *CallToolRequest) (*protocol.CallToolResult, error) {
 			toolName := req.Params.Name
 
-			// 检查速率限制
+			// Check rate limit
 			if !limiter.Allow(toolName) {
 				return nil, NewToolError(
 					ErrTooManyRequest,
@@ -166,19 +166,19 @@ func RateLimitMiddleware(limiter RateLimiter) Middleware {
 	}
 }
 
-// RateLimiter 速率限制器接口
+// RateLimiter is the rate limiter interface
 type RateLimiter interface {
 	Allow(tool string) bool
 }
 
-// AuthMiddleware 认证中间件
+// AuthMiddleware is an authentication middleware
 func AuthMiddleware(validator AuthValidator) Middleware {
 	return func(next ToolHandler) ToolHandler {
 		return func(ctx context.Context, req *CallToolRequest) (*protocol.CallToolResult, error) {
-			// 从 context 或 meta 中提取认证信息
+			// Extract auth info from context or meta
 			authInfo := extractAuthInfo(ctx, req)
 
-			// 验证权限
+			// Validate permissions
 			if !validator.Validate(authInfo, req.Params.Name) {
 				return nil, UnauthorizedError(
 					fmt.Sprintf("not authorized to call tool %s", req.Params.Name),
@@ -191,12 +191,12 @@ func AuthMiddleware(validator AuthValidator) Middleware {
 	}
 }
 
-// AuthValidator 认证验证器接口
+// AuthValidator is the authentication validator interface
 type AuthValidator interface {
 	Validate(authInfo interface{}, tool string) bool
 }
 
-// extractAuthInfo 从请求中提取认证信息(可以从ctx或从req.Params.Meta中提取)
+// extractAuthInfo extracts auth info from the request (can be from ctx or req.Params.Meta)
 func extractAuthInfo(ctx context.Context, req *CallToolRequest) interface{} {
 	if req.Params.Meta != nil {
 		if auth, ok := req.Params.Meta["auth"]; ok {
@@ -206,7 +206,7 @@ func extractAuthInfo(ctx context.Context, req *CallToolRequest) interface{} {
 	return nil
 }
 
-// RetryMiddleware 重试中间件
+// RetryMiddleware is a retry middleware
 func RetryMiddleware(maxRetries int, shouldRetry func(error) bool) Middleware {
 	return func(next ToolHandler) ToolHandler {
 		return func(ctx context.Context, req *CallToolRequest) (*protocol.CallToolResult, error) {
@@ -216,7 +216,7 @@ func RetryMiddleware(maxRetries int, shouldRetry func(error) bool) Middleware {
 			for attempt := 0; attempt <= maxRetries; attempt++ {
 				result, lastErr = next(ctx, req)
 
-				// 如果成功或不应重试，直接返回
+				// If success or should not retry, return directly
 				if lastErr == nil || !shouldRetry(lastErr) {
 					return result, lastErr
 				}
@@ -226,7 +226,7 @@ func RetryMiddleware(maxRetries int, shouldRetry func(error) bool) Middleware {
 					case <-ctx.Done():
 						return nil, ctx.Err()
 					case <-time.After(time.Duration(attempt+1) * 100 * time.Millisecond):
-						// 指数退避
+						// Exponential backoff
 					}
 				}
 			}
@@ -236,7 +236,7 @@ func RetryMiddleware(maxRetries int, shouldRetry func(error) bool) Middleware {
 	}
 }
 
-// ValidationMiddleware 参数验证中间件
+// ValidationMiddleware is a parameter validation middleware
 func ValidationMiddleware(validator ParamsValidator) Middleware {
 	return func(next ToolHandler) ToolHandler {
 		return func(ctx context.Context, req *CallToolRequest) (*protocol.CallToolResult, error) {

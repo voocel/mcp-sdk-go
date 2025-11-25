@@ -21,7 +21,7 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
-// Request 表示MCP请求
+// Request represents an MCP request
 type Request struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
@@ -90,7 +90,7 @@ func (x *Request) GetTimestamp() int64 {
 	return 0
 }
 
-// Response 表示MCP响应
+// Response represents an MCP response
 type Response struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
@@ -159,7 +159,7 @@ func (x *Response) GetTimestamp() int64 {
 	return 0
 }
 
-// Error 表示错误信息
+// Error represents error information
 type Error struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Code          int32                  `protobuf:"varint,1,opt,name=code,proto3" json:"code,omitempty"`
@@ -220,7 +220,7 @@ func (x *Error) GetData() []byte {
 	return nil
 }
 
-// ServerInfo 表示服务器信息
+// ServerInfo represents server information
 type ServerInfo struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`

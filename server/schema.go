@@ -119,16 +119,16 @@ func applyDefaults(data map[string]any, schema *invopop.Schema) {
 
 // applySchema applies defaults and validates data
 func applySchema(data map[string]any, schema *invopop.Schema) error {
-	// 1. Apply defaults
+	// Apply defaults
 	applyDefaults(data, schema)
 
-	// 2. Compile and cache schema
+	// Compile and cache schema
 	compiledSchema, err := compileSchema(schema)
 	if err != nil {
 		return fmt.Errorf("failed to compile schema: %w", err)
 	}
 
-	// 3. Perform full JSON Schema validation
+	// Perform full JSON Schema validation
 	if err := compiledSchema.Validate(data); err != nil {
 		return fmt.Errorf("validation failed: %w", err)
 	}

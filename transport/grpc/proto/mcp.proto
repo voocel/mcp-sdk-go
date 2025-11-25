@@ -3,16 +3,12 @@ syntax = "proto3";
 package mcp;
 option go_package = "github.com/voocel/mcp-sdk-go/transport/grpc/proto";
 
-// MCPService 定义了MCP的gRPC服务
 service MCPService {
-  // ProcessMessage 处理MCP消息
   rpc ProcessMessage(Request) returns (Response) {}
-  
-  // StreamMessages 建立双向流通信
+
   rpc StreamMessages(stream Request) returns (stream Response) {}
 }
 
-// Request 表示MCP请求
 message Request {
   string id = 1;
   string method = 2;
@@ -20,7 +16,6 @@ message Request {
   int64 timestamp = 4;
 }
 
-// Response 表示MCP响应
 message Response {
   string id = 1;
   bytes result = 2;
@@ -28,14 +23,12 @@ message Response {
   int64 timestamp = 4;
 }
 
-// Error 表示错误信息
 message Error {
   int32 code = 1;
   string message = 2;
   bytes data = 3;
 }
 
-// ServerInfo 表示服务器信息
 message ServerInfo {
   string name = 1;
   string version = 2;

@@ -1,45 +1,45 @@
 package protocol
 
-// PingParams ping 请求参数 (空参数)
+// PingParams ping request parameters (empty parameters)
 type PingParams struct {
 	Meta map[string]any `json:"_meta,omitempty"`
 }
 
-// ProgressNotificationParams 进度通知参数
+// ProgressNotificationParams progress notification parameters
 type ProgressNotificationParams struct {
 	Meta map[string]any `json:"_meta,omitempty"`
-	// 进度令牌,用于关联此通知与正在进行的请求
+	// Progress token to associate this notification with an ongoing request
 	ProgressToken any `json:"progressToken"`
-	// 当前进度值,每次进度更新时应该增加
+	// Current progress value, should increase with each progress update
 	Progress float64 `json:"progress"`
-	// 总进度值(如果已知),0 表示未知
+	// Total progress value (if known), 0 indicates unknown
 	Total float64 `json:"total,omitempty"`
-	// 可选的进度描述消息
+	// Optional progress description message
 	Message string `json:"message,omitempty"`
 }
 
-// CancelledNotificationParams 取消请求通知参数
+// CancelledNotificationParams cancellation notification parameters
 type CancelledNotificationParams struct {
 	Meta map[string]any `json:"_meta,omitempty"`
-	// 要取消的请求 ID
+	// Request ID to cancel
 	RequestID any `json:"requestId"`
-	// 可选的取消原因描述
+	// Optional cancellation reason description
 	Reason string `json:"reason,omitempty"`
 }
 
-// ResourceTemplateListChangedParams 资源模板列表变更通知参数
+// ResourceTemplateListChangedParams resource template list change notification parameters
 type ResourceTemplateListChangedParams struct {
 	Meta map[string]any `json:"_meta,omitempty"`
 }
 
-// RootsListChangedParams 根目录列表变更通知参数
+// RootsListChangedParams roots list change notification parameters
 type RootsListChangedParams struct {
 	Meta map[string]any `json:"_meta,omitempty"`
 }
 
-// ResourceUpdatedNotificationParams 资源更新通知参数
+// ResourceUpdatedNotificationParams resource update notification parameters
 type ResourceUpdatedNotificationParams struct {
 	Meta map[string]any `json:"_meta,omitempty"`
-	// 更新的资源 URI
+	// Updated resource URI
 	URI string `json:"uri"`
 }

@@ -13,13 +13,13 @@ import (
 	"github.com/voocel/mcp-sdk-go/transport"
 )
 
-// ServerSession 表示一个服务器会话, 每个客户端连接对应一个 ServerSession
+// ServerSession represents a server session, one ServerSession per client connection
 type ServerSession struct {
 	calledOnClose atomic.Bool
 	onClose       func()
 
 	server *Server
-	conn   Connection // 底层连接(来自transport)
+	conn   Connection // Underlying connection (from transport)
 
 	// keepalive
 	keepaliveCancel context.CancelFunc
@@ -27,27 +27,27 @@ type ServerSession struct {
 	mu              sync.Mutex
 	state           ServerSessionState
 	waitErr         chan error
-	pendingRequests map[string]context.CancelFunc // 跟踪正在处理的请求,用于取消
+	pendingRequests map[string]context.CancelFunc // Track pending requests for cancellation
 }
 
-// ServerSessionState 会话状态
+// ServerSessionState represents session state
 type ServerSessionState struct {
-	// InitializeParams 来自 initialize 请求的参数
+	// InitializeParams are the parameters from the initialize request
 	InitializeParams *protocol.InitializeParams
 
-	// InitializedParams 来自 notifications/initialized 的参数
+	// InitializedParams are the parameters from notifications/initialized
 	InitializedParams *protocol.InitializedParams
 
-	// LogLevel 日志级别
+	// LogLevel is the logging level
 	LogLevel protocol.LoggingLevel
 }
 
-// Connection 表示底层传输连接
+// Connection represents the underlying transport connection
 type Connection interface {
-	// SendNotification 发送通知到客户端
+	// SendNotification sends a notification to the client
 	SendNotification(ctx context.Context, method string, params interface{}) error
 
-	// SendRequest 发送请求到客户端并等待响应
+	// SendRequest sends a request to the client and waits for a response
 	SendRequest(ctx context.Context, method string, params interface{}, result interface{}) error
 
 	Close() error
@@ -67,7 +67,7 @@ func (ss *ServerSession) Close() error {
 		ss.keepaliveCancel()
 	}
 
-	// 取消所有正在处理的请求
+	// Cancel all pending requests
 	ss.mu.Lock()
 	pendingRequests := ss.pendingRequests
 	ss.pendingRequests = make(map[string]context.CancelFunc)
@@ -88,7 +88,7 @@ func (ss *ServerSession) Close() error {
 	return nil
 }
 
-// Wait 等待会话结束, 返回会话结束的错误
+// Wait waits for the session to end and returns the error that caused it to end
 func (ss *ServerSession) Wait() error {
 	if ss.waitErr == nil {
 		return nil
@@ -96,37 +96,37 @@ func (ss *ServerSession) Wait() error {
 	return <-ss.waitErr
 }
 
-// updateState 更新会话状态
+// updateState updates the session state
 func (ss *ServerSession) updateState(mut func(*ServerSessionState)) {
 	ss.mu.Lock()
 	mut(&ss.state)
 	ss.mu.Unlock()
 }
 
-// hasInitialized 检查是否已收到 initialized 通知
+// hasInitialized checks if the initialized notification has been received
 func (ss *ServerSession) hasInitialized() bool {
 	ss.mu.Lock()
 	defer ss.mu.Unlock()
 	return ss.state.InitializedParams != nil
 }
 
-// NotifyProgress 发送进度通知到客户端
+// NotifyProgress sends a progress notification to the client
 func (ss *ServerSession) NotifyProgress(ctx context.Context, params *protocol.ProgressNotificationParams) error {
 	return ss.conn.SendNotification(ctx, protocol.NotificationProgress, params)
 }
 
-// Log 发送日志消息到客户端
+// Log sends a log message to the client
 func (ss *ServerSession) Log(ctx context.Context, params *protocol.LoggingMessageParams) error {
 	ss.mu.Lock()
 	logLevel := ss.state.LogLevel
 	ss.mu.Unlock()
 
-	// 如果客户端未设置日志级别,不发送日志
+	// If the client has not set a log level, do not send logs
 	if logLevel == "" {
 		return nil
 	}
 
-	// 根据日志级别过滤
+	// Filter by log level
 	if !protocol.ShouldLog(params.Level, logLevel) {
 		return nil
 	}
@@ -134,66 +134,65 @@ func (ss *ServerSession) Log(ctx context.Context, params *protocol.LoggingMessag
 	return ss.conn.SendNotification(ctx, protocol.NotificationLoggingMessage, params)
 }
 
-// Ping 发送 ping 请求到客户端
+// Ping sends a ping request to the client
 func (ss *ServerSession) Ping(ctx context.Context) error {
 	return ss.conn.SendRequest(ctx, protocol.MethodPing, &protocol.PingParams{}, &protocol.EmptyResult{})
 }
 
-// ListRoots 列出客户端根目录
+// ListRoots lists the client's root directories
 func (ss *ServerSession) ListRoots(ctx context.Context) (*protocol.ListRootsResult, error) {
 	var result protocol.ListRootsResult
 	err := ss.conn.SendRequest(ctx, protocol.MethodRootsList, &protocol.ListRootsParams{}, &result)
 	return &result, err
 }
 
-// CreateMessage 发送采样请求到客户端
+// CreateMessage sends a sampling request to the client
 func (ss *ServerSession) CreateMessage(ctx context.Context, params *protocol.CreateMessageParams) (*protocol.CreateMessageResult, error) {
 	var result protocol.CreateMessageResult
 	err := ss.conn.SendRequest(ctx, protocol.MethodSamplingCreateMessage, params, &result)
 	return &result, err
 }
 
-// Elicit 发送 elicitation 请求到客户端,请求用户输入
+// Elicit sends an elicitation request to the client, requesting user input
 func (ss *ServerSession) Elicit(ctx context.Context, params *protocol.ElicitationCreateParams) (*protocol.ElicitationResult, error) {
 	var result protocol.ElicitationResult
 	err := ss.conn.SendRequest(ctx, protocol.MethodElicitationCreate, params, &result)
 	return &result, err
 }
 
-// InitializeParams 返回初始化参数
+// InitializeParams returns the initialization parameters
 func (ss *ServerSession) InitializeParams() *protocol.InitializeParams {
 	ss.mu.Lock()
 	defer ss.mu.Unlock()
 	return ss.state.InitializeParams
 }
 
-// CallToolRequest 表示工具调用请求,允许工具处理函数发送通知
+// CallToolRequest represents a tool call request, allowing tool handlers to send notifications
 type CallToolRequest struct {
-	// Session 当前会话
+	// Session is the current session
 	Session *ServerSession
 
-	// Params 原始参数
+	// Params are the original parameters
 	Params *protocol.CallToolParams
 }
 
-// ToolHandler 工具处理函数
-// 接收 CallToolRequest,可以通过 req.Session 发送通知
+// ToolHandler is a tool handler function.
+// It receives a CallToolRequest and can send notifications via req.Session.
 type ToolHandler func(ctx context.Context, req *CallToolRequest) (*protocol.CallToolResult, error)
 
-// ========== connAdapter: 将 transport.Connection 适配到 server.Connection ==========
+// ========== connAdapter: Adapts transport.Connection to server.Connection ==========
 
-// pendingRequest 表示一个待处理的请求
+// pendingRequest represents a pending request
 type pendingRequest struct {
 	method   string
 	response chan *protocol.JSONRPCMessage
 	err      chan error
 }
 
-// connAdapter 将 transport.Connection 适配为 server.Connection
+// connAdapter adapts transport.Connection to server.Connection
 type connAdapter struct {
 	conn transport.Connection
 
-	// 请求/响应机制
 	mu      sync.Mutex
 	pending map[string]*pendingRequest
 	nextID  int64
@@ -283,13 +282,13 @@ func (a *connAdapter) SendRequest(ctx context.Context, method string, params int
 }
 
 func (a *connAdapter) Close() error {
-	// 清理所有 pending 请求
+	// Clean up all pending requests
 	a.mu.Lock()
 	pending := a.pending
 	a.pending = make(map[string]*pendingRequest)
 	a.mu.Unlock()
 
-	// 通知所有 pending 请求连接已关闭
+	// Notify all pending requests that the connection is closed
 	for _, req := range pending {
 		select {
 		case req.err <- fmt.Errorf("connection closed"):
@@ -300,7 +299,7 @@ func (a *connAdapter) Close() error {
 	return a.conn.Close()
 }
 
-// handleResponse 处理来自客户端的响应消息
+// handleResponse handles response messages from the client
 func (a *connAdapter) handleResponse(msg *protocol.JSONRPCMessage) {
 	if msg.ID == nil {
 		return
@@ -333,7 +332,7 @@ func (a *connAdapter) SessionID() string {
 	return a.conn.SessionID()
 }
 
-// startKeepalive 启动 keepalive 机制
+// startKeepalive starts the keepalive mechanism
 func (ss *ServerSession) startKeepalive(interval time.Duration) {
 	ctx, cancel := context.WithCancel(context.Background())
 	ss.keepaliveCancel = cancel
@@ -352,7 +351,7 @@ func (ss *ServerSession) startKeepalive(interval time.Duration) {
 				cancel()
 
 				if err != nil {
-					// Ping 失败,关闭连接
+					// Ping failed, close the connection
 					_ = ss.Close()
 					return
 				}

@@ -11,25 +11,25 @@ import (
 	"github.com/voocel/mcp-sdk-go/transport"
 )
 
-// StreamableTransport 实现 transport.Transport 接口
-// 用于 Streamable HTTP 传输. 使用 stream 和 deliver 回调模式
+// StreamableTransport implements the transport.Transport interface.
+// Used for Streamable HTTP transport. Uses stream and deliver callback pattern.
 type StreamableTransport struct {
 	sessionID string
 	closed    atomic.Bool
 
-	// streams 管理逻辑流
+	// streams manages logical streams
 	streamsMu      sync.Mutex
-	streams        map[string]*stream // 按 stream ID 索引
-	requestStreams map[string]string  // 请求 ID -> stream ID
+	streams        map[string]*stream // Indexed by stream ID
+	requestStreams map[string]string  // Request ID -> stream ID
 }
 
-// stream 表示一个逻辑流
+// stream represents a logical stream
 type stream struct {
 	id string
 
 	mu       sync.Mutex
-	deliver  func(data []byte, final bool) error // 回调函数,用于发送数据
-	requests map[string]struct{}                 // 未完成的请求 ID
+	deliver  func(data []byte, final bool) error // Callback function for sending data
+	requests map[string]struct{}                 // Outstanding request IDs
 }
 
 func NewStreamableTransport(sessionID string) *StreamableTransport {
@@ -39,7 +39,6 @@ func NewStreamableTransport(sessionID string) *StreamableTransport {
 		requestStreams: make(map[string]string),
 	}
 
-	// 创建默认的 standalone SSE stream
 	t.streams[""] = &stream{
 		id:       "",
 		requests: make(map[string]struct{}),
@@ -59,9 +58,9 @@ type streamableConn struct {
 }
 
 func (c *streamableConn) Read(ctx context.Context) (*protocol.JSONRPCMessage, error) {
-	// Streamable HTTP 不使用 Read 方法
-	// 消息直接在 handlePost 中处理
-	return nil, fmt.Errorf("Read not supported in Streamable HTTP transport")
+	// Streamable HTTP does not use Read method
+	// Messages are processed directly in handlePost
+	return nil, fmt.Errorf("read not supported in Streamable HTTP transport")
 }
 
 func (c *streamableConn) Write(ctx context.Context, msg *protocol.JSONRPCMessage) error {
@@ -75,8 +74,8 @@ func (c *streamableConn) Write(ctx context.Context, msg *protocol.JSONRPCMessage
 	}
 
 	var (
-		relatedRequest string // 相关的请求 ID
-		responseTo     string // 如果是响应,这是响应的请求 ID
+		relatedRequest string // Related request ID
+		responseTo     string // If it's a response, this is the request ID being responded to
 	)
 
 	isResponse := !msg.IsNotification() && (msg.Result != nil || msg.Error != nil)
@@ -86,7 +85,7 @@ func (c *streamableConn) Write(ctx context.Context, msg *protocol.JSONRPCMessage
 		relatedRequest = responseTo
 	}
 
-	// 查找对应的 stream
+	// Find the corresponding stream
 	var s *stream
 	c.transport.streamsMu.Lock()
 	if relatedRequest != "" {
@@ -94,30 +93,30 @@ func (c *streamableConn) Write(ctx context.Context, msg *protocol.JSONRPCMessage
 			s = c.transport.streams[streamID]
 		}
 	} else {
-		// 默认使用 standalone SSE stream
+		// Default to standalone SSE stream
 		s = c.transport.streams[""]
 	}
 
-	// 如果是响应,删除请求映射
+	// If it's a response, delete the request mapping
 	if responseTo != "" {
 		delete(c.transport.requestStreams, responseTo)
 	}
 	c.transport.streamsMu.Unlock()
 
 	if s == nil {
-		// stream 不存在,可能已经关闭
+		// Stream doesn't exist, may have been closed
 		return fmt.Errorf("stream not found")
 	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// 检查 stream 是否完成
+	// Check if stream is complete
 	if responseTo != "" {
 		delete(s.requests, responseTo)
-		// 如果所有请求都已响应,stream 完成
+		// If all requests have been responded to, stream is complete
 		if len(s.requests) == 0 && s.id != "" {
-			// 删除 stream (除了 standalone stream)
+			// Delete stream (except standalone stream)
 			c.transport.streamsMu.Lock()
 			delete(c.transport.streams, s.id)
 			c.transport.streamsMu.Unlock()
@@ -130,14 +129,14 @@ func (c *streamableConn) Write(ctx context.Context, msg *protocol.JSONRPCMessage
 		return s.deliver(data, final)
 	}
 
-	// 没有 deliver 函数,消息无法发送
+	// No deliver function, message cannot be sent
 	return nil
 }
 
 func (c *streamableConn) Close() error {
-	// 对于 Streamable HTTP,不要关闭 channels
-	// 因为同一个 session 可能会有多个请求
-	// channels 会在 session 被删除时由 HTTPHandler 关闭
+	// For Streamable HTTP, don't close channels
+	// because the same session may have multiple requests
+	// Channels will be closed by HTTPHandler when session is deleted
 	return nil
 }
 
@@ -145,7 +144,7 @@ func (c *streamableConn) SessionID() string {
 	return c.transport.sessionID
 }
 
-// RegisterStream 注册一个新的 stream
+// RegisterStream registers a new stream
 func (t *StreamableTransport) RegisterStream(streamID string, requests map[string]struct{}, deliver func(data []byte, final bool) error) {
 	t.streamsMu.Lock()
 	defer t.streamsMu.Unlock()
@@ -157,7 +156,6 @@ func (t *StreamableTransport) RegisterStream(streamID string, requests map[strin
 	}
 	t.streams[streamID] = s
 
-	// 注册请求映射
 	for reqID := range requests {
 		t.requestStreams[reqID] = streamID
 	}

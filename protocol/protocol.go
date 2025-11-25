@@ -10,12 +10,12 @@ const (
 	MCPVersion     = "2025-06-18"
 	JSONRPCVersion = "2.0"
 
-	// 支持的协议版本列表（用于向后兼容性检查）
+	// Supported protocol versions list (for backward compatibility check)
 	MCPVersion2025_03_26 = "2025-03-26"
 	MCPVersionLegacy     = "2024-11-05"
 )
 
-// JSON-RPC 2.0 标准错误代码
+// JSON-RPC 2.0 standard error codes
 const (
 	ParseError     = -32700
 	InvalidRequest = -32600
@@ -24,14 +24,14 @@ const (
 	InternalError  = -32603
 )
 
-// MCP 特定错误代码
+// MCP specific error codes
 const (
-	ToolNotFound     = -32000 // 工具未找到
-	ResourceNotFound = -32002 // 资源未找到
-	PromptNotFound   = -32001 // 提示模板未找到
-	InvalidTool      = -32003 // 无效工具
-	InvalidResource  = -32004 // 无效资源
-	InvalidPrompt    = -32005 // 无效提示模板
+	ToolNotFound     = -32000 // Tool not found
+	ResourceNotFound = -32002 // Resource not found
+	PromptNotFound   = -32001 // Prompt not found
+	InvalidTool      = -32003 // Invalid tool
+	InvalidResource  = -32004 // Invalid resource
+	InvalidPrompt    = -32005 // Invalid prompt
 
 	ErrorCodeInvalidParams = InvalidParams
 )
@@ -51,7 +51,7 @@ type JSONRPCError struct {
 	Data    interface{} `json:"data,omitempty"`
 }
 
-// MCPError MCP特定错误类型
+// MCPError represents MCP-specific error type
 type MCPError struct {
 	Code    int         `json:"code"`
 	Message string      `json:"message"`
@@ -62,7 +62,7 @@ func (e *MCPError) Error() string {
 	return e.Message
 }
 
-// NewMCPError 创建新的MCP错误
+// NewMCPError creates a new MCP error
 func NewMCPError(code int, message string, data interface{}) *MCPError {
 	return &MCPError{
 		Code:    code,
@@ -81,11 +81,11 @@ const (
 	ContentTypeResource     ContentType = "resource"      // MCP 2025-06-18: Embedded Resource
 )
 
-// Annotation 内容注解 (MCP 2025-06-18)
+// Annotation represents content annotation (MCP 2025-06-18)
 type Annotation struct {
-	Audience     []Role  `json:"audience,omitempty"`     // 目标受众 (user, assistant)
-	Priority     float64 `json:"priority,omitempty"`     // 优先级 (0.0-1.0)
-	LastModified string  `json:"lastModified,omitempty"` // 最后修改时间 (ISO 8601)
+	Audience     []Role  `json:"audience,omitempty"`     // Target audience (user, assistant)
+	Priority     float64 `json:"priority,omitempty"`     // Priority (0.0-1.0)
+	LastModified string  `json:"lastModified,omitempty"` // Last modified time (ISO 8601)
 }
 
 type TextContent struct {
@@ -101,15 +101,15 @@ type ImageContent struct {
 	Annotations *Annotation `json:"annotations,omitempty"` // MCP 2025-06-18
 }
 
-// AudioContent 音频内容 (MCP 2025-06-18)
+// AudioContent represents audio content (MCP 2025-06-18)
 type AudioContent struct {
 	Type        ContentType `json:"type"`
-	Data        string      `json:"data"`     // Base64 编码的音频数据
-	MimeType    string      `json:"mimeType"` // 例如: audio/wav, audio/mp3
+	Data        string      `json:"data"`     // Base64 encoded audio data
+	MimeType    string      `json:"mimeType"` // e.g., audio/wav, audio/mp3
 	Annotations *Annotation `json:"annotations,omitempty"`
 }
 
-// ResourceLinkContent 资源链接 (MCP 2025-06-18)
+// ResourceLinkContent represents resource link (MCP 2025-06-18)
 type ResourceLinkContent struct {
 	Type        ContentType `json:"type"`
 	URI         string      `json:"uri"`
@@ -119,7 +119,7 @@ type ResourceLinkContent struct {
 	Annotations *Annotation `json:"annotations,omitempty"`
 }
 
-// EmbeddedResourceContent 嵌入式资源 (MCP 2025-06-18)
+// EmbeddedResourceContent represents embedded resource (MCP 2025-06-18)
 type EmbeddedResourceContent struct {
 	Type     ContentType      `json:"type"`
 	Resource ResourceContents `json:"resource"`
@@ -176,7 +176,7 @@ func UnmarshalContent(data []byte) (Content, error) {
 		}
 		return erc, nil
 	default:
-		// 默认当作文本内容处理
+		// Default to text content
 		var tc TextContent
 		if err := json.Unmarshal(data, &tc); err != nil {
 			return nil, err
@@ -193,17 +193,17 @@ func NewImageContent(data, mimeType string) ImageContent {
 	return ImageContent{Type: ContentTypeImage, Data: data, MimeType: mimeType}
 }
 
-// NewAudioContent 创建音频内容 (MCP 2025-06-18)
+// NewAudioContent creates audio content (MCP 2025-06-18)
 func NewAudioContent(data, mimeType string) AudioContent {
 	return AudioContent{Type: ContentTypeAudio, Data: data, MimeType: mimeType}
 }
 
-// NewResourceLinkContent 创建资源链接内容 (MCP 2025-06-18)
+// NewResourceLinkContent creates resource link content (MCP 2025-06-18)
 func NewResourceLinkContent(uri string) ResourceLinkContent {
 	return ResourceLinkContent{Type: ContentTypeResourceLink, URI: uri}
 }
 
-// NewResourceLinkContentWithDetails 创建带详细信息的资源链接 (MCP 2025-06-18)
+// NewResourceLinkContentWithDetails creates resource link with details (MCP 2025-06-18)
 func NewResourceLinkContentWithDetails(uri, name, description, mimeType string) ResourceLinkContent {
 	return ResourceLinkContent{
 		Type:        ContentTypeResourceLink,
@@ -214,12 +214,12 @@ func NewResourceLinkContentWithDetails(uri, name, description, mimeType string) 
 	}
 }
 
-// NewEmbeddedResourceContent 创建嵌入式资源内容 (MCP 2025-06-18)
+// NewEmbeddedResourceContent creates embedded resource content (MCP 2025-06-18)
 func NewEmbeddedResourceContent(resource ResourceContents) EmbeddedResourceContent {
 	return EmbeddedResourceContent{Type: ContentTypeResource, Resource: resource}
 }
 
-// WithAnnotations 为内容添加注解 (MCP 2025-06-18)
+// WithAnnotations adds annotations to content (MCP 2025-06-18)
 func (tc *TextContent) WithAnnotations(annotations *Annotation) *TextContent {
 	tc.Annotations = annotations
 	return tc
@@ -240,7 +240,7 @@ func (rlc *ResourceLinkContent) WithAnnotations(annotations *Annotation) *Resour
 	return rlc
 }
 
-// NewAnnotation 创建注解 (MCP 2025-06-18)
+// NewAnnotation creates annotation (MCP 2025-06-18)
 func NewAnnotation() *Annotation {
 	return &Annotation{}
 }
@@ -280,7 +280,7 @@ type ServerCapabilities struct {
 	Resources    *ResourcesCapability   `json:"resources,omitempty"`
 	Prompts      *PromptsCapability     `json:"prompts,omitempty"`
 	Logging      *LoggingCapability     `json:"logging,omitempty"`
-	Completion   *CompletionCapability  `json:"completions,omitempty"` // MCP 2025-06-18: 参数自动补全
+	Completion   *CompletionCapability  `json:"completions,omitempty"` // MCP 2025-06-18: Parameter auto-completion
 	Experimental map[string]interface{} `json:"experimental,omitempty"`
 }
 
@@ -306,20 +306,20 @@ type PromptsCapability struct {
 
 type LoggingCapability struct{}
 
-// Elicitation 能力声明
+// ElicitationCapability represents elicitation capability declaration
 type ElicitationCapability struct{}
 
-// Icon 图标定义,用于资源、工具、提示和实现的视觉标识
+// Icon defines icon for visual identification of resources, tools, prompts, and implementations
 type Icon struct {
-	// Source 指向图标资源的 URI (必需)，可以是:
-	// - HTTP/HTTPS URL 指向图像文件
-	// - data URI 包含 base64 编码的图像数据
+	// Source is the URI pointing to the icon resource (required), can be:
+	// - HTTP/HTTPS URL pointing to an image file
+	// - data URI containing base64 encoded image data
 	Source string `json:"src"`
-	// MIMEType 可选的 MIME 类型
+	// MIMEType is an optional MIME type
 	MIMEType string `json:"mimeType,omitempty"`
-	// Sizes 可选的尺寸规范 (如 ["48x48"], ["any"] 用于 SVG 等可缩放格式)
+	// Sizes is an optional size specification (e.g., ["48x48"], ["any"] for scalable formats like SVG)
 	Sizes []string `json:"sizes,omitempty"`
-	// Theme 可选的主题,如 "light" 或 "dark"
+	// Theme is an optional theme, such as "light" or "dark"
 	Theme string `json:"theme,omitempty"`
 }
 
@@ -339,7 +339,7 @@ type ServerInfo struct {
 	Icons      []Icon `json:"icons,omitempty"`
 }
 
-// InitializeParams initialize 请求参数
+// InitializeParams represents initialize request parameters
 type InitializeParams struct {
 	Meta            map[string]any     `json:"_meta,omitempty"`
 	ProtocolVersion string             `json:"protocolVersion"`
@@ -347,7 +347,7 @@ type InitializeParams struct {
 	ClientInfo      ClientInfo         `json:"clientInfo"`
 }
 
-// InitializeResult initialize 响应
+// InitializeResult represents initialize response
 type InitializeResult struct {
 	ProtocolVersion string             `json:"protocolVersion"`
 	Capabilities    ServerCapabilities `json:"capabilities"`
@@ -383,7 +383,7 @@ type PaginatedResult struct {
 	NextCursor *string `json:"nextCursor,omitempty"`
 }
 
-// IsVersionSupported 检查协议版本是否受支持
+// IsVersionSupported checks if the protocol version is supported
 func IsVersionSupported(version string) bool {
 	supportedVersions := []string{
 		MCPVersion,           // 2025-06-18
@@ -401,9 +401,9 @@ func IsVersionSupported(version string) bool {
 
 func GetSupportedVersions() []string {
 	return []string{
-		MCPVersion,           // 最新版本优先
-		MCPVersion2025_03_26, // 中间版本
-		MCPVersionLegacy,     // 向后兼容
+		MCPVersion,           // Latest version first
+		MCPVersion2025_03_26, // Intermediate version
+		MCPVersionLegacy,     // Backward compatibility
 	}
 }
 
@@ -428,7 +428,7 @@ func IDToString(id json.RawMessage) string {
 	return string(id)
 }
 
-// StringToID 将字符串转换为 JSON-RPC ID
+// StringToID converts string to JSON-RPC ID
 func StringToID(id string) json.RawMessage {
 	if id == "" {
 		return nil

@@ -22,29 +22,29 @@ func main() {
 
 	transport, err := sse.NewSSETransport("http://localhost:8082")
 	if err != nil {
-		log.Fatalf("创建 Transport 失败: %v", err)
+		log.Fatalf("Failed to create transport: %v", err)
 	}
 
-	fmt.Println("连接到聊天机器人服务...")
+	fmt.Println("Connecting to chatbot service...")
 	session, err := mcpClient.Connect(ctx, transport, nil)
 	if err != nil {
-		log.Fatalf("连接失败: %v", err)
+		log.Fatalf("Connection failed: %v", err)
 	}
 	defer session.Close()
 
 	initResult := session.InitializeResult()
-	fmt.Printf("连接成功！服务器: %s v%s\n",
+	fmt.Printf("Connected successfully! Server: %s v%s\n",
 		initResult.ServerInfo.Name, initResult.ServerInfo.Version)
 
-	fmt.Print("\n请输入你的姓名: ")
+	fmt.Print("\nPlease enter your name: ")
 	scanner := bufio.NewScanner(os.Stdin)
 	scanner.Scan()
 	username := strings.TrimSpace(scanner.Text())
 	if username == "" {
-		username = "朋友"
+		username = "Friend"
 	}
 
-	// 获取问候语
+	// Get greeting
 	result, err := session.CallTool(ctx, &protocol.CallToolParams{
 		Name: "greeting",
 		Arguments: map[string]any{
@@ -52,7 +52,7 @@ func main() {
 		},
 	})
 	if err != nil {
-		log.Fatalf("调用问候工具失败: %v", err)
+		log.Fatalf("Failed to call greeting tool: %v", err)
 	}
 
 	if len(result.Content) > 0 {
@@ -61,7 +61,7 @@ func main() {
 		}
 	}
 
-	// 获取聊天模板
+	// Get chat template
 	promptResult, err := session.GetPrompt(ctx, &protocol.GetPromptParams{
 		Name: "chat_template",
 		Arguments: map[string]string{
@@ -69,10 +69,10 @@ func main() {
 		},
 	})
 	if err != nil {
-		log.Fatalf("获取聊天模板失败: %v", err)
+		log.Fatalf("Failed to get chat template: %v", err)
 	}
 
-	// 显示助手的欢迎消息
+	// Display assistant's welcome message
 	if len(promptResult.Messages) >= 3 {
 		assistantMessage := promptResult.Messages[len(promptResult.Messages)-1]
 		if textContent, ok := assistantMessage.Content.(protocol.TextContent); ok {
@@ -80,10 +80,10 @@ func main() {
 		}
 	}
 
-	fmt.Println("\n你可以输入以下命令:")
-	fmt.Println("- 'weather [城市]' 查看天气")
-	fmt.Println("- 'translate [文本] to [zh/en]' 翻译文本")
-	fmt.Println("- 'exit' 退出聊天")
+	fmt.Println("\nYou can enter the following commands:")
+	fmt.Println("- 'weather [city]' to check weather")
+	fmt.Println("- 'translate [text] to [zh/en]' to translate text")
+	fmt.Println("- 'exit' to quit chat")
 	fmt.Println()
 
 	for {
@@ -91,7 +91,7 @@ func main() {
 		scanner.Scan()
 		input := strings.TrimSpace(scanner.Text())
 
-		if input == "exit" || input == "退出" {
+		if input == "exit" || input == "quit" {
 			break
 		}
 
@@ -99,18 +99,16 @@ func main() {
 			continue
 		}
 
-		if strings.HasPrefix(input, "weather ") || strings.HasPrefix(input, "天气 ") {
-			// 处理天气查询
+		if strings.HasPrefix(input, "weather ") {
+			// Handle weather query
 			var city string
 			if strings.HasPrefix(input, "weather ") {
 				city = strings.TrimPrefix(input, "weather ")
-			} else {
-				city = strings.TrimPrefix(input, "天气 ")
 			}
 
 			city = strings.TrimSpace(city)
 			if city == "" {
-				fmt.Println("请指定城市名称")
+				fmt.Println("Please specify a city name")
 				continue
 			}
 
@@ -121,7 +119,7 @@ func main() {
 				},
 			})
 			if err != nil {
-				fmt.Printf("错误: %v\n", err)
+				fmt.Printf("Error: %v\n", err)
 				continue
 			}
 
@@ -131,10 +129,10 @@ func main() {
 				}
 			}
 		} else if strings.Contains(input, " to ") {
-			// 处理翻译请求
+			// Handle translation request
 			parts := strings.Split(input, " to ")
 			if len(parts) != 2 || !strings.HasPrefix(parts[0], "translate ") {
-				fmt.Println("格式错误。请使用: translate [文本] to [zh/en]")
+				fmt.Println("Invalid format. Please use: translate [text] to [zh/en]")
 				continue
 			}
 
@@ -142,12 +140,12 @@ func main() {
 			targetLang := strings.TrimSpace(parts[1])
 
 			if text == "" {
-				fmt.Println("请提供要翻译的文本")
+				fmt.Println("Please provide text to translate")
 				continue
 			}
 
 			if targetLang != "zh" && targetLang != "en" {
-				fmt.Println("目标语言必须是 'zh' 或 'en'")
+				fmt.Println("Target language must be 'zh' or 'en'")
 				continue
 			}
 
@@ -159,7 +157,7 @@ func main() {
 				},
 			})
 			if err != nil {
-				fmt.Printf("错误: %v\n", err)
+				fmt.Printf("Error: %v\n", err)
 				continue
 			}
 
@@ -169,22 +167,22 @@ func main() {
 				}
 			} else if len(result.Content) > 0 {
 				if textContent, ok := result.Content[0].(protocol.TextContent); ok {
-					fmt.Printf("翻译结果: %s\n", textContent.Text)
+					fmt.Printf("Translation result: %s\n", textContent.Text)
 				}
 			}
-		} else if input == "help" || input == "帮助" {
-			// 显示帮助信息
-			fmt.Println("可用命令:")
-			fmt.Println("  - weather [城市] 或 天气 [城市] - 查看指定城市的天气")
-			fmt.Println("  - translate [文本] to [zh/en] - 翻译中英文")
-			fmt.Println("  - help 或 帮助 - 显示此帮助信息")
-			fmt.Println("  - exit 或 退出 - 退出程序")
+		} else if input == "help" {
+			// Display help information
+			fmt.Println("Available commands:")
+			fmt.Println("  - weather [city] - Check weather for specified city")
+			fmt.Println("  - translate [text] to [zh/en] - Translate between Chinese and English")
+			fmt.Println("  - help - Display this help information")
+			fmt.Println("  - exit - Exit the program")
 		} else {
-			// 未识别的命令
-			fmt.Printf("未知命令: '%s'\n", input)
-			fmt.Println("请尝试 'weather [城市]'、'translate [文本] to [zh/en]'、'help' 或 'exit'")
+			// Unrecognized command
+			fmt.Printf("Unknown command: '%s'\n", input)
+			fmt.Println("Please try 'weather [city]', 'translate [text] to [zh/en]', 'help' or 'exit'")
 		}
 	}
 
-	fmt.Println("\n end!")
+	fmt.Println("\nGoodbye!")
 }

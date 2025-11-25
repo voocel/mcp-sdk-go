@@ -17,11 +17,11 @@ type ToolParameter struct {
 
 type Tool struct {
 	Name         string         `json:"name"`
-	Title        string         `json:"title,omitempty"` // MCP 2025-06-18: 人类友好的标题
+	Title        string         `json:"title,omitempty"` // MCP 2025-06-18: Human-friendly title
 	Description  string         `json:"description,omitempty"`
 	InputSchema  JSONSchema     `json:"inputSchema"`
 	OutputSchema JSONSchema     `json:"outputSchema,omitempty"` // MCP 2025-06-18
-	Meta         map[string]any `json:"_meta,omitempty"`        // MCP 2025-06-18: 扩展元数据
+	Meta         map[string]any `json:"_meta,omitempty"`        // MCP 2025-06-18: Extended metadata
 }
 
 type ToolList struct {
@@ -42,10 +42,9 @@ type CallToolResult struct {
 	Content           []Content      `json:"content"`
 	IsError           bool           `json:"isError,omitempty"`
 	StructuredContent any            `json:"structuredContent,omitempty"` // MCP 2025-06-18
-	Meta              map[string]any `json:"_meta,omitempty"`             // MCP 2025-06-18: 扩展元数据
+	Meta              map[string]any `json:"_meta,omitempty"`             // MCP 2025-06-18: Extended metadata
 }
 
-// UnmarshalJSON 实现自定义JSON反序列化
 func (ctr *CallToolResult) UnmarshalJSON(data []byte) error {
 	var temp struct {
 		Content           []json.RawMessage `json:"content"`
@@ -98,7 +97,7 @@ func NewTool(name, description string, inputSchema JSONSchema) Tool {
 	}
 }
 
-// NewToolWithOutput 创建带有输出模式的工具 (MCP 2025-06-18)
+// NewToolWithOutput creates a tool with output schema (MCP 2025-06-18)
 func NewToolWithOutput(name, description string, inputSchema, outputSchema JSONSchema) Tool {
 	return Tool{
 		Name:         name,
@@ -129,7 +128,7 @@ func NewToolResultError(errorMsg string) *CallToolResult {
 	}
 }
 
-// NewToolResultWithStructured 创建带有结构化内容的工具结果 (MCP 2025-06-18)
+// NewToolResultWithStructured creates a tool result with structured content (MCP 2025-06-18)
 func NewToolResultWithStructured(content []Content, structuredContent interface{}) *CallToolResult {
 	return &CallToolResult{
 		Content:           content,
@@ -138,7 +137,7 @@ func NewToolResultWithStructured(content []Content, structuredContent interface{
 	}
 }
 
-// NewToolResultTextWithStructured 创建带有文本和结构化内容的工具结果
+// NewToolResultTextWithStructured creates a tool result with text and structured content
 func NewToolResultTextWithStructured(text string, structuredContent interface{}) *CallToolResult {
 	return &CallToolResult{
 		Content:           []Content{NewTextContent(text)},
@@ -147,13 +146,13 @@ func NewToolResultTextWithStructured(text string, structuredContent interface{})
 	}
 }
 
-// 缓存编译后的schema以提高性能
+// Cache compiled schemas to improve performance
 var (
 	schemaCache = make(map[string]*jsonschema.Schema)
 	cacheMutex  sync.RWMutex
 )
 
-// ValidateStructuredOutput 验证结构化输出是否符合模式
+// ValidateStructuredOutput validates whether structured output conforms to the schema
 func ValidateStructuredOutput(data interface{}, schema JSONSchema) error {
 	if len(schema) == 0 {
 		return nil
@@ -162,7 +161,7 @@ func ValidateStructuredOutput(data interface{}, schema JSONSchema) error {
 	return validateWithJSONSchema(data, schema)
 }
 
-// validateWithJSONSchema 使用jsonschema库进行验证
+// validateWithJSONSchema validates using jsonschema library
 func validateWithJSONSchema(data interface{}, schema JSONSchema) error {
 	schemaBytes, err := json.Marshal(schema)
 	if err != nil {
@@ -170,7 +169,7 @@ func validateWithJSONSchema(data interface{}, schema JSONSchema) error {
 	}
 	schemaKey := string(schemaBytes)
 
-	// 检查缓存
+	// Check cache
 	cacheMutex.RLock()
 	compiledSchema, exists := schemaCache[schemaKey]
 	cacheMutex.RUnlock()
@@ -192,7 +191,7 @@ func validateWithJSONSchema(data interface{}, schema JSONSchema) error {
 			return fmt.Errorf("failed to compile schema: %v", err)
 		}
 
-		// 缓存编译后的schema
+		// Cache compiled schema
 		cacheMutex.Lock()
 		schemaCache[schemaKey] = compiledSchema
 		cacheMutex.Unlock()

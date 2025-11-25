@@ -1,30 +1,29 @@
 package protocol
 
-// Root 根目录定义
+// Root root directory definition
 type Root struct {
-	URI  string `json:"uri"`            // 根目录URI，必须是 file:// 协议
-	Name string `json:"name,omitempty"` // 可选的人类可读名称
+	URI  string `json:"uri"`            // Root directory URI, must use file:// protocol
+	Name string `json:"name,omitempty"` // Optional human-readable name
 }
 
-// ListRootsRequest roots/list 请求
+// ListRootsRequest roots/list request
 type ListRootsRequest struct {
-	// 根据MCP协议，roots/list请求没有参数
+	// According to MCP protocol, roots/list request has no parameters
 }
 
-// ListRootsParams 列出根目录的参数类型
+// ListRootsParams parameter type for listing root directories
 type ListRootsParams struct {
-	// 根据MCP协议，roots/list请求没有参数
+	// According to MCP protocol, roots/list request has no parameters
 }
 
-// ListRootsResult roots/list 响应
+// ListRootsResult roots/list response
 type ListRootsResult struct {
 	Roots []Root `json:"roots"`
 }
 
-// RootsListChangedNotification 根目录列表变更通知
+// RootsListChangedNotification root directory list change notification
 type RootsListChangedNotification struct{}
 
-// NewRoot 创建新的根目录定义
 func NewRoot(uri, name string) Root {
 	return Root{
 		URI:  uri,
@@ -32,14 +31,12 @@ func NewRoot(uri, name string) Root {
 	}
 }
 
-// NewListRootsResult 创建根目录列表结果
 func NewListRootsResult(roots ...Root) *ListRootsResult {
 	return &ListRootsResult{
 		Roots: roots,
 	}
 }
 
-// NewRootsListChangedNotification 创建根目录列表变更通知
 func NewRootsListChangedNotification() RootsListChangedNotification {
 	return RootsListChangedNotification{}
 }

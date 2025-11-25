@@ -2,29 +2,25 @@ package protocol
 
 import "encoding/json"
 
-// PromptArgument 提示模板参数
 type PromptArgument struct {
 	Name        string `json:"name"`
 	Description string `json:"description,omitempty"`
 	Required    bool   `json:"required,omitempty"`
 }
 
-// Prompt 提示模板定义
 type Prompt struct {
 	Name        string           `json:"name"`
-	Title       string           `json:"title,omitempty"` // MCP 2025-06-18: 人类友好的标题
+	Title       string           `json:"title,omitempty"` // MCP 2025-06-18: Human-friendly title
 	Description string           `json:"description,omitempty"`
 	Arguments   []PromptArgument `json:"arguments,omitempty"`
-	Meta        map[string]any   `json:"_meta,omitempty"` // MCP 2025-06-18: 扩展元数据
+	Meta        map[string]any   `json:"_meta,omitempty"` // MCP 2025-06-18: Extended metadata
 }
 
-// PromptMessage 提示消息
 type PromptMessage struct {
 	Role    Role    `json:"role"`
 	Content Content `json:"content"`
 }
 
-// UnmarshalJSON 实现自定义JSON反序列化
 func (pm *PromptMessage) UnmarshalJSON(data []byte) error {
 	var temp struct {
 		Role    Role            `json:"role"`
@@ -46,12 +42,12 @@ func (pm *PromptMessage) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-// ListPromptsRequest prompts/list 请求和响应
+// ListPromptsRequest prompts/list request and response
 type ListPromptsRequest struct {
 	Cursor string `json:"cursor,omitempty"`
 }
 
-// ListPromptsParams 列表提示模板的参数类型
+// ListPromptsParams parameter type for listing prompt templates
 type ListPromptsParams struct {
 	Cursor string `json:"cursor,omitempty"`
 }
@@ -61,13 +57,13 @@ type ListPromptsResult struct {
 	PaginatedResult
 }
 
-// GetPromptRequest prompts/get 请求和响应
+// GetPromptRequest prompts/get request and response
 type GetPromptRequest struct {
 	Name      string            `json:"name"`
 	Arguments map[string]string `json:"arguments,omitempty"`
 }
 
-// GetPromptParams 获取提示模板的参数类型
+// GetPromptParams parameter type for getting prompt templates
 type GetPromptParams struct {
 	Name      string            `json:"name"`
 	Arguments map[string]string `json:"arguments,omitempty"`
@@ -79,7 +75,7 @@ type GetPromptResult struct {
 	Meta        map[string]any  `json:"_meta,omitempty"`
 }
 
-// PromptsListChangedNotification 提示模板变更通知
+// PromptsListChangedNotification prompt template change notification
 type PromptsListChangedNotification struct{}
 
 func NewPrompt(name, description string, arguments ...PromptArgument) Prompt {

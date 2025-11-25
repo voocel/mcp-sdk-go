@@ -15,11 +15,11 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	log.Println("启动 SSE 客户端...")
+	log.Println("Starting SSE client...")
 
 	transport, err := sse.NewSSETransport("http://localhost:8080")
 	if err != nil {
-		log.Fatalf("创建 SSE Transport 失败: %v", err)
+		log.Fatalf("Failed to create SSE Transport: %v", err)
 	}
 
 	mcpClient := client.NewClient(&client.ClientInfo{
@@ -27,78 +27,78 @@ func main() {
 		Version: "1.0.0",
 	}, nil)
 
-	log.Println("连接到服务器...")
+	log.Println("Connecting to server...")
 	session, err := mcpClient.Connect(ctx, transport, nil)
 	if err != nil {
-		log.Fatalf("连接失败: %v", err)
+		log.Fatalf("Connection failed: %v", err)
 	}
 	defer session.Close()
 
-	log.Println("连接成功!")
+	log.Println("Connected successfully!")
 
-	// 列出工具
-	log.Println("\n列出可用工具...")
+	// List tools
+	log.Println("\nListing available tools...")
 	toolsResult, err := session.ListTools(ctx, nil)
 	if err != nil {
-		log.Fatalf("列出工具失败: %v", err)
+		log.Fatalf("Failed to list tools: %v", err)
 	}
 
-	fmt.Printf("找到 %d 个工具:\n", len(toolsResult.Tools))
+	fmt.Printf("Found %d tools:\n", len(toolsResult.Tools))
 	for _, tool := range toolsResult.Tools {
 		fmt.Printf("  - %s: %s\n", tool.Name, tool.Description)
 	}
 
-	// 调用 greet 工具
-	log.Println("\n调用 greet 工具...")
+	// Call greet tool
+	log.Println("\nCalling greet tool...")
 	greetResult, err := session.CallTool(ctx, &protocol.CallToolParams{
 		Name: "greet",
 		Arguments: map[string]interface{}{
-			"name": "Go 开发者",
+			"name": "Go Developer",
 		},
 	})
 	if err != nil {
-		log.Fatalf("调用工具失败: %v", err)
+		log.Fatalf("Failed to call tool: %v", err)
 	}
 
 	if len(greetResult.Content) > 0 {
 		if textContent, ok := greetResult.Content[0].(protocol.TextContent); ok {
-			fmt.Printf("结果: %s\n", textContent.Text)
+			fmt.Printf("Result: %s\n", textContent.Text)
 		}
 	}
 
-	// 调用 get_time 工具
-	log.Println("\n调用 get_time 工具...")
+	// Call get_time tool
+	log.Println("\nCalling get_time tool...")
 	timeResult, err := session.CallTool(ctx, &protocol.CallToolParams{
 		Name:      "get_time",
 		Arguments: map[string]interface{}{},
 	})
 	if err != nil {
-		log.Fatalf("调用工具失败: %v", err)
+		log.Fatalf("Failed to call tool: %v", err)
 	}
 
 	if len(timeResult.Content) > 0 {
 		if textContent, ok := timeResult.Content[0].(protocol.TextContent); ok {
-			fmt.Printf("结果: %s\n", textContent.Text)
+			fmt.Printf("Result: %s\n", textContent.Text)
 		}
 	}
 
-	log.Println("\n列出可用资源...")
+	log.Println("\nListing available resources...")
 	resourcesResult, err := session.ListResources(ctx, nil)
 	if err != nil {
-		log.Fatalf("列出资源失败: %v", err)
+		log.Fatalf("Failed to list resources: %v", err)
 	}
 
-	fmt.Printf("找到 %d 个资源:\n", len(resourcesResult.Resources))
+	fmt.Printf("Found %d resources:\n", len(resourcesResult.Resources))
 	for _, resource := range resourcesResult.Resources {
 		fmt.Printf("  - %s: %s\n", resource.Name, resource.Description)
 	}
 
-	log.Println("\n读取服务器信息资源...")
+	log.Println("\nReading server information resource...")
 	resourceResult, err := session.ReadResource(ctx, &protocol.ReadResourceParams{
 		URI: "info://server",
 	})
 	if err != nil {
-		log.Fatalf("读取资源失败: %v", err)
+		log.Fatalf("Failed to read resource: %v", err)
 	}
 
 	if len(resourceResult.Contents) > 0 {

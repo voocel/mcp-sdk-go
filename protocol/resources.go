@@ -1,6 +1,5 @@
 package protocol
 
-// Resource 资源定义
 type Resource struct {
 	URI         string         `json:"uri"`
 	Name        string         `json:"name"`
@@ -9,7 +8,6 @@ type Resource struct {
 	Meta        map[string]any `json:"_meta,omitempty"`
 }
 
-// ResourceContents 资源内容
 type ResourceContents struct {
 	URI         string      `json:"uri"`
 	Title       string      `json:"title,omitempty"`
@@ -19,12 +17,12 @@ type ResourceContents struct {
 	Annotations *Annotation `json:"annotations,omitempty"`
 }
 
-// ListResourcesRequest resources/list 请求和响应
+// ListResourcesRequest resources/list request and response
 type ListResourcesRequest struct {
 	Cursor string `json:"cursor,omitempty"`
 }
 
-// ListResourcesParams 列表资源的参数类型
+// ListResourcesParams parameter type for listing resources
 type ListResourcesParams struct {
 	Cursor string `json:"cursor,omitempty"`
 }
@@ -34,12 +32,12 @@ type ListResourcesResult struct {
 	PaginatedResult
 }
 
-// ReadResourceRequest resources/read 请求和响应
+// ReadResourceRequest resources/read request and response
 type ReadResourceRequest struct {
 	URI string `json:"uri"`
 }
 
-// ReadResourceParams 读取资源的参数类型
+// ReadResourceParams parameter type for reading resources
 type ReadResourceParams struct {
 	URI string `json:"uri"`
 }
@@ -48,7 +46,7 @@ type ReadResourceResult struct {
 	Contents []ResourceContents `json:"contents"`
 }
 
-// ListResourceTemplatesRequest resources/templates/list 请求和响应
+// ListResourceTemplatesRequest resources/templates/list request and response
 type ListResourceTemplatesRequest struct {
 	Cursor string `json:"cursor,omitempty"`
 }
@@ -69,17 +67,17 @@ type ListResourceTemplatesResult struct {
 	PaginatedResult
 }
 
-// SubscribeParams resources/subscribe 请求参数
+// SubscribeParams resources/subscribe request parameters
 type SubscribeParams struct {
 	URI string `json:"uri"`
 }
 
-// UnsubscribeParams resources/unsubscribe 请求参数
+// UnsubscribeParams resources/unsubscribe request parameters
 type UnsubscribeParams struct {
 	URI string `json:"uri"`
 }
 
-// ResourcesListChangedNotification 资源变更通知
+// ResourcesListChangedNotification resource change notification
 type ResourcesListChangedNotification struct{}
 
 type ResourceTemplatesListChangedNotification struct{}

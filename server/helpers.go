@@ -7,7 +7,6 @@ import (
 	"github.com/voocel/mcp-sdk-go/protocol"
 )
 
-// TextResult 创建包含文本内容的结果
 func TextResult(text string) *protocol.CallToolResult {
 	return &protocol.CallToolResult{
 		Content: []protocol.Content{
@@ -19,7 +18,6 @@ func TextResult(text string) *protocol.CallToolResult {
 	}
 }
 
-// JSONResult 创建包含 JSON 内容的结果
 func JSONResult(data interface{}) (*protocol.CallToolResult, error) {
 	jsonBytes, err := json.MarshalIndent(data, "", "  ")
 	if err != nil {
@@ -36,7 +34,6 @@ func JSONResult(data interface{}) (*protocol.CallToolResult, error) {
 	}, nil
 }
 
-// ErrorResult 创建错误结果
 func ErrorResult(message string, err error) *protocol.CallToolResult {
 	errorText := message
 	if err != nil {
@@ -54,7 +51,6 @@ func ErrorResult(message string, err error) *protocol.CallToolResult {
 	}
 }
 
-// ImageResult 创建包含图片的结果
 func ImageResult(data string, mimeType string) *protocol.CallToolResult {
 	return &protocol.CallToolResult{
 		Content: []protocol.Content{
@@ -67,7 +63,6 @@ func ImageResult(data string, mimeType string) *protocol.CallToolResult {
 	}
 }
 
-// ResourceResult 创建包含嵌入资源的结果
 func ResourceResult(uri, mimeType, text string) *protocol.CallToolResult {
 	return &protocol.CallToolResult{
 		Content: []protocol.Content{
@@ -83,7 +78,6 @@ func ResourceResult(uri, mimeType, text string) *protocol.CallToolResult {
 	}
 }
 
-// GetString 从请求参数中获取字符串值
 func GetString(req *CallToolRequest, key string, defaultValue string) string {
 	if req.Params.Arguments == nil {
 		return defaultValue
@@ -102,7 +96,6 @@ func GetString(req *CallToolRequest, key string, defaultValue string) string {
 	return strVal
 }
 
-// GetInt 从请求参数中获取整数值
 func GetInt(req *CallToolRequest, key string, defaultValue int) int {
 	if req.Params.Arguments == nil {
 		return defaultValue
@@ -127,7 +120,6 @@ func GetInt(req *CallToolRequest, key string, defaultValue int) int {
 	}
 }
 
-// GetInt64 从请求参数中获取 int64 值
 func GetInt64(req *CallToolRequest, key string, defaultValue int64) int64 {
 	if req.Params.Arguments == nil {
 		return defaultValue
@@ -152,7 +144,6 @@ func GetInt64(req *CallToolRequest, key string, defaultValue int64) int64 {
 	}
 }
 
-// GetFloat 从请求参数中获取浮点数值
 func GetFloat(req *CallToolRequest, key string, defaultValue float64) float64 {
 	if req.Params.Arguments == nil {
 		return defaultValue
@@ -177,7 +168,6 @@ func GetFloat(req *CallToolRequest, key string, defaultValue float64) float64 {
 	}
 }
 
-// GetBool 从请求参数中获取布尔值
 func GetBool(req *CallToolRequest, key string, defaultValue bool) bool {
 	if req.Params.Arguments == nil {
 		return defaultValue
@@ -196,7 +186,6 @@ func GetBool(req *CallToolRequest, key string, defaultValue bool) bool {
 	return boolVal
 }
 
-// GetStringSlice 从请求参数中获取字符串数组
 func GetStringSlice(req *CallToolRequest, key string, defaultValue []string) []string {
 	if req.Params.Arguments == nil {
 		return defaultValue
@@ -226,7 +215,6 @@ func GetStringSlice(req *CallToolRequest, key string, defaultValue []string) []s
 	return result
 }
 
-// GetMap 从请求参数中获取 map
 func GetMap(req *CallToolRequest, key string, defaultValue map[string]interface{}) map[string]interface{} {
 	if req.Params.Arguments == nil {
 		return defaultValue
@@ -245,7 +233,6 @@ func GetMap(req *CallToolRequest, key string, defaultValue map[string]interface{
 	return mapVal
 }
 
-// MustGetString 从请求参数中获取字符串值，如果不存在返回错误
 func MustGetString(req *CallToolRequest, key string) (string, error) {
 	if req.Params.Arguments == nil {
 		return "", fmt.Errorf("missing parameter: %s", key)
@@ -264,7 +251,6 @@ func MustGetString(req *CallToolRequest, key string) (string, error) {
 	return strVal, nil
 }
 
-// MustGetInt 从请求参数中获取整数值，如果不存在返回错误
 func MustGetInt(req *CallToolRequest, key string) (int, error) {
 	if req.Params.Arguments == nil {
 		return 0, fmt.Errorf("missing parameter: %s", key)
@@ -289,7 +275,6 @@ func MustGetInt(req *CallToolRequest, key string) (int, error) {
 	}
 }
 
-// MustGetBool 从请求参数中获取布尔值，如果不存在返回错误
 func MustGetBool(req *CallToolRequest, key string) (bool, error) {
 	if req.Params.Arguments == nil {
 		return false, fmt.Errorf("missing parameter: %s", key)

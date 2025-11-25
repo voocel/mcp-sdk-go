@@ -26,39 +26,39 @@ func main() {
 
 	session, err := mcpClient.Connect(ctx, transport, nil)
 	if err != nil {
-		log.Fatalf("连接失败: %v", err)
+		log.Fatalf("Connection failed: %v", err)
 	}
 	defer session.Close()
 
 	initResult := session.InitializeResult()
 
 	log.Println("========================================")
-	log.Println("MCP Basic Client 已连接")
+	log.Println("MCP Basic Client Connected")
 	log.Println("========================================")
-	log.Printf("服务器: %s v%s\n", initResult.ServerInfo.Name, initResult.ServerInfo.Version)
+	log.Printf("Server: %s v%s\n", initResult.ServerInfo.Name, initResult.ServerInfo.Version)
 	log.Println("")
 
 	demonstrateAllFeatures(ctx, session)
 }
 
 func demonstrateAllFeatures(ctx context.Context, session *client.ClientSession) {
-	fmt.Println("\n========== 列出所有工具 ==========")
+	fmt.Println("\n========== List All Tools ==========")
 	tools, err := session.ListTools(ctx, nil)
 	if err != nil {
-		log.Printf("列出工具失败: %v", err)
+		log.Printf("Failed to list tools: %v", err)
 	} else {
 		for _, tool := range tools.Tools {
 			fmt.Printf("  - %s: %s\n", tool.Name, tool.Description)
 			if tool.Title != "" {
-				fmt.Printf("    标题: %s\n", tool.Title)
+				fmt.Printf("    Title: %s\n", tool.Title)
 			}
 			if len(tool.Meta) > 0 {
-				fmt.Printf("    元数据: %v\n", tool.Meta)
+				fmt.Printf("    Metadata: %v\n", tool.Meta)
 			}
 		}
 	}
 
-	fmt.Println("\n========== 调用基础工具 (greet) ==========")
+	fmt.Println("\n========== Call Basic Tool (greet) ==========")
 	result, err := session.CallTool(ctx, &protocol.CallToolParams{
 		Name: "greet",
 		Arguments: map[string]interface{}{
@@ -66,12 +66,12 @@ func demonstrateAllFeatures(ctx context.Context, session *client.ClientSession) 
 		},
 	})
 	if err != nil {
-		log.Printf("调用工具失败: %v", err)
+		log.Printf("Failed to call tool: %v", err)
 	} else {
 		printToolResult(result)
 	}
 
-	fmt.Println("\n========== 调用带元数据的工具 (calculate) ==========")
+	fmt.Println("\n========== Call Tool with Metadata (calculate) ==========")
 	result, err = session.CallTool(ctx, &protocol.CallToolParams{
 		Name: "calculate",
 		Arguments: map[string]interface{}{
@@ -81,77 +81,77 @@ func demonstrateAllFeatures(ctx context.Context, session *client.ClientSession) 
 		},
 	})
 	if err != nil {
-		log.Printf("调用工具失败: %v", err)
+		log.Printf("Failed to call tool: %v", err)
 	} else {
 		printToolResult(result)
 	}
 
-	fmt.Println("\n========== 调用带输出 Schema 的工具 (get_time) ==========")
+	fmt.Println("\n========== Call Tool with Output Schema (get_time) ==========")
 	result, err = session.CallTool(ctx, &protocol.CallToolParams{
 		Name:      "get_time",
 		Arguments: map[string]interface{}{},
 	})
 	if err != nil {
-		log.Printf("调用工具失败: %v", err)
+		log.Printf("Failed to call tool: %v", err)
 	} else {
 		printToolResult(result)
 	}
 
-	fmt.Println("\n========== 列出所有资源 ==========")
+	fmt.Println("\n========== List All Resources ==========")
 	resources, err := session.ListResources(ctx, nil)
 	if err != nil {
-		log.Printf("列出资源失败: %v", err)
+		log.Printf("Failed to list resources: %v", err)
 	} else {
 		for _, resource := range resources.Resources {
 			fmt.Printf("  - %s (%s): %s\n", resource.Name, resource.URI, resource.Description)
 			if len(resource.Meta) > 0 {
-				fmt.Printf("    元数据: %v\n", resource.Meta)
+				fmt.Printf("    Metadata: %v\n", resource.Meta)
 			}
 		}
 	}
 
-	fmt.Println("\n========== 读取资源 (info://server) ==========")
+	fmt.Println("\n========== Read Resource (info://server) ==========")
 	resourceResult, err := session.ReadResource(ctx, &protocol.ReadResourceParams{
 		URI: "info://server",
 	})
 	if err != nil {
-		log.Printf("读取资源失败: %v", err)
+		log.Printf("Failed to read resource: %v", err)
 	} else {
 		for _, content := range resourceResult.Contents {
-			fmt.Printf("内容: %s\n", content.Text)
+			fmt.Printf("Content: %s\n", content.Text)
 		}
 	}
 
-	fmt.Println("\n========== 列出资源模板 ==========")
+	fmt.Println("\n========== List Resource Templates ==========")
 	templates, err := session.ListResourceTemplates(ctx, nil)
 	if err != nil {
-		log.Printf("列出资源模板失败: %v", err)
+		log.Printf("Failed to list resource templates: %v", err)
 	} else {
-		for _, template := range templates.Resources {
-			fmt.Printf("  - %s (%s): %s\n", template.Name, template.URI, template.Description)
+		for _, template := range templates.ResourceTemplates {
+			fmt.Printf("  - %s (%s): %s\n", template.Name, template.URITemplate, template.Description)
 			if len(template.Meta) > 0 {
-				fmt.Printf("    元数据: %v\n", template.Meta)
+				fmt.Printf("    Metadata: %v\n", template.Meta)
 			}
 		}
 	}
 
-	fmt.Println("\n========== 列出提示模板 ==========")
+	fmt.Println("\n========== List Prompt Templates ==========")
 	prompts, err := session.ListPrompts(ctx, nil)
 	if err != nil {
-		log.Printf("列出提示失败: %v", err)
+		log.Printf("Failed to list prompts: %v", err)
 	} else {
 		for _, prompt := range prompts.Prompts {
 			fmt.Printf("  - %s: %s\n", prompt.Name, prompt.Description)
 			if prompt.Title != "" {
-				fmt.Printf("    标题: %s\n", prompt.Title)
+				fmt.Printf("    Title: %s\n", prompt.Title)
 			}
 			if len(prompt.Meta) > 0 {
-				fmt.Printf("    元数据: %v\n", prompt.Meta)
+				fmt.Printf("    Metadata: %v\n", prompt.Meta)
 			}
 		}
 	}
 
-	fmt.Println("\n========== 获取提示 (code_review) ==========")
+	fmt.Println("\n========== Get Prompt (code_review) ==========")
 	promptResult, err := session.GetPrompt(ctx, &protocol.GetPromptParams{
 		Name: "code_review",
 		Arguments: map[string]string{
@@ -160,42 +160,42 @@ func demonstrateAllFeatures(ctx context.Context, session *client.ClientSession) 
 		},
 	})
 	if err != nil {
-		log.Printf("获取提示失败: %v", err)
+		log.Printf("Failed to get prompt: %v", err)
 	} else {
-		fmt.Printf("描述: %s\n", promptResult.Description)
+		fmt.Printf("Description: %s\n", promptResult.Description)
 		for i, msg := range promptResult.Messages {
-			fmt.Printf("消息 %d (%s): %v\n", i+1, msg.Role, msg.Content)
+			fmt.Printf("Message %d (%s): %v\n", i+1, msg.Role, msg.Content)
 		}
 		if len(promptResult.Meta) > 0 {
-			fmt.Printf("元数据: %v\n", promptResult.Meta)
+			fmt.Printf("Metadata: %v\n", promptResult.Meta)
 		}
 	}
 
-	fmt.Println("\n========== 调用交互式工具 (interactive_greet) ==========")
+	fmt.Println("\n========== Call Interactive Tool (interactive_greet) ==========")
 	result, err = session.CallTool(ctx, &protocol.CallToolParams{
 		Name:      "interactive_greet",
 		Arguments: map[string]interface{}{},
 	})
 	if err != nil {
-		log.Printf("调用工具失败: %v", err)
+		log.Printf("Failed to call tool: %v", err)
 	} else {
 		printToolResult(result)
 	}
 
-	fmt.Println("\n========== 调用 AI 工具 (ai_assistant) ==========")
+	fmt.Println("\n========== Call AI Tool (ai_assistant) ==========")
 	result, err = session.CallTool(ctx, &protocol.CallToolParams{
 		Name: "ai_assistant",
 		Arguments: map[string]interface{}{
-			"question": "什么是 MCP 协议?",
+			"question": "What is the MCP protocol?",
 		},
 	})
 	if err != nil {
-		log.Printf("调用工具失败: %v", err)
+		log.Printf("Failed to call tool: %v", err)
 	} else {
 		printToolResult(result)
 	}
 
-	fmt.Println("\n========== 调用资源链接工具 (find_file) ==========")
+	fmt.Println("\n========== Call Resource Link Tool (find_file) ==========")
 	result, err = session.CallTool(ctx, &protocol.CallToolParams{
 		Name: "find_file",
 		Arguments: map[string]interface{}{
@@ -203,23 +203,23 @@ func demonstrateAllFeatures(ctx context.Context, session *client.ClientSession) 
 		},
 	})
 	if err != nil {
-		log.Printf("调用工具失败: %v", err)
+		log.Printf("Failed to call tool: %v", err)
 	} else {
 		printToolResult(result)
 		for i, content := range result.Content {
 			if rlc, ok := content.(protocol.ResourceLinkContent); ok {
-				fmt.Printf("\n  资源链接 %d:\n", i+1)
+				fmt.Printf("\n  Resource Link %d:\n", i+1)
 				fmt.Printf("    URI: %s\n", rlc.URI)
-				fmt.Printf("    名称: %s\n", rlc.Name)
-				fmt.Printf("    描述: %s\n", rlc.Description)
-				fmt.Printf("    MIME类型: %s\n", rlc.MimeType)
+				fmt.Printf("    Name: %s\n", rlc.Name)
+				fmt.Printf("    Description: %s\n", rlc.Description)
+				fmt.Printf("    MIME Type: %s\n", rlc.MimeType)
 				if rlc.Annotations != nil {
-					fmt.Printf("    注解:\n")
+					fmt.Printf("    Annotations:\n")
 					if len(rlc.Annotations.Audience) > 0 {
-						fmt.Printf("      受众: %v\n", rlc.Annotations.Audience)
+						fmt.Printf("      Audience: %v\n", rlc.Annotations.Audience)
 					}
 					if rlc.Annotations.Priority > 0 {
-						fmt.Printf("      优先级: %.1f\n", rlc.Annotations.Priority)
+						fmt.Printf("      Priority: %.1f\n", rlc.Annotations.Priority)
 					}
 				}
 			}
@@ -229,13 +229,13 @@ func demonstrateAllFeatures(ctx context.Context, session *client.ClientSession) 
 	fmt.Println("\n=================== END =====================")
 }
 
-// handleElicitation 处理服务器的用户交互请求
+// handleElicitation handles user interaction requests from the server
 func handleElicitation(ctx context.Context, params *protocol.ElicitationCreateParams) (*protocol.ElicitationResult, error) {
-	fmt.Printf("\n[Elicitation] 服务器请求: %s\n", params.Message)
+	fmt.Printf("\n[Elicitation] Server request: %s\n", params.Message)
 
-	// 从标准输入读取用户输入
+	// Read user input from standard input
 	reader := bufio.NewReader(os.Stdin)
-	fmt.Print("请输入: ")
+	fmt.Print("Please enter: ")
 	input, err := reader.ReadString('\n')
 	if err != nil {
 		return protocol.NewElicitationDecline(), nil
@@ -248,25 +248,25 @@ func handleElicitation(ctx context.Context, params *protocol.ElicitationCreatePa
 	}), nil
 }
 
-// handleSampling 处理服务器的 LLM 推理请求
+// handleSampling handles LLM inference requests from the server
 func handleSampling(ctx context.Context, request *protocol.CreateMessageRequest) (*protocol.CreateMessageResult, error) {
-	fmt.Printf("\n[Sampling] 服务器请求 LLM 推理\n")
+	fmt.Printf("\n[Sampling] Server requests LLM inference\n")
 	fmt.Printf("  MaxTokens: %d\n", request.MaxTokens)
-	fmt.Printf("  Messages: %d 条\n", len(request.Messages))
+	fmt.Printf("  Messages: %d messages\n", len(request.Messages))
 
-	// 提取用户消息
+	// Extract user message
 	var userMessage string
 	for _, msg := range request.Messages {
 		if msg.Role == protocol.RoleUser {
 			if textContent, ok := msg.Content.(protocol.TextContent); ok {
 				userMessage = textContent.Text
-				fmt.Printf("  用户消息: %s\n", userMessage)
+				fmt.Printf("  User message: %s\n", userMessage)
 			}
 		}
 	}
 
-	// 模拟 AI 响应
-	response := fmt.Sprintf("这是一个模拟的 AI 响应。问题是: %s\n\nMCP (Model Context Protocol) 是一个开放协议,用于连接 AI 应用与外部数据源和工具。", userMessage)
+	// Simulate AI response
+	response := fmt.Sprintf("This is a simulated AI response. The question is: %s\n\nMCP (Model Context Protocol) is an open protocol for connecting AI applications with external data sources and tools.", userMessage)
 
 	return protocol.NewCreateMessageResult(
 		protocol.RoleAssistant,
@@ -276,17 +276,17 @@ func handleSampling(ctx context.Context, request *protocol.CreateMessageRequest)
 	), nil
 }
 
-// printToolResult 打印工具调用结果
+// printToolResult prints tool call results
 func printToolResult(result *protocol.CallToolResult) {
 	for _, content := range result.Content {
 		if textContent, ok := content.(protocol.TextContent); ok {
-			fmt.Printf("结果: %s\n", textContent.Text)
+			fmt.Printf("Result: %s\n", textContent.Text)
 		}
 	}
 	if len(result.Meta) > 0 {
-		fmt.Printf("元数据: %v\n", result.Meta)
+		fmt.Printf("Metadata: %v\n", result.Meta)
 	}
 	if result.StructuredContent != nil {
-		fmt.Printf("结构化内容: %v\n", result.StructuredContent)
+		fmt.Printf("Structured Content: %v\n", result.StructuredContent)
 	}
 }

@@ -11,13 +11,13 @@ import (
 	"github.com/voocel/mcp-sdk-go/transport"
 )
 
-// Server MCP服务器实例, 可以服务一个或多个 MCP 会话
+// Server represents an MCP server instance that can serve one or more MCP sessions
 type Server struct {
 	impl *protocol.ServerInfo
 	opts ServerOptions
 
 	mu                    sync.Mutex
-	middlewares           []Middleware // 中间件链
+	middlewares           []Middleware // Middleware chain
 	tools                 map[string]*serverTool
 	resources             map[string]*serverResource
 	resourceTemplates     map[string]*serverResourceTemplate
@@ -27,27 +27,27 @@ type Server struct {
 }
 
 type ServerOptions struct {
-	// 可选的客户端指令
+	// Optional client instructions
 	Instructions string
 
-	// 初始化处理函数
+	// Initialized handler function
 	InitializedHandler func(context.Context, *ServerSession)
 
-	// 进度通知处理函数
+	// Progress notification handler function
 	ProgressNotificationHandler func(context.Context, *ServerSession, *protocol.ProgressNotificationParams)
 
-	// 补全处理函数
+	// Completion handler function
 	CompletionHandler func(context.Context, *protocol.CompleteRequest) (*protocol.CompleteResult, error)
 
-	// 日志级别设置处理函数
+	// Logging level setting handler function
 	LoggingSetLevelHandler func(context.Context, *ServerSession, protocol.LoggingLevel) error
 
-	// 资源订阅/取消订阅处理函数
+	// Resource subscribe/unsubscribe handler functions
 	SubscribeHandler   func(context.Context, *protocol.SubscribeParams) error
 	UnsubscribeHandler func(context.Context, *protocol.UnsubscribeParams) error
 
-	// KeepAlive 定义定期 "ping" 请求的间隔
-	// 如果对等方未能响应 keepalive 检查发起的 ping,会话将自动关闭
+	// KeepAlive defines the interval for periodic "ping" requests
+	// If the peer fails to respond to a keepalive ping, the session will be closed automatically
 	KeepAlive time.Duration
 }
 
@@ -100,25 +100,29 @@ func NewServer(impl *protocol.ServerInfo, opts *ServerOptions) *Server {
 	return s
 }
 
-// AddTool 添加工具到服务器，或替换同名工具（低级 API）。
-// Tool 参数在调用后不得修改。
+// AddTool adds a tool to the server, or replaces a tool with the same name (low-level API).
+// The Tool parameter must not be modified after this call.
 //
-// 工具的输入 schema 必须非 nil 且类型为 "object"。对于不接受输入的工具，
-// 或接受任何输入的工具，将 [Tool.InputSchema] 设置为 `{"type": "object"}`，
-// 使用你喜欢的库或 `json.RawMessage`。
+// The tool's input schema must be non-nil and have type "object". For tools that accept
+// no input or any input, set [Tool.InputSchema] to `{"type": "object"}` using your
+// preferred library or `json.RawMessage`.
 //
-// 如果存在 [Tool.OutputSchema]，它也必须类型为 "object"。
+// If [Tool.OutputSchema] exists, it must also have type "object".
 //
-// 当处理函数作为 CallTool 请求的一部分被调用时，req.Params.Arguments
-// 将是 json.RawMessage。
+// When the handler is invoked as part of a CallTool request, req.Params.Arguments
+// will be json.RawMessage.
 //
-// 反序列化参数并根据输入 schema 验证它们是调用者的责任。
+// It is the caller's responsibility to deserialize arguments and validate them
+// against the input schema.
 //
-// 根据输出 schema（如有）验证结果是调用者的责任。
+// It is the caller's responsibility to validate the result against the output
+// schema (if any).
 //
-// 设置结果的 Content、StructuredContent 和 IsError 字段是调用者的责任。
+// It is the caller's responsibility to set the Content, StructuredContent, and
+// IsError fields of the result.
 //
-// 大多数用户应该使用顶级函数 [AddTool]，它会处理所有这些责任。
+// Most users should use the top-level function [AddTool], which handles all
+// these responsibilities.
 func (s *Server) AddTool(t *protocol.Tool, h ToolHandler) {
 	if t.InputSchema == nil {
 		panic(fmt.Errorf("AddTool %q: missing input schema", t.Name))
@@ -127,7 +131,7 @@ func (s *Server) AddTool(t *protocol.Tool, h ToolHandler) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// 应用中间件
+	// Apply middleware
 	wrappedHandler := applyMiddleware(h, s.middlewares)
 
 	s.tools[t.Name] = &serverTool{
@@ -135,7 +139,7 @@ func (s *Server) AddTool(t *protocol.Tool, h ToolHandler) {
 		handler: wrappedHandler,
 	}
 
-	// 通知所有会话工具列表已更改
+	// Notify all sessions that the tool list has changed
 	s.notifyToolListChanged()
 }
 
@@ -215,11 +219,11 @@ func (s *Server) RemovePrompt(name string) {
 	}
 }
 
-// Run 在给定的 transport 上运行服务器
-// 这是一个便捷方法,用于处理单个会话(或一次一个会话)
+// Run runs the server on the given transport.
+// This is a convenience method for handling a single session (or one session at a time).
 //
-// Run 会阻塞直到客户端终止连接或提供的 context 被取消
-// 如果 context 被取消,Run 会关闭连接
+// Run blocks until the client terminates the connection or the provided context is cancelled.
+// If the context is cancelled, Run will close the connection.
 func (s *Server) Run(ctx context.Context, t transport.Transport) error {
 	ss, err := s.Connect(ctx, t, nil)
 	if err != nil {
@@ -234,16 +238,17 @@ func (s *Server) Run(ctx context.Context, t transport.Transport) error {
 	select {
 	case <-ctx.Done():
 		ss.Close()
-		<-ssClosed // 等待 goroutine 完成
+		<-ssClosed // Wait for goroutine to finish
 		return ctx.Err()
 	case err := <-ssClosed:
 		return err
 	}
 }
 
-// Connect 通过给定的 transport 连接 MCP 服务器并开始处理消息
+// Connect connects the MCP server via the given transport and starts processing messages.
 //
-// 它返回一个连接对象,可用于终止连接(使用 Close)或等待客户端终止(使用 Wait)
+// It returns a connection object that can be used to terminate the connection (using Close)
+// or wait for the client to terminate (using Wait).
 func (s *Server) Connect(ctx context.Context, t transport.Transport, opts *ServerSessionOptions) (*ServerSession, error) {
 	conn, err := t.Connect(ctx)
 	if err != nil {
@@ -269,7 +274,7 @@ func (s *Server) Connect(ctx context.Context, t transport.Transport, opts *Serve
 	s.sessions = append(s.sessions, ss)
 	s.mu.Unlock()
 
-	// 启动消息处理循环
+	// Start message processing loop
 	go func() {
 		err := s.handleConnection(ctx, ss, ss.conn)
 		ss.waitErr <- err
@@ -279,21 +284,21 @@ func (s *Server) Connect(ctx context.Context, t transport.Transport, opts *Serve
 	return ss, nil
 }
 
-// handleConnection 处理连接的消息循环
+// handleConnection handles the message loop for a connection
 func (s *Server) handleConnection(ctx context.Context, ss *ServerSession, conn Connection) error {
 	defer func() {
 		s.disconnect(ss)
 		conn.Close()
 	}()
 
-	// 获取底层的 connAdapter 用于处理响应消息
+	// Get the underlying connAdapter for handling response messages
 	adapter, ok := conn.(*connAdapter)
 	if !ok {
 		return fmt.Errorf("invalid connection type")
 	}
 
 	for {
-		// 显式检查上下文取消
+		// Explicitly check context cancellation
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
@@ -305,7 +310,7 @@ func (s *Server) handleConnection(ctx context.Context, ss *ServerSession, conn C
 			return err
 		}
 
-		// 如果是响应消息,路由到 connAdapter
+		// If it's a response message, route to connAdapter
 		if msg.Method == "" && msg.ID != nil {
 			adapter.handleResponse(msg)
 			continue
@@ -320,11 +325,11 @@ func (s *Server) handleConnection(ctx context.Context, ss *ServerSession, conn C
 	}
 }
 
-// handleMessage 处理单个 JSON-RPC 消息
+// handleMessage handles a single JSON-RPC message
 func (s *Server) handleMessage(ctx context.Context, ss *ServerSession, msg *protocol.JSONRPCMessage) *protocol.JSONRPCMessage {
 	if msg.ID != nil {
-		// 请求 - 需要响应
-		// 创建可取消的 context 并跟踪请求
+		// Request - needs response
+		// Create cancellable context and track request
 		requestID := protocol.IDToString(msg.ID)
 		requestCtx, cancel := context.WithCancel(ctx)
 
@@ -332,7 +337,7 @@ func (s *Server) handleMessage(ctx context.Context, ss *ServerSession, msg *prot
 		ss.pendingRequests[requestID] = cancel
 		ss.mu.Unlock()
 
-		// 确保请求完成后清理
+		// Ensure request is cleaned up after completion
 		defer func() {
 			ss.mu.Lock()
 			delete(ss.pendingRequests, requestID)
@@ -352,7 +357,7 @@ func (s *Server) handleMessage(ctx context.Context, ss *ServerSession, msg *prot
 			}
 		}
 
-		// 序列化结果
+		// Serialize result
 		resultBytes, err := json.Marshal(result)
 		if err != nil {
 			return &protocol.JSONRPCMessage{
@@ -371,7 +376,7 @@ func (s *Server) handleMessage(ctx context.Context, ss *ServerSession, msg *prot
 			Result:  json.RawMessage(resultBytes),
 		}
 	} else {
-		// 通知 - 不需要响应
+		// Notification - no response needed
 		_ = s.handleNotification(ctx, ss, msg.Method, msg.Params)
 		return nil
 	}
@@ -398,36 +403,36 @@ type ServerSessionOptions struct {
 	onClose func()
 }
 
-// notifyToolListChanged 通知所有会话工具列表已更改
+// notifyToolListChanged notifies all sessions that the tool list has changed
 func (s *Server) notifyToolListChanged() {
 	for _, ss := range s.sessions {
 		_ = ss.conn.SendNotification(context.Background(), protocol.NotificationToolsListChanged, &protocol.ToolListChangedParams{})
 	}
 }
 
-// notifyResourceListChanged 通知所有会话资源列表已更改
+// notifyResourceListChanged notifies all sessions that the resource list has changed
 func (s *Server) notifyResourceListChanged() {
 	for _, ss := range s.sessions {
 		_ = ss.conn.SendNotification(context.Background(), protocol.NotificationResourcesListChanged, &protocol.ResourceListChangedParams{})
 	}
 }
 
-// notifyResourceTemplateListChanged 通知所有会话资源模板列表已更改
+// notifyResourceTemplateListChanged notifies all sessions that the resource template list has changed
 func (s *Server) notifyResourceTemplateListChanged() {
 	for _, ss := range s.sessions {
 		_ = ss.conn.SendNotification(context.Background(), protocol.NotificationResourcesTemplatesListChanged, &protocol.ResourceTemplateListChangedParams{})
 	}
 }
 
-// notifyPromptListChanged 通知所有会话提示列表已更改
+// notifyPromptListChanged notifies all sessions that the prompt list has changed
 func (s *Server) notifyPromptListChanged() {
 	for _, ss := range s.sessions {
 		_ = ss.conn.SendNotification(context.Background(), protocol.NotificationPromptsListChanged, &protocol.PromptListChangedParams{})
 	}
 }
 
-// NotifyResourceUpdated 通知订阅了指定资源的所有会话,该资源已更新
-// 只有之前调用 resources/subscribe 订阅了此 URI 的客户端会收到通知
+// NotifyResourceUpdated notifies all sessions subscribed to the specified resource that it has been updated.
+// Only clients that have previously called resources/subscribe to subscribe to this URI will receive the notification.
 func (s *Server) NotifyResourceUpdated(uri string) {
 	s.mu.Lock()
 	subscribedSessions, exists := s.resourceSubscriptions[uri]
@@ -436,14 +441,14 @@ func (s *Server) NotifyResourceUpdated(uri string) {
 		return
 	}
 
-	// 复制会话列表以避免长时间持有锁
+	// Copy session list to avoid holding lock for too long
 	sessions := make([]*ServerSession, 0, len(subscribedSessions))
 	for ss := range subscribedSessions {
 		sessions = append(sessions, ss)
 	}
 	s.mu.Unlock()
 
-	// 发送通知
+	// Send notifications
 	params := &protocol.ResourceUpdatedNotificationParams{
 		URI: uri,
 	}
@@ -454,7 +459,7 @@ func (s *Server) NotifyResourceUpdated(uri string) {
 	}
 }
 
-// handleRequest 处理来自客户端的请求
+// handleRequest handles requests from the client
 func (s *Server) handleRequest(ctx context.Context, ss *ServerSession, method string, params json.RawMessage) (interface{}, error) {
 	switch method {
 	case protocol.MethodInitialize:
@@ -488,7 +493,7 @@ func (s *Server) handleRequest(ctx context.Context, ss *ServerSession, method st
 	}
 }
 
-// handleNotification 处理来自客户端的通知
+// handleNotification handles notifications from the client
 func (s *Server) handleNotification(ctx context.Context, ss *ServerSession, method string, params json.RawMessage) error {
 	switch method {
 	case protocol.NotificationInitialized:
@@ -504,7 +509,7 @@ func (s *Server) handleNotification(ctx context.Context, ss *ServerSession, meth
 	}
 }
 
-// handleInitialize 处理 initialize 请求
+// handleInitialize handles the initialize request
 func (s *Server) handleInitialize(ctx context.Context, ss *ServerSession, params json.RawMessage) (*protocol.InitializeResult, error) {
 	var req protocol.InitializeParams
 	if err := json.Unmarshal(params, &req); err != nil {
@@ -551,7 +556,7 @@ func (s *Server) handleInitialize(ctx context.Context, ss *ServerSession, params
 	}, nil
 }
 
-// handleInitialized 处理 initialized 通知
+// handleInitialized handles the initialized notification
 func (s *Server) handleInitialized(ctx context.Context, ss *ServerSession, params json.RawMessage) error {
 	var req protocol.InitializedParams
 	if err := json.Unmarshal(params, &req); err != nil {
@@ -562,7 +567,7 @@ func (s *Server) handleInitialized(ctx context.Context, ss *ServerSession, param
 		state.InitializedParams = &req
 	})
 
-	// 启动 keepalive
+	// Start keepalive
 	if s.opts.KeepAlive > 0 {
 		ss.startKeepalive(s.opts.KeepAlive)
 	}
@@ -574,7 +579,7 @@ func (s *Server) handleInitialized(ctx context.Context, ss *ServerSession, param
 	return nil
 }
 
-// handleListTools 处理 tools/list 请求
+// handleListTools handles the tools/list request
 func (s *Server) handleListTools(ctx context.Context, ss *ServerSession, params json.RawMessage) (*protocol.ListToolsResult, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -589,7 +594,7 @@ func (s *Server) handleListTools(ctx context.Context, ss *ServerSession, params 
 	}, nil
 }
 
-// handleCallTool 处理 tools/call 请求
+// handleCallTool handles the tools/call request
 func (s *Server) handleCallTool(ctx context.Context, ss *ServerSession, params json.RawMessage) (*protocol.CallToolResult, error) {
 	var req protocol.CallToolParams
 	if err := json.Unmarshal(params, &req); err != nil {
@@ -612,7 +617,7 @@ func (s *Server) handleCallTool(ctx context.Context, ss *ServerSession, params j
 	return st.handler(ctx, toolReq)
 }
 
-// handleListResources 处理 resources/list 请求
+// handleListResources handles the resources/list request
 func (s *Server) handleListResources(ctx context.Context, ss *ServerSession, params json.RawMessage) (*protocol.ListResourcesResult, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -627,7 +632,7 @@ func (s *Server) handleListResources(ctx context.Context, ss *ServerSession, par
 	}, nil
 }
 
-// handleListResourceTemplates 处理 resources/templates/list 请求
+// handleListResourceTemplates handles the resources/templates/list request
 func (s *Server) handleListResourceTemplates(ctx context.Context, ss *ServerSession, params json.RawMessage) (*protocol.ListResourceTemplatesResult, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -642,7 +647,7 @@ func (s *Server) handleListResourceTemplates(ctx context.Context, ss *ServerSess
 	}, nil
 }
 
-// handleReadResource 处理 resources/read 请求
+// handleReadResource handles the resources/read request
 func (s *Server) handleReadResource(ctx context.Context, ss *ServerSession, params json.RawMessage) (*protocol.ReadResourceResult, error) {
 	var req protocol.ReadResourceParams
 	if err := json.Unmarshal(params, &req); err != nil {
@@ -665,7 +670,7 @@ func (s *Server) handleReadResource(ctx context.Context, ss *ServerSession, para
 	return sr.handler(ctx, resourceReq)
 }
 
-// handleSubscribe 处理 resources/subscribe 请求
+// handleSubscribe handles the resources/subscribe request
 func (s *Server) handleSubscribe(ctx context.Context, ss *ServerSession, params json.RawMessage) (*protocol.EmptyResult, error) {
 	if s.opts.SubscribeHandler == nil {
 		return nil, fmt.Errorf("resource subscription not supported")
@@ -690,7 +695,7 @@ func (s *Server) handleSubscribe(ctx context.Context, ss *ServerSession, params 
 	return &protocol.EmptyResult{}, nil
 }
 
-// handleUnsubscribe 处理 resources/unsubscribe 请求
+// handleUnsubscribe handles the resources/unsubscribe request
 func (s *Server) handleUnsubscribe(ctx context.Context, ss *ServerSession, params json.RawMessage) (*protocol.EmptyResult, error) {
 	if s.opts.UnsubscribeHandler == nil {
 		return nil, fmt.Errorf("resource unsubscription not supported")
@@ -714,7 +719,7 @@ func (s *Server) handleUnsubscribe(ctx context.Context, ss *ServerSession, param
 	return &protocol.EmptyResult{}, nil
 }
 
-// handleListPrompts 处理 prompts/list 请求
+// handleListPrompts handles the prompts/list request
 func (s *Server) handleListPrompts(ctx context.Context, ss *ServerSession, params json.RawMessage) (*protocol.ListPromptsResult, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -729,7 +734,7 @@ func (s *Server) handleListPrompts(ctx context.Context, ss *ServerSession, param
 	}, nil
 }
 
-// handleGetPrompt 处理 prompts/get 请求
+// handleGetPrompt handles the prompts/get request
 func (s *Server) handleGetPrompt(ctx context.Context, ss *ServerSession, params json.RawMessage) (*protocol.GetPromptResult, error) {
 	var req protocol.GetPromptParams
 	if err := json.Unmarshal(params, &req); err != nil {
@@ -752,7 +757,7 @@ func (s *Server) handleGetPrompt(ctx context.Context, ss *ServerSession, params 
 	return sp.handler(ctx, promptReq)
 }
 
-// handleComplete 处理 completion/complete 请求
+// handleComplete handles the completion/complete request
 func (s *Server) handleComplete(ctx context.Context, ss *ServerSession, params json.RawMessage) (*protocol.CompleteResult, error) {
 	if s.opts.CompletionHandler == nil {
 		return nil, fmt.Errorf("completion not supported")
@@ -766,7 +771,7 @@ func (s *Server) handleComplete(ctx context.Context, ss *ServerSession, params j
 	return s.opts.CompletionHandler(ctx, &req)
 }
 
-// handleCancelled 处理 notifications/cancelled 通知
+// handleCancelled handles the notifications/cancelled notification
 func (s *Server) handleCancelled(ctx context.Context, ss *ServerSession, params json.RawMessage) error {
 	var req protocol.CancelledNotificationParams
 	if err := json.Unmarshal(params, &req); err != nil {
@@ -793,11 +798,11 @@ func (s *Server) handleCancelled(ctx context.Context, ss *ServerSession, params 
 		cancel()
 	}
 
-	// 即使请求不存在也不返回错误,因为请求可能已经完成
+	// Return nil even if request doesn't exist, as the request may have already completed
 	return nil
 }
 
-// handleProgress 处理 notifications/progress 通知
+// handleProgress handles the notifications/progress notification
 func (s *Server) handleProgress(ctx context.Context, ss *ServerSession, params json.RawMessage) error {
 	if s.opts.ProgressNotificationHandler == nil {
 		return nil
@@ -812,13 +817,13 @@ func (s *Server) handleProgress(ctx context.Context, ss *ServerSession, params j
 	return nil
 }
 
-// handleRootsListChanged 处理 notifications/roots/list_changed 通知
+// handleRootsListChanged handles the notifications/roots/list_changed notification
 func (s *Server) handleRootsListChanged(ctx context.Context, ss *ServerSession, params json.RawMessage) error {
-	// 客户端通知根目录列表已更改,服务器可以选择重新查询
+	// Client notifies that the root list has changed, server can choose to re-query
 	return nil
 }
 
-// handleSetLoggingLevel 处理 logging/setLevel 请求
+// handleSetLoggingLevel handles the logging/setLevel request
 func (s *Server) handleSetLoggingLevel(ctx context.Context, ss *ServerSession, params json.RawMessage) (*protocol.EmptyResult, error) {
 	var req protocol.SetLoggingLevelParams
 	if err := json.Unmarshal(params, &req); err != nil {
@@ -838,16 +843,16 @@ func (s *Server) handleSetLoggingLevel(ctx context.Context, ss *ServerSession, p
 	return &protocol.EmptyResult{}, nil
 }
 
-// HandleMessage 实现 SSE Handler 接口 (用于向后兼容)
+// HandleMessage implements the SSE Handler interface (for backward compatibility)
 func (s *Server) HandleMessage(ctx context.Context, msg *protocol.JSONRPCMessage) (*protocol.JSONRPCMessage, error) {
-	// 创建一个临时的 session (SSE 使用旧的单会话模式)
+	// Create a temporary session (SSE uses the old single session mode)
 	ss := &ServerSession{
 		server:          s,
-		conn:            nil, // SSE 不使用 connection
+		conn:            nil, // SSE does not use connection
 		pendingRequests: make(map[string]context.CancelFunc),
 	}
 
-	// 处理消息
+	// Handle message
 	response := s.handleMessage(ctx, ss, msg)
 	return response, nil
 }

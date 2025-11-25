@@ -16,7 +16,7 @@ import (
 func greetHandler(ctx context.Context, req *server.CallToolRequest) (*protocol.CallToolResult, error) {
 	name, ok := req.Params.Arguments["name"].(string)
 	if !ok {
-		return protocol.NewToolResultError("参数 'name' 必须是字符串"), nil
+		return protocol.NewToolResultError("Parameter 'name' must be a string"), nil
 	}
 	greeting := "Hello, " + name + "! Welcome to MCP STDIO Server!"
 	return &protocol.CallToolResult{
@@ -27,15 +27,15 @@ func greetHandler(ctx context.Context, req *server.CallToolRequest) (*protocol.C
 func calculateHandler(ctx context.Context, req *server.CallToolRequest) (*protocol.CallToolResult, error) {
 	operation, ok := req.Params.Arguments["operation"].(string)
 	if !ok {
-		return protocol.NewToolResultError("参数 'operation' 必须是字符串"), nil
+		return protocol.NewToolResultError("Parameter 'operation' must be a string"), nil
 	}
 	a, ok := req.Params.Arguments["a"].(float64)
 	if !ok {
-		return protocol.NewToolResultError("参数 'a' 必须是数字"), nil
+		return protocol.NewToolResultError("Parameter 'a' must be a number"), nil
 	}
 	b, ok := req.Params.Arguments["b"].(float64)
 	if !ok {
-		return protocol.NewToolResultError("参数 'b' 必须是数字"), nil
+		return protocol.NewToolResultError("Parameter 'b' must be a number"), nil
 	}
 	var result float64
 	switch operation {
@@ -47,11 +47,11 @@ func calculateHandler(ctx context.Context, req *server.CallToolRequest) (*protoc
 		result = a * b
 	case "divide":
 		if b == 0 {
-			return protocol.NewToolResultError("除数不能为零"), nil
+			return protocol.NewToolResultError("Divisor cannot be zero"), nil
 		}
 		result = a / b
 	default:
-		return protocol.NewToolResultError("不支持的运算类型"), nil
+		return protocol.NewToolResultError("Unsupported operation type"), nil
 	}
 	return &protocol.CallToolResult{
 		Content: []protocol.Content{protocol.NewTextContent(fmt.Sprintf("Result: %.2f", result))},
@@ -61,29 +61,29 @@ func calculateHandler(ctx context.Context, req *server.CallToolRequest) (*protoc
 func main() {
 	mcpServer := server.NewServer(&protocol.ServerInfo{Name: "StdioMCPServer", Version: "1.0.0"}, nil)
 	mcpServer.AddTool(&protocol.Tool{
-		Name: "greet", Description: "问候用户",
+		Name: "greet", Description: "Greet the user",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
-				"name": map[string]interface{}{"type": "string", "description": "用户名称"},
+				"name": map[string]interface{}{"type": "string", "description": "User name"},
 			},
 			"required": []string{"name"},
 		},
 	}, greetHandler)
 	mcpServer.AddTool(&protocol.Tool{
-		Name: "calculate", Description: "执行基本数学运算",
+		Name: "calculate", Description: "Perform basic mathematical operations",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
-				"operation": map[string]interface{}{"type": "string", "description": "运算类型 (add, subtract, multiply, divide)"},
-				"a":         map[string]interface{}{"type": "number", "description": "第一个数字"},
-				"b":         map[string]interface{}{"type": "number", "description": "第二个数字"},
+				"operation": map[string]interface{}{"type": "string", "description": "Operation type (add, subtract, multiply, divide)"},
+				"a":         map[string]interface{}{"type": "number", "description": "First number"},
+				"b":         map[string]interface{}{"type": "number", "description": "Second number"},
 			},
 			"required": []string{"operation", "a", "b"},
 		},
 	}, calculateHandler)
 	mcpServer.AddResource(&protocol.Resource{
-		URI: "info://server", Name: "server_info", Description: "服务器信息", MimeType: "text/plain",
+		URI: "info://server", Name: "server_info", Description: "Server information", MimeType: "text/plain",
 	}, func(ctx context.Context, req *server.ReadResourceRequest) (*protocol.ReadResourceResult, error) {
 		return &protocol.ReadResourceResult{
 			Contents: []protocol.ResourceContents{{
@@ -100,17 +100,17 @@ func main() {
 
 	go func() {
 		<-sigChan
-		log.Println("收到中断信号,正在关闭服务器...")
+		log.Println("Received interrupt signal, shutting down server...")
 		cancel()
 	}()
 
-	log.Println("启动 STDIO MCP 服务器")
-	log.Printf("协议版本: MCP %s", protocol.MCPVersion)
-	log.Println("等待客户端连接...")
+	log.Println("Starting STDIO MCP Server")
+	log.Printf("Protocol Version: MCP %s", protocol.MCPVersion)
+	log.Println("Waiting for client connection...")
 
 	if err := mcpServer.Run(ctx, &stdio.StdioTransport{}); err != nil && err != context.Canceled {
-		log.Fatalf("服务器错误: %v", err)
+		log.Fatalf("Server error: %v", err)
 	}
 
-	log.Println("服务器已关闭")
+	log.Println("Server closed")
 }

@@ -20,17 +20,17 @@ func main() {
 		Version: "1.0.0",
 	}, nil)
 
-	// ========== 基础工具 ==========
+	// ========== Basic Tools ==========
 	mcpServer.AddTool(
 		&protocol.Tool{
 			Name:        "greet",
-			Description: "问候用户",
+			Description: "Greet the user",
 			InputSchema: map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
 					"name": map[string]interface{}{
 						"type":        "string",
-						"description": "用户名称",
+						"description": "User name",
 					},
 				},
 				"required": []string{"name"},
@@ -39,32 +39,32 @@ func main() {
 		func(ctx context.Context, req *server.CallToolRequest) (*protocol.CallToolResult, error) {
 			name, ok := req.Params.Arguments["name"].(string)
 			if !ok {
-				return protocol.NewToolResultError("参数 'name' 必须是字符串"), nil
+				return protocol.NewToolResultError("Parameter 'name' must be a string"), nil
 			}
 			greeting := fmt.Sprintf("Hello, %s! Welcome to MCP!", name)
 			return protocol.NewToolResultText(greeting), nil
 		},
 	)
 
-	// ========== 带元数据的工具 (MCP 2025-06-18) ==========
+	// ========== Tools with Metadata (MCP 2025-06-18) ==========
 	mcpServer.AddTool(
 		&protocol.Tool{
 			Name:        "calculate",
-			Description: "执行数学计算",
+			Description: "Perform mathematical calculations",
 			InputSchema: map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
 					"operation": map[string]interface{}{
 						"type":        "string",
-						"description": "运算类型 (add, subtract, multiply, divide)",
+						"description": "Operation type (add, subtract, multiply, divide)",
 					},
 					"a": map[string]interface{}{
 						"type":        "number",
-						"description": "第一个数字",
+						"description": "First number",
 					},
 					"b": map[string]interface{}{
 						"type":        "number",
-						"description": "第二个数字",
+						"description": "Second number",
 					},
 				},
 				"required": []string{"operation", "a", "b"},
@@ -85,27 +85,27 @@ func main() {
 				result = a * b
 			case "divide":
 				if b == 0 {
-					return protocol.NewToolResultError("除数不能为零"), nil
+					return protocol.NewToolResultError("Divisor cannot be zero"), nil
 				}
 				result = a / b
 			default:
-				return protocol.NewToolResultError("不支持的运算类型"), nil
+				return protocol.NewToolResultError("Unsupported operation type"), nil
 			}
 
-			// 返回带元数据的结果
+			// Return result with metadata
 			return &protocol.CallToolResult{
 				Content: []protocol.Content{
-					protocol.NewTextContent(fmt.Sprintf("计算结果: %d", result)),
+					protocol.NewTextContent(fmt.Sprintf("Calculation result: %d", result)),
 				},
 			}, nil
 		},
 	)
 
-	// ========== 获取时间工具 ==========
+	// ========== Get Time Tool ==========
 	mcpServer.AddTool(
 		&protocol.Tool{
 			Name:        "get_time",
-			Description: "获取当前时间",
+			Description: "Get current time",
 			InputSchema: map[string]interface{}{
 				"type":       "object",
 				"properties": map[string]interface{}{},
@@ -121,12 +121,12 @@ func main() {
 		},
 	)
 
-	// ========== 基础资源 ==========
+	// ========== Basic Resources ==========
 	mcpServer.AddResource(
 		&protocol.Resource{
 			URI:         "info://server",
 			Name:        "server_info",
-			Description: "服务器信息",
+			Description: "Server information",
 			MimeType:    "text/plain",
 		},
 		func(ctx context.Context, req *server.ReadResourceRequest) (*protocol.ReadResourceResult, error) {
@@ -143,12 +143,12 @@ func main() {
 		},
 	)
 
-	// ========== JSON 配置资源 ==========
+	// ========== JSON Configuration Resource ==========
 	mcpServer.AddResource(
 		&protocol.Resource{
 			URI:         "config://app",
 			Name:        "app_config",
-			Description: "应用配置",
+			Description: "Application configuration",
 			MimeType:    "application/json",
 		},
 		func(ctx context.Context, req *server.ReadResourceRequest) (*protocol.ReadResourceResult, error) {
@@ -169,17 +169,17 @@ func main() {
 		},
 	)
 
-	// ========== 资源模板示例 ==========
+	// ========== Resource Template Example ==========
 	mcpServer.AddResourceTemplate(
 		&protocol.ResourceTemplate{
 			URITemplate: "echo:///{message}",
 			Name:        "echo",
-			Description: "回显消息",
+			Description: "Echo message",
 			MimeType:    "text/plain",
 		},
 		func(ctx context.Context, req *server.ReadResourceRequest) (*protocol.ReadResourceResult, error) {
-			// 从 URI 中提取消息
-			message := "hello" // 简化示例,实际应该从 URI 解析
+			// Extract message from URI
+			message := "hello" // Simplified example, should parse from URI in practice
 			return &protocol.ReadResourceResult{
 				Contents: []protocol.ResourceContents{
 					{
@@ -192,20 +192,20 @@ func main() {
 		},
 	)
 
-	// ========== 提示模板 ==========
+	// ========== Prompt Templates ==========
 	mcpServer.AddPrompt(
 		&protocol.Prompt{
 			Name:        "code_review",
-			Description: "代码审查提示",
+			Description: "Code review prompt",
 			Arguments: []protocol.PromptArgument{
 				{
 					Name:        "language",
-					Description: "编程语言",
+					Description: "Programming language",
 					Required:    true,
 				},
 				{
 					Name:        "code",
-					Description: "要审查的代码",
+					Description: "Code to review",
 					Required:    true,
 				},
 			},
@@ -215,12 +215,12 @@ func main() {
 			code, _ := req.Params.Arguments["code"]
 
 			return &protocol.GetPromptResult{
-				Description: "代码审查提示",
+				Description: "Code review prompt",
 				Messages: []protocol.PromptMessage{
 					{
 						Role: protocol.RoleUser,
 						Content: protocol.NewTextContent(
-							fmt.Sprintf("请审查以下 %s 代码并提供改进建议:\n\n```%s\n%s\n```", language, language, code),
+							fmt.Sprintf("Please review the following %s code and provide improvement suggestions:\n\n```%s\n%s\n```", language, language, code),
 						),
 					},
 				},
@@ -228,17 +228,17 @@ func main() {
 		},
 	)
 
-	// ========== 资源链接工具 ==========
+	// ========== Resource Link Tool ==========
 	mcpServer.AddTool(
 		&protocol.Tool{
 			Name:        "find_file",
-			Description: "查找文件并返回资源链接",
+			Description: "Find file and return resource link",
 			InputSchema: map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
 					"filename": map[string]interface{}{
 						"type":        "string",
-						"description": "要查找的文件名",
+						"description": "Filename to find",
 					},
 				},
 				"required": []string{"filename"},
@@ -252,14 +252,14 @@ func main() {
 
 			return &protocol.CallToolResult{
 				Content: []protocol.Content{
-					protocol.NewTextContent(fmt.Sprintf("找到文件: %s", filename)),
+					protocol.NewTextContent(fmt.Sprintf("Found file: %s", filename)),
 					resourceLink,
 				},
 			}, nil
 		},
 	)
 
-	// ========== 启动服务器 ==========
+	// ========== Start Server ==========
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -268,31 +268,31 @@ func main() {
 
 	go func() {
 		<-sigChan
-		log.Println("收到中断信号，正在关闭服务器...")
+		log.Println("Received interrupt signal, shutting down server...")
 		cancel()
 	}()
 
 	log.Println("========================================")
-	log.Println("MCP Basic Server 启动")
+	log.Println("MCP Basic Server Started")
 	log.Println("========================================")
-	log.Println("传输协议: STDIO")
-	log.Println("协议版本: MCP", protocol.MCPVersion)
+	log.Println("Transport: STDIO")
+	log.Println("Protocol Version: MCP", protocol.MCPVersion)
 	log.Println("")
-	log.Println("功能列表:")
-	log.Println("  ✓ 基础工具 (greet)")
-	log.Println("  ✓ 计算器工具 (calculate)")
-	log.Println("  ✓ 时间工具 (get_time)")
-	log.Println("  ✓ 基础资源 (info://server)")
-	log.Println("  ✓ JSON 配置资源 (config://app)")
-	log.Println("  ✓ 资源模板 (echo:///{message})")
-	log.Println("  ✓ 提示模板 (code_review)")
-	log.Println("  ✓ 资源链接工具 (find_file)")
+	log.Println("Features:")
+	log.Println("  ✓ Basic tool (greet)")
+	log.Println("  ✓ Calculator tool (calculate)")
+	log.Println("  ✓ Time tool (get_time)")
+	log.Println("  ✓ Basic resource (info://server)")
+	log.Println("  ✓ JSON configuration resource (config://app)")
+	log.Println("  ✓ Resource template (echo:///{message})")
+	log.Println("  ✓ Prompt template (code_review)")
+	log.Println("  ✓ Resource link tool (find_file)")
 	log.Println("========================================")
-	log.Println("等待客户端连接...")
+	log.Println("Waiting for client connection...")
 
 	if err := mcpServer.Run(ctx, &stdio.StdioTransport{}); err != nil && err != context.Canceled {
-		log.Fatalf("服务器错误: %v", err)
+		log.Fatalf("Server error: %v", err)
 	}
 
-	log.Println("服务器已关闭")
+	log.Println("Server closed")
 }

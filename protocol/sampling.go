@@ -1,25 +1,25 @@
 package protocol
 
-// SamplingMessage 采样消息
+// SamplingMessage sampling message
 type SamplingMessage struct {
 	Role    Role    `json:"role"`
 	Content Content `json:"content"`
 }
 
-// ModelHint 模型提示
+// ModelHint model hint
 type ModelHint struct {
 	Name string `json:"name,omitempty"`
 }
 
-// ModelPreferences 模型偏好设置
+// ModelPreferences model preference settings
 type ModelPreferences struct {
 	Hints                []ModelHint `json:"hints,omitempty"`
-	CostPriority         *float64    `json:"costPriority,omitempty"`         // 0-1, 成本优先级
-	SpeedPriority        *float64    `json:"speedPriority,omitempty"`        // 0-1, 速度优先级
-	IntelligencePriority *float64    `json:"intelligencePriority,omitempty"` // 0-1, 智能优先级
+	CostPriority         *float64    `json:"costPriority,omitempty"`         // 0-1, cost priority
+	SpeedPriority        *float64    `json:"speedPriority,omitempty"`        // 0-1, speed priority
+	IntelligencePriority *float64    `json:"intelligencePriority,omitempty"` // 0-1, intelligence priority
 }
 
-// IncludeContext 上下文包含选项
+// IncludeContext context inclusion options
 type IncludeContext string
 
 const (
@@ -28,7 +28,7 @@ const (
 	IncludeContextAllServers IncludeContext = "allServers"
 )
 
-// CreateMessageRequest 创建消息请求 (服务器发起的LLM采样)
+// CreateMessageRequest create message request (server-initiated LLM sampling)
 type CreateMessageRequest struct {
 	Meta             map[string]any         `json:"_meta,omitempty"`
 	Messages         []SamplingMessage      `json:"messages"`
@@ -36,12 +36,12 @@ type CreateMessageRequest struct {
 	SystemPrompt     string                 `json:"systemPrompt,omitempty"`
 	IncludeContext   IncludeContext         `json:"includeContext,omitempty"`
 	Temperature      *float64               `json:"temperature,omitempty"` // 0.0-1.0
-	MaxTokens        int                    `json:"maxTokens"`             // 必需
+	MaxTokens        int                    `json:"maxTokens"`             // Required
 	StopSequences    []string               `json:"stopSequences,omitempty"`
 	Metadata         map[string]interface{} `json:"metadata,omitempty"`
 }
 
-// CreateMessageParams 是 CreateMessageRequest 的别名,用于保持一致性
+// CreateMessageParams is an alias for CreateMessageRequest for consistency
 type CreateMessageParams = CreateMessageRequest
 
 type StopReason string
@@ -75,31 +75,31 @@ func NewModelPreferences() *ModelPreferences {
 	return &ModelPreferences{}
 }
 
-// WithHints 设置模型提示
+// WithHints sets model hints
 func (mp *ModelPreferences) WithHints(hints ...ModelHint) *ModelPreferences {
 	mp.Hints = hints
 	return mp
 }
 
-// WithCostPriority 设置成本优先级 (0-1)
+// WithCostPriority sets cost priority (0-1)
 func (mp *ModelPreferences) WithCostPriority(priority float64) *ModelPreferences {
 	mp.CostPriority = &priority
 	return mp
 }
 
-// WithSpeedPriority 设置速度优先级 (0-1)
+// WithSpeedPriority sets speed priority (0-1)
 func (mp *ModelPreferences) WithSpeedPriority(priority float64) *ModelPreferences {
 	mp.SpeedPriority = &priority
 	return mp
 }
 
-// WithIntelligencePriority 设置智能优先级 (0-1)
+// WithIntelligencePriority sets intelligence priority (0-1)
 func (mp *ModelPreferences) WithIntelligencePriority(priority float64) *ModelPreferences {
 	mp.IntelligencePriority = &priority
 	return mp
 }
 
-// NewCreateMessageRequest 创建消息请求
+// NewCreateMessageRequest creates a message request
 func NewCreateMessageRequest(messages []SamplingMessage, maxTokens int) *CreateMessageRequest {
 	return &CreateMessageRequest{
 		Messages:  messages,
@@ -107,43 +107,43 @@ func NewCreateMessageRequest(messages []SamplingMessage, maxTokens int) *CreateM
 	}
 }
 
-// WithModelPreferences 设置模型偏好
+// WithModelPreferences sets model preferences
 func (cmr *CreateMessageRequest) WithModelPreferences(prefs *ModelPreferences) *CreateMessageRequest {
 	cmr.ModelPreferences = prefs
 	return cmr
 }
 
-// WithSystemPrompt 设置系统提示
+// WithSystemPrompt sets system prompt
 func (cmr *CreateMessageRequest) WithSystemPrompt(prompt string) *CreateMessageRequest {
 	cmr.SystemPrompt = prompt
 	return cmr
 }
 
-// WithIncludeContext 设置上下文包含选项
+// WithIncludeContext sets context inclusion options
 func (cmr *CreateMessageRequest) WithIncludeContext(context IncludeContext) *CreateMessageRequest {
 	cmr.IncludeContext = context
 	return cmr
 }
 
-// WithTemperature 设置温度 (0.0-1.0)
+// WithTemperature sets temperature (0.0-1.0)
 func (cmr *CreateMessageRequest) WithTemperature(temp float64) *CreateMessageRequest {
 	cmr.Temperature = &temp
 	return cmr
 }
 
-// WithStopSequences 设置停止序列
+// WithStopSequences sets stop sequences
 func (cmr *CreateMessageRequest) WithStopSequences(sequences ...string) *CreateMessageRequest {
 	cmr.StopSequences = sequences
 	return cmr
 }
 
-// WithMetadata 设置元数据
+// WithMetadata sets metadata
 func (cmr *CreateMessageRequest) WithMetadata(metadata map[string]interface{}) *CreateMessageRequest {
 	cmr.Metadata = metadata
 	return cmr
 }
 
-// NewCreateMessageResult 创建消息结果
+// NewCreateMessageResult creates a message result
 func NewCreateMessageResult(role Role, content Content, model string, stopReason StopReason) *CreateMessageResult {
 	return &CreateMessageResult{
 		Role:       role,
@@ -153,9 +153,7 @@ func NewCreateMessageResult(role Role, content Content, model string, stopReason
 	}
 }
 
-// 验证方法
-
-// Validate 验证创建消息请求
+// Validate validates the create message request
 func (cmr *CreateMessageRequest) Validate() error {
 	if len(cmr.Messages) == 0 {
 		return NewMCPError(ErrorCodeInvalidParams, "messages cannot be empty", nil)
@@ -178,7 +176,7 @@ func (cmr *CreateMessageRequest) Validate() error {
 	return nil
 }
 
-// Validate 验证模型偏好设置
+// Validate validates model preference settings
 func (mp *ModelPreferences) Validate() error {
 	if mp.CostPriority != nil && (*mp.CostPriority < 0.0 || *mp.CostPriority > 1.0) {
 		return NewMCPError(ErrorCodeInvalidParams, "costPriority must be between 0.0 and 1.0", nil)

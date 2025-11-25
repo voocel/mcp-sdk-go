@@ -43,7 +43,7 @@ func NewHTTPHandler(serverFactory func(*http.Request) *server.Server) *HTTPHandl
 		sessions:        make(map[string]*sessionInfo),
 	}
 
-	// 启动会话清理
+	// Start session cleanup
 	go h.cleanupSessions()
 
 	return h
@@ -118,12 +118,12 @@ func (h *HTTPHandler) handlePost(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// 创建新会话
+		// Create new session
 		mcpServer := h.serverFactory(r)
 		transport := NewStreamableTransport(sessionID)
 
-		// 注意:不调用 Connect,因为 Streamable HTTP 不需要长期运行的连接
-		// 我们直接创建 session 对象
+		// Note: Don't call Connect, as Streamable HTTP doesn't need long-running connections
+		// We directly create the session object
 		info = &sessionInfo{
 			server:     mcpServer,
 			transport:  transport,
@@ -134,17 +134,17 @@ func (h *HTTPHandler) handlePost(w http.ResponseWriter, r *http.Request) {
 	info.lastActive = time.Now()
 	h.mu.Unlock()
 
-	// 如果是 notification,直接处理并返回 202 Accepted
+	// If it's a notification, handle directly and return 202 Accepted
 	if isNotification {
-		// Notification 不需要响应,直接处理
+		// Notifications don't need responses, handle directly
 		_, _ = info.server.HandleMessage(r.Context(), &msg)
 		w.WriteHeader(http.StatusAccepted)
 		return
 	}
 
-	// 如果是 request,需要等待响应
+	// If it's a request, need to wait for response
 	if isRequest {
-		// 创建一个 stream 来跟踪这个请求
+		// Create a stream to track this request
 		streamID := NewSessionID()
 		requests := make(map[string]struct{})
 		requests[msg.GetIDString()] = struct{}{}
@@ -160,18 +160,18 @@ func (h *HTTPHandler) handlePost(w http.ResponseWriter, r *http.Request) {
 			return nil
 		}
 
-		// 注册 stream
+		// Register stream
 		info.transport.RegisterStream(streamID, requests, deliver)
 		defer info.transport.UnregisterStream(streamID)
 
-		// 直接处理消息,因为 Streamable HTTP 每个请求都是独立的
+		// Handle message directly, as each Streamable HTTP request is independent
 		response, err := info.server.HandleMessage(r.Context(), &msg)
 		if err != nil {
 			http.Error(w, fmt.Sprintf("HandleMessage failed: %v", err), http.StatusInternalServerError)
 			return
 		}
 
-		// 如果有响应,通过 Write 发送
+		// If there's a response, send it via Write
 		if response != nil {
 			conn := &streamableConn{transport: info.transport}
 			if err := conn.Write(r.Context(), response); err != nil {
@@ -180,13 +180,13 @@ func (h *HTTPHandler) handlePost(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		// 等待响应
+		// Wait for response
 		ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 		defer cancel()
 
 		select {
 		case <-done:
-			// 返回 JSON 响应
+			// Return JSON response
 			w.Header().Set("Content-Type", "application/json")
 			if isInitialize {
 				w.Header().Set(MCPSessionIDHeader, sessionID)
@@ -200,7 +200,7 @@ func (h *HTTPHandler) handlePost(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// handleGet 处理GET请求 (接收SSE流)
+// handleGet handles GET requests (receive SSE stream)
 func (h *HTTPHandler) handleGet(w http.ResponseWriter, r *http.Request) {
 	sessionID := r.Header.Get(MCPSessionIDHeader)
 	if sessionID == "" {
@@ -229,7 +229,7 @@ func (h *HTTPHandler) handleGet(w http.ResponseWriter, r *http.Request) {
 	}
 	flusher.Flush()
 
-	// 为 standalone SSE stream 设置 deliver 回调
+	// Set deliver callback for standalone SSE stream
 	done := make(chan struct{})
 
 	info.transport.streamsMu.Lock()
@@ -256,14 +256,14 @@ func (h *HTTPHandler) handleGet(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 
-	// 保持连接直到客户端断开
+	// Keep connection until client disconnects
 	select {
 	case <-done:
 	case <-r.Context().Done():
 	}
 }
 
-// handleDelete 处理DELETE请求 (关闭会话)
+// handleDelete handles DELETE requests (close session)
 func (h *HTTPHandler) handleDelete(w http.ResponseWriter, r *http.Request) {
 	sessionID := r.Header.Get(MCPSessionIDHeader)
 	if sessionID == "" {

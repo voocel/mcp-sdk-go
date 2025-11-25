@@ -83,7 +83,7 @@ func (t *SSETransport) Connect(ctx context.Context) (transport.Connection, error
 		return nil, err
 	}
 
-	// 等待 endpoint 就绪
+	// Wait for endpoint to be ready
 	timeout := time.NewTimer(30 * time.Second)
 	defer timeout.Stop()
 
@@ -166,7 +166,7 @@ func (c *sseConnection) Write(ctx context.Context, msg *protocol.JSONRPCMessage)
 	defer resp.Body.Close()
 
 	if resp.StatusCode == http.StatusAccepted {
-		// 202 Accepted - 消息已接收,响应将通过 SSE 发送
+		// 202 Accepted - Message received, response will be sent via SSE
 		return nil
 	}
 
@@ -236,7 +236,7 @@ func (c *sseConnection) startEventStream(ctx context.Context) error {
 
 	c.closeFunc = resp.Body.Close
 
-	// 启动事件处理
+	// Start event processing
 	go c.processEvents(ctx, resp.Body)
 
 	return nil
@@ -256,7 +256,7 @@ func (c *sseConnection) processEvents(ctx context.Context, body io.ReadCloser) {
 	for scanner.Scan() {
 		line := strings.TrimRight(scanner.Text(), "\r\n")
 
-		// 空行表示事件结束
+		// Empty line indicates end of event
 		if line == "" {
 			if data != "" {
 				if event == "" {
@@ -269,7 +269,7 @@ func (c *sseConnection) processEvents(ctx context.Context, body io.ReadCloser) {
 			continue
 		}
 
-		// 解析 SSE 字段
+		// Parse SSE fields
 		if strings.HasPrefix(line, "event:") {
 			event = strings.TrimSpace(strings.TrimPrefix(line, "event:"))
 		} else if strings.HasPrefix(line, "data:") {
@@ -277,7 +277,7 @@ func (c *sseConnection) processEvents(ctx context.Context, body io.ReadCloser) {
 		}
 	}
 
-	// 处理最后一个事件
+	// Process the last event
 	if data != "" {
 		if event == "" {
 			event = "message"
@@ -290,18 +290,18 @@ func (c *sseConnection) processEvents(ctx context.Context, body io.ReadCloser) {
 	}
 }
 
-// handleSSEEvent 处理 SSE 事件
+// handleSSEEvent handles SSE events
 func (c *sseConnection) handleSSEEvent(event, data string) {
 	switch event {
 	case "endpoint":
-		// 解析 endpoint URL
+		// Parse endpoint URL
 		endpoint, err := c.transport.baseURL.Parse(data)
 		if err != nil {
 			fmt.Printf("Error parsing endpoint URL: %v\n", err)
 			return
 		}
 
-		// 安全检查:确保 endpoint 与 baseURL 同源
+		// Security check: ensure endpoint has same origin as baseURL
 		if endpoint.Host != c.transport.baseURL.Host {
 			fmt.Printf("Endpoint origin does not match connection origin\n")
 			return
@@ -311,13 +311,13 @@ func (c *sseConnection) handleSSEEvent(event, data string) {
 		c.endpoint = endpoint
 		c.mu.Unlock()
 
-		// 通知 endpoint 就绪
+		// Notify endpoint is ready
 		c.endpointOnce.Do(func() {
 			close(c.endpointReady)
 		})
 
 	case "message":
-		// 解析 JSON-RPC 消息
+		// Parse JSON-RPC message
 		var msg protocol.JSONRPCMessage
 		if err := json.Unmarshal([]byte(data), &msg); err != nil {
 			fmt.Printf("Invalid JSON-RPC message: %v\n", err)
@@ -327,7 +327,7 @@ func (c *sseConnection) handleSSEEvent(event, data string) {
 		select {
 		case c.incoming <- &msg:
 		default:
-			// 缓冲区满,丢弃消息
+			// Buffer full, drop message
 			fmt.Printf("Message buffer full, dropping message\n")
 		}
 	}

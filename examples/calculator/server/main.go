@@ -21,30 +21,30 @@ func main() {
 	signal.Notify(signalCh, os.Interrupt, syscall.SIGTERM)
 	go func() {
 		<-signalCh
-		log.Println("接收到关闭信号")
+		log.Println("Received shutdown signal")
 		cancel()
 	}()
 
 	mcpServer := server.NewServer(&protocol.ServerInfo{
-		Name:    "计算器服务",
+		Name:    "Calculator Service",
 		Version: "1.0.0",
 	}, nil)
 
-	// 加法工具
+	// Addition tool
 	mcpServer.AddTool(
 		&protocol.Tool{
 			Name:        "add",
-			Description: "两个数字相加",
+			Description: "Add two numbers",
 			InputSchema: map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
 					"a": map[string]interface{}{
 						"type":        "number",
-						"description": "第一个数字",
+						"description": "First number",
 					},
 					"b": map[string]interface{}{
 						"type":        "number",
-						"description": "第二个数字",
+						"description": "Second number",
 					},
 				},
 				"required": []string{"a", "b"},
@@ -53,11 +53,11 @@ func main() {
 		func(ctx context.Context, req *server.CallToolRequest) (*protocol.CallToolResult, error) {
 			a, ok := req.Params.Arguments["a"].(float64)
 			if !ok {
-				return protocol.NewToolResultError("参数 'a' 必须是数字"), nil
+				return protocol.NewToolResultError("Parameter 'a' must be a number"), nil
 			}
 			b, ok := req.Params.Arguments["b"].(float64)
 			if !ok {
-				return protocol.NewToolResultError("参数 'b' 必须是数字"), nil
+				return protocol.NewToolResultError("Parameter 'b' must be a number"), nil
 			}
 
 			result := a + b
@@ -65,21 +65,21 @@ func main() {
 		},
 	)
 
-	// 减法工具
+	// Subtraction tool
 	mcpServer.AddTool(
 		&protocol.Tool{
 			Name:        "subtract",
-			Description: "一个数字减去另一个数字",
+			Description: "Subtract one number from another",
 			InputSchema: map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
 					"a": map[string]interface{}{
 						"type":        "number",
-						"description": "被减数",
+						"description": "Minuend",
 					},
 					"b": map[string]interface{}{
 						"type":        "number",
-						"description": "减数",
+						"description": "Subtrahend",
 					},
 				},
 				"required": []string{"a", "b"},
@@ -88,11 +88,11 @@ func main() {
 		func(ctx context.Context, req *server.CallToolRequest) (*protocol.CallToolResult, error) {
 			a, ok := req.Params.Arguments["a"].(float64)
 			if !ok {
-				return protocol.NewToolResultError("参数 'a' 必须是数字"), nil
+				return protocol.NewToolResultError("Parameter 'a' must be a number"), nil
 			}
 			b, ok := req.Params.Arguments["b"].(float64)
 			if !ok {
-				return protocol.NewToolResultError("参数 'b' 必须是数字"), nil
+				return protocol.NewToolResultError("Parameter 'b' must be a number"), nil
 			}
 
 			result := a - b
@@ -100,21 +100,21 @@ func main() {
 		},
 	)
 
-	// 乘法工具
+	// Multiplication tool
 	mcpServer.AddTool(
 		&protocol.Tool{
 			Name:        "multiply",
-			Description: "两个数字相乘",
+			Description: "Multiply two numbers",
 			InputSchema: map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
 					"a": map[string]interface{}{
 						"type":        "number",
-						"description": "第一个数字",
+						"description": "First number",
 					},
 					"b": map[string]interface{}{
 						"type":        "number",
-						"description": "第二个数字",
+						"description": "Second number",
 					},
 				},
 				"required": []string{"a", "b"},
@@ -123,11 +123,11 @@ func main() {
 		func(ctx context.Context, req *server.CallToolRequest) (*protocol.CallToolResult, error) {
 			a, ok := req.Params.Arguments["a"].(float64)
 			if !ok {
-				return protocol.NewToolResultError("参数 'a' 必须是数字"), nil
+				return protocol.NewToolResultError("Parameter 'a' must be a number"), nil
 			}
 			b, ok := req.Params.Arguments["b"].(float64)
 			if !ok {
-				return protocol.NewToolResultError("参数 'b' 必须是数字"), nil
+				return protocol.NewToolResultError("Parameter 'b' must be a number"), nil
 			}
 
 			result := a * b
@@ -135,21 +135,21 @@ func main() {
 		},
 	)
 
-	// 除法工具
+	// Division tool
 	mcpServer.AddTool(
 		&protocol.Tool{
 			Name:        "divide",
-			Description: "一个数字除以另一个数字",
+			Description: "Divide one number by another",
 			InputSchema: map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
 					"a": map[string]interface{}{
 						"type":        "number",
-						"description": "被除数",
+						"description": "Dividend",
 					},
 					"b": map[string]interface{}{
 						"type":        "number",
-						"description": "除数",
+						"description": "Divisor",
 					},
 				},
 				"required": []string{"a", "b"},
@@ -158,15 +158,15 @@ func main() {
 		func(ctx context.Context, req *server.CallToolRequest) (*protocol.CallToolResult, error) {
 			a, ok := req.Params.Arguments["a"].(float64)
 			if !ok {
-				return protocol.NewToolResultError("参数 'a' 必须是数字"), nil
+				return protocol.NewToolResultError("Parameter 'a' must be a number"), nil
 			}
 			b, ok := req.Params.Arguments["b"].(float64)
 			if !ok {
-				return protocol.NewToolResultError("参数 'b' 必须是数字"), nil
+				return protocol.NewToolResultError("Parameter 'b' must be a number"), nil
 			}
 
 			if b == 0 {
-				return protocol.NewToolResultError("不能除以零"), nil
+				return protocol.NewToolResultError("Cannot divide by zero"), nil
 			}
 
 			result := a / b
@@ -174,30 +174,30 @@ func main() {
 		},
 	)
 
-	// 帮助提示
+	// Help prompt
 	mcpServer.AddPrompt(
 		&protocol.Prompt{
 			Name:        "calculator_help",
-			Description: "计算器帮助信息",
+			Description: "Calculator help information",
 		},
 		func(ctx context.Context, req *server.GetPromptRequest) (*protocol.GetPromptResult, error) {
 			messages := []protocol.PromptMessage{
 				protocol.NewPromptMessage(protocol.RoleSystem, protocol.NewTextContent(
-					"这是一个简单的计算器服务，支持四种基本运算：加法、减法、乘法和除法。")),
+					"This is a simple calculator service that supports four basic operations: addition, subtraction, multiplication, and division.")),
 				protocol.NewPromptMessage(protocol.RoleUser, protocol.NewTextContent(
-					"我该如何使用这个计算器？")),
+					"How do I use this calculator?")),
 				protocol.NewPromptMessage(protocol.RoleAssistant, protocol.NewTextContent(
-					"使用 add、subtract、multiply 和 divide 工具来执行计算。每个工具都接受两个参数：a 和 b。")),
+					"Use the add, subtract, multiply, and divide tools to perform calculations. Each tool accepts two parameters: a and b.")),
 			}
-			return protocol.NewGetPromptResult("为编程问题提供帮助的提示模板", messages...), nil
+			return protocol.NewGetPromptResult("Prompt template for providing help with programming questions", messages...), nil
 		},
 	)
 
-	log.Println("启动计算器 MCP 服务器 (STDIO)...")
+	log.Println("Starting Calculator MCP Server (STDIO)...")
 
 	if err := mcpServer.Run(ctx, &stdio.StdioTransport{}); err != nil && err != context.Canceled {
-		log.Fatalf("服务器错误: %v", err)
+		log.Fatalf("Server error: %v", err)
 	}
 
-	log.Println("服务器已关闭")
+	log.Println("Server closed")
 }

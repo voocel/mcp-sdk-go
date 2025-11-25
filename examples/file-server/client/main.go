@@ -25,41 +25,41 @@ func main() {
 
 	transport, err := sse.NewSSETransport("http://localhost:8081")
 	if err != nil {
-		log.Fatalf("创建 Transport 失败: %v", err)
+		log.Fatalf("Failed to create Transport: %v", err)
 	}
 
-	fmt.Println("连接到文件服务器...")
+	fmt.Println("Connecting to file server...")
 	session, err := mcpClient.Connect(ctx, transport, nil)
 	if err != nil {
-		log.Fatalf("连接失败: %v", err)
+		log.Fatalf("Connection failed: %v", err)
 	}
 	defer session.Close()
 
 	initResult := session.InitializeResult()
-	fmt.Printf("连接成功！服务器: %s v%s\n",
+	fmt.Printf("Connection successful! Server: %s v%s\n",
 		initResult.ServerInfo.Name, initResult.ServerInfo.Version)
 
-	// 获取当前目录资源
-	fmt.Println("\n获取当前工作目录...")
+	// Get current directory resource
+	fmt.Println("\nGetting current working directory...")
 	resourceResult, err := session.ReadResource(ctx, &protocol.ReadResourceParams{
 		URI: "file://current",
 	})
 	if err != nil {
-		log.Fatalf("读取资源失败: %v", err)
+		log.Fatalf("Failed to read resource: %v", err)
 	}
 
 	var currentDir string
 	if len(resourceResult.Contents) > 0 && resourceResult.Contents[0].Text != "" {
 		currentDir = resourceResult.Contents[0].Text
-		fmt.Printf("当前工作目录: %s\n", currentDir)
+		fmt.Printf("Current working directory: %s\n", currentDir)
 	} else {
-		// 如果资源读取失败，使用当前目录作为后备
+		// Fall back to current directory if resource read fails
 		currentDir, _ = os.Getwd()
-		fmt.Printf("当前工作目录: %s\n", currentDir)
+		fmt.Printf("Current working directory: %s\n", currentDir)
 	}
 
-	// 列出当前目录内容
-	fmt.Println("\n当前目录内容:")
+	// List current directory contents
+	fmt.Println("\nCurrent directory contents:")
 	result, err := session.CallTool(ctx, &protocol.CallToolParams{
 		Name: "list_directory",
 		Arguments: map[string]any{
@@ -67,7 +67,7 @@ func main() {
 		},
 	})
 	if err != nil {
-		log.Fatalf("调用 list_directory 工具失败: %v", err)
+		log.Fatalf("Failed to call list_directory tool: %v", err)
 	}
 
 	if len(result.Content) > 0 {
@@ -76,8 +76,8 @@ func main() {
 		}
 	}
 
-	// 读取当前文件内容的前100个字符
-	fmt.Println("\n读取当前文件内容预览:")
+	// Read first 100 characters of current file
+	fmt.Println("\nReading current file content preview:")
 	_, currentFilePath, _, _ := runtime.Caller(0)
 	result, err = session.CallTool(ctx, &protocol.CallToolParams{
 		Name: "read_file",
@@ -86,19 +86,19 @@ func main() {
 		},
 	})
 	if err != nil {
-		fmt.Printf("调用 read_file 工具失败: %v\n", err)
+		fmt.Printf("Failed to call read_file tool: %v\n", err)
 	} else if len(result.Content) > 0 {
 		if textContent, ok := result.Content[0].(protocol.TextContent); ok {
 			content := textContent.Text
 			if len(content) > 200 {
 				content = content[:200] + "..."
 			}
-			fmt.Printf("文件 %s 的前200个字符:\n%s\n", filepath.Base(currentFilePath), content)
+			fmt.Printf("First 200 characters of file %s:\n%s\n", filepath.Base(currentFilePath), content)
 		}
 	}
 
-	// 搜索包含 "MCP" 的文件
-	fmt.Println("\n搜索包含 'MCP' 的文件:")
+	// Search for files containing "MCP"
+	fmt.Println("\nSearching for files containing 'MCP':")
 	searchDir := filepath.Dir(currentDir)
 	result, err = session.CallTool(ctx, &protocol.CallToolParams{
 		Name: "search_files",
@@ -108,24 +108,24 @@ func main() {
 		},
 	})
 	if err != nil {
-		fmt.Printf("调用 search_files 工具失败: %v\n", err)
+		fmt.Printf("Failed to call search_files tool: %v\n", err)
 	} else if len(result.Content) > 0 {
 		if textContent, ok := result.Content[0].(protocol.TextContent); ok {
 			fmt.Printf("%s\n", textContent.Text)
 		}
 	}
 
-	// 获取文件操作帮助
-	fmt.Println("\n获取文件操作帮助:")
+	// Get file operation help
+	fmt.Println("\nGetting file operation help:")
 	promptResult, err := session.GetPrompt(ctx, &protocol.GetPromptParams{
 		Name:      "file_help",
 		Arguments: map[string]string{},
 	})
 	if err != nil {
-		fmt.Printf("获取帮助提示失败: %v\n", err)
+		fmt.Printf("Failed to get help prompt: %v\n", err)
 	} else {
-		fmt.Printf("描述: %s\n", promptResult.Description)
-		fmt.Println("帮助信息:")
+		fmt.Printf("Description: %s\n", promptResult.Description)
+		fmt.Println("Help information:")
 		for i, message := range promptResult.Messages {
 			if textContent, ok := message.Content.(protocol.TextContent); ok {
 				fmt.Printf("  %d. [%s]: %s\n", i+1, message.Role, textContent.Text)
@@ -133,7 +133,7 @@ func main() {
 		}
 	}
 
-	fmt.Println("\n演示错误处理 - 尝试访问不存在的目录:")
+	fmt.Println("\nDemonstrating error handling - attempting to access non-existent directory:")
 	result, err = session.CallTool(ctx, &protocol.CallToolParams{
 		Name: "list_directory",
 		Arguments: map[string]any{
@@ -141,14 +141,14 @@ func main() {
 		},
 	})
 	if err != nil {
-		fmt.Printf("预期错误: %v\n", err)
+		fmt.Printf("Expected error: %v\n", err)
 	} else if result.IsError && len(result.Content) > 0 {
 		if textContent, ok := result.Content[0].(protocol.TextContent); ok {
-			fmt.Printf("服务器返回错误: %s\n", textContent.Text)
+			fmt.Printf("Server returned error: %s\n", textContent.Text)
 		}
 	}
 
-	fmt.Println("\n演示安全检查 - 尝试路径遍历:")
+	fmt.Println("\nDemonstrating security check - attempting path traversal:")
 	result, err = session.CallTool(ctx, &protocol.CallToolParams{
 		Name: "read_file",
 		Arguments: map[string]any{
@@ -156,10 +156,10 @@ func main() {
 		},
 	})
 	if err != nil {
-		fmt.Printf("安全检查生效: %v\n", err)
+		fmt.Printf("Security check effective: %v\n", err)
 	} else if result.IsError && len(result.Content) > 0 {
 		if textContent, ok := result.Content[0].(protocol.TextContent); ok {
-			fmt.Printf("安全检查生效: %s\n", textContent.Text)
+			fmt.Printf("Security check effective: %s\n", textContent.Text)
 		}
 	}
 
