@@ -25,6 +25,12 @@ const (
 	MethodElicitationCreate = "elicitation/create"
 
 	MethodLoggingSetLevel = "logging/setLevel"
+
+	// Tasks methods (MCP 2025-11-25)
+	MethodTasksGet    = "tasks/get"
+	MethodTasksList   = "tasks/list"
+	MethodTasksCancel = "tasks/cancel"
+	MethodTasksResult = "tasks/result"
 )
 
 const (
@@ -44,5 +50,11 @@ const (
 	NotificationCancelled = "notifications/cancelled"
 
 	NotificationLoggingMessage = "notifications/message"
+
+	// Elicitation notifications (MCP 2025-11-25)
+	NotificationElicitationComplete = "notifications/elicitation/complete"
+
+	// Tasks notifications (MCP 2025-11-25)
+	NotificationTasksStatus = "notifications/tasks/status"
 )
 

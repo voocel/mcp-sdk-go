@@ -175,6 +175,8 @@ func (cs *ClientSession) handleRequest(ctx context.Context, msg *protocol.JSONRP
 		cs.handleCancelled(ctx, msg)
 	case protocol.MethodRootsList:
 		cs.handleListRoots(ctx, msg)
+	case protocol.NotificationTasksStatus:
+		cs.handleTaskStatus(ctx, msg)
 	}
 }
 
@@ -381,6 +383,20 @@ func (cs *ClientSession) handleCancelled(ctx context.Context, msg *protocol.JSON
 	if exists {
 		cancel()
 	}
+}
+
+// handleTaskStatus handles task status notifications (MCP 2025-11-25)
+func (cs *ClientSession) handleTaskStatus(ctx context.Context, msg *protocol.JSONRPCMessage) {
+	if cs.client.opts.TaskStatusHandler == nil {
+		return
+	}
+
+	var params protocol.TaskStatusNotificationParams
+	if err := json.Unmarshal(msg.Params, &params); err != nil {
+		return
+	}
+
+	cs.client.opts.TaskStatusHandler(ctx, &params)
 }
 
 // sendSuccessResponse sends a success response

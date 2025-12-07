@@ -1,5 +1,7 @@
 package protocol
 
+import "encoding/json"
+
 // SamplingMessage sampling message
 type SamplingMessage struct {
 	Role    Role    `json:"role"`
@@ -28,6 +30,30 @@ const (
 	IncludeContextAllServers IncludeContext = "allServers"
 )
 
+// ToolChoiceMode represents the tool selection mode (MCP 2025-11-25)
+type ToolChoiceMode string
+
+const (
+	// ToolChoiceModeAuto allows the model to decide whether to use tools (default)
+	ToolChoiceModeAuto ToolChoiceMode = "auto"
+	// ToolChoiceModeRequired forces the model to use at least one tool
+	ToolChoiceModeRequired ToolChoiceMode = "required"
+	// ToolChoiceModeNone prevents the model from using any tools
+	ToolChoiceModeNone ToolChoiceMode = "none"
+)
+
+// ToolChoice controls tool selection behavior in sampling requests (MCP 2025-11-25)
+type ToolChoice struct {
+	Mode ToolChoiceMode `json:"mode,omitempty"`
+}
+
+// SamplingTool represents a tool available for use in sampling (MCP 2025-11-25)
+type SamplingTool struct {
+	Name        string     `json:"name"`
+	Description string     `json:"description,omitempty"`
+	InputSchema JSONSchema `json:"inputSchema"`
+}
+
 // CreateMessageRequest create message request (server-initiated LLM sampling)
 type CreateMessageRequest struct {
 	Meta             map[string]any         `json:"_meta,omitempty"`
@@ -39,6 +65,12 @@ type CreateMessageRequest struct {
 	MaxTokens        int                    `json:"maxTokens"`             // Required
 	StopSequences    []string               `json:"stopSequences,omitempty"`
 	Metadata         map[string]interface{} `json:"metadata,omitempty"`
+	// Tools available for the LLM to use (MCP 2025-11-25)
+	Tools []SamplingTool `json:"tools,omitempty"`
+	// ToolChoice controls tool selection behavior (MCP 2025-11-25)
+	ToolChoice *ToolChoice `json:"toolChoice,omitempty"`
+	// Task metadata for task-augmented requests (MCP 2025-11-25)
+	Task *TaskMetadata `json:"task,omitempty"`
 }
 
 // CreateMessageParams is an alias for CreateMessageRequest for consistency
@@ -60,87 +92,48 @@ type CreateMessageResult struct {
 	StopReason StopReason `json:"stopReason"`
 }
 
-func NewSamplingMessage(role Role, content Content) SamplingMessage {
-	return SamplingMessage{
-		Role:    role,
-		Content: content,
+// UnmarshalJSON implements custom unmarshaling for SamplingMessage
+func (sm *SamplingMessage) UnmarshalJSON(data []byte) error {
+	var temp struct {
+		Role    Role            `json:"role"`
+		Content json.RawMessage `json:"content"`
 	}
-}
-
-func NewModelHint(name string) ModelHint {
-	return ModelHint{Name: name}
-}
-
-func NewModelPreferences() *ModelPreferences {
-	return &ModelPreferences{}
-}
-
-// WithHints sets model hints
-func (mp *ModelPreferences) WithHints(hints ...ModelHint) *ModelPreferences {
-	mp.Hints = hints
-	return mp
-}
-
-// WithCostPriority sets cost priority (0-1)
-func (mp *ModelPreferences) WithCostPriority(priority float64) *ModelPreferences {
-	mp.CostPriority = &priority
-	return mp
-}
-
-// WithSpeedPriority sets speed priority (0-1)
-func (mp *ModelPreferences) WithSpeedPriority(priority float64) *ModelPreferences {
-	mp.SpeedPriority = &priority
-	return mp
-}
-
-// WithIntelligencePriority sets intelligence priority (0-1)
-func (mp *ModelPreferences) WithIntelligencePriority(priority float64) *ModelPreferences {
-	mp.IntelligencePriority = &priority
-	return mp
-}
-
-// NewCreateMessageRequest creates a message request
-func NewCreateMessageRequest(messages []SamplingMessage, maxTokens int) *CreateMessageRequest {
-	return &CreateMessageRequest{
-		Messages:  messages,
-		MaxTokens: maxTokens,
+	if err := json.Unmarshal(data, &temp); err != nil {
+		return err
 	}
+	sm.Role = temp.Role
+	if len(temp.Content) > 0 {
+		content, err := UnmarshalContent(temp.Content)
+		if err != nil {
+			return err
+		}
+		sm.Content = content
+	}
+	return nil
 }
 
-// WithModelPreferences sets model preferences
-func (cmr *CreateMessageRequest) WithModelPreferences(prefs *ModelPreferences) *CreateMessageRequest {
-	cmr.ModelPreferences = prefs
-	return cmr
-}
-
-// WithSystemPrompt sets system prompt
-func (cmr *CreateMessageRequest) WithSystemPrompt(prompt string) *CreateMessageRequest {
-	cmr.SystemPrompt = prompt
-	return cmr
-}
-
-// WithIncludeContext sets context inclusion options
-func (cmr *CreateMessageRequest) WithIncludeContext(context IncludeContext) *CreateMessageRequest {
-	cmr.IncludeContext = context
-	return cmr
-}
-
-// WithTemperature sets temperature (0.0-1.0)
-func (cmr *CreateMessageRequest) WithTemperature(temp float64) *CreateMessageRequest {
-	cmr.Temperature = &temp
-	return cmr
-}
-
-// WithStopSequences sets stop sequences
-func (cmr *CreateMessageRequest) WithStopSequences(sequences ...string) *CreateMessageRequest {
-	cmr.StopSequences = sequences
-	return cmr
-}
-
-// WithMetadata sets metadata
-func (cmr *CreateMessageRequest) WithMetadata(metadata map[string]interface{}) *CreateMessageRequest {
-	cmr.Metadata = metadata
-	return cmr
+// UnmarshalJSON implements custom unmarshaling for CreateMessageResult
+func (cmr *CreateMessageResult) UnmarshalJSON(data []byte) error {
+	var temp struct {
+		Role       Role            `json:"role"`
+		Content    json.RawMessage `json:"content"`
+		Model      string          `json:"model"`
+		StopReason StopReason      `json:"stopReason"`
+	}
+	if err := json.Unmarshal(data, &temp); err != nil {
+		return err
+	}
+	cmr.Role = temp.Role
+	cmr.Model = temp.Model
+	cmr.StopReason = temp.StopReason
+	if len(temp.Content) > 0 {
+		content, err := UnmarshalContent(temp.Content)
+		if err != nil {
+			return err
+		}
+		cmr.Content = content
+	}
+	return nil
 }
 
 // NewCreateMessageResult creates a message result

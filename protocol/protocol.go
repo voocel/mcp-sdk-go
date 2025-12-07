@@ -7,10 +7,11 @@ import (
 )
 
 const (
-	MCPVersion     = "2025-06-18"
+	MCPVersion     = "2025-11-25"
 	JSONRPCVersion = "2.0"
 
 	// Supported protocol versions list (for backward compatibility check)
+	MCPVersion2025_06_18 = "2025-06-18"
 	MCPVersion2025_03_26 = "2025-03-26"
 	MCPVersionLegacy     = "2024-11-05"
 )
@@ -79,6 +80,8 @@ const (
 	ContentTypeAudio        ContentType = "audio"         // MCP 2025-06-18
 	ContentTypeResourceLink ContentType = "resource_link" // MCP 2025-06-18
 	ContentTypeResource     ContentType = "resource"      // MCP 2025-06-18: Embedded Resource
+	ContentTypeToolUse      ContentType = "tool_use"      // MCP 2025-11-25: Tool use in sampling
+	ContentTypeToolResult   ContentType = "tool_result"   // MCP 2025-11-25: Tool result in sampling
 )
 
 // Annotation represents content annotation (MCP 2025-06-18)
@@ -125,6 +128,33 @@ type EmbeddedResourceContent struct {
 	Resource ResourceContents `json:"resource"`
 }
 
+// ToolUseContent represents a tool invocation request in sampling (MCP 2025-11-25)
+type ToolUseContent struct {
+	Type  ContentType            `json:"type"`
+	ID    string                 `json:"id"`
+	Name  string                 `json:"name"`
+	Input map[string]interface{} `json:"input"`
+	Meta  map[string]any         `json:"_meta,omitempty"`
+}
+
+// ToolResultContent represents the result of a tool execution in sampling (MCP 2025-11-25)
+type ToolResultContent struct {
+	Type              ContentType            `json:"type"`
+	ToolUseID         string                 `json:"toolUseId"`
+	Content           []ContentBlock         `json:"content"`
+	IsError           bool                   `json:"isError,omitempty"`
+	StructuredContent map[string]interface{} `json:"structuredContent,omitempty"`
+	Meta              map[string]any         `json:"_meta,omitempty"`
+}
+
+// ContentBlock represents a block of content in tool results (MCP 2025-11-25)
+type ContentBlock struct {
+	Type     ContentType `json:"type"`
+	Text     string      `json:"text,omitempty"`
+	Data     string      `json:"data,omitempty"`
+	MimeType string      `json:"mimeType,omitempty"`
+}
+
 type Content interface {
 	GetType() ContentType
 }
@@ -134,6 +164,8 @@ func (ic ImageContent) GetType() ContentType             { return ic.Type }
 func (ac AudioContent) GetType() ContentType             { return ac.Type }
 func (rlc ResourceLinkContent) GetType() ContentType     { return rlc.Type }
 func (erc EmbeddedResourceContent) GetType() ContentType { return erc.Type }
+func (tuc ToolUseContent) GetType() ContentType          { return tuc.Type }
+func (trc ToolResultContent) GetType() ContentType       { return trc.Type }
 
 func UnmarshalContent(data []byte) (Content, error) {
 	var temp struct {
@@ -175,6 +207,18 @@ func UnmarshalContent(data []byte) (Content, error) {
 			return nil, err
 		}
 		return erc, nil
+	case ContentTypeToolUse:
+		var tuc ToolUseContent
+		if err := json.Unmarshal(data, &tuc); err != nil {
+			return nil, err
+		}
+		return tuc, nil
+	case ContentTypeToolResult:
+		var trc ToolResultContent
+		if err := json.Unmarshal(data, &trc); err != nil {
+			return nil, err
+		}
+		return trc, nil
 	default:
 		// Default to text content
 		var tc TextContent
@@ -217,6 +261,52 @@ func NewResourceLinkContentWithDetails(uri, name, description, mimeType string) 
 // NewEmbeddedResourceContent creates embedded resource content (MCP 2025-06-18)
 func NewEmbeddedResourceContent(resource ResourceContents) EmbeddedResourceContent {
 	return EmbeddedResourceContent{Type: ContentTypeResource, Resource: resource}
+}
+
+// NewToolUseContent creates tool use content for sampling (MCP 2025-11-25)
+func NewToolUseContent(id, name string, input map[string]interface{}) ToolUseContent {
+	return ToolUseContent{
+		Type:  ContentTypeToolUse,
+		ID:    id,
+		Name:  name,
+		Input: input,
+	}
+}
+
+// NewToolResultContent creates tool result content for sampling (MCP 2025-11-25)
+func NewToolResultContent(toolUseID string, content []ContentBlock) ToolResultContent {
+	return ToolResultContent{
+		Type:      ContentTypeToolResult,
+		ToolUseID: toolUseID,
+		Content:   content,
+	}
+}
+
+// NewToolResultContentWithError creates tool result content with error flag (MCP 2025-11-25)
+func NewToolResultContentWithError(toolUseID string, content []ContentBlock, isError bool) ToolResultContent {
+	return ToolResultContent{
+		Type:      ContentTypeToolResult,
+		ToolUseID: toolUseID,
+		Content:   content,
+		IsError:   isError,
+	}
+}
+
+// NewTextContentBlock creates a text content block (MCP 2025-11-25)
+func NewTextContentBlock(text string) ContentBlock {
+	return ContentBlock{
+		Type: ContentTypeText,
+		Text: text,
+	}
+}
+
+// NewImageContentBlock creates an image content block (MCP 2025-11-25)
+func NewImageContentBlock(data, mimeType string) ContentBlock {
+	return ContentBlock{
+		Type:     ContentTypeImage,
+		Data:     data,
+		MimeType: mimeType,
+	}
 }
 
 // WithAnnotations adds annotations to content (MCP 2025-06-18)
@@ -269,10 +359,11 @@ const (
 )
 
 type ClientCapabilities struct {
-	Roots        *RootsCapability       `json:"roots,omitempty"`
-	Sampling     *SamplingCapability    `json:"sampling,omitempty"`
-	Elicitation  *ElicitationCapability `json:"elicitation,omitempty"`
-	Experimental map[string]interface{} `json:"experimental,omitempty"`
+	Roots        *RootsCapability        `json:"roots,omitempty"`
+	Sampling     *SamplingCapability     `json:"sampling,omitempty"`
+	Elicitation  *ElicitationCapability  `json:"elicitation,omitempty"`
+	Tasks        *ClientTasksCapability  `json:"tasks,omitempty"` // MCP 2025-11-25
+	Experimental map[string]interface{}  `json:"experimental,omitempty"`
 }
 
 type ServerCapabilities struct {
@@ -280,7 +371,8 @@ type ServerCapabilities struct {
 	Resources    *ResourcesCapability   `json:"resources,omitempty"`
 	Prompts      *PromptsCapability     `json:"prompts,omitempty"`
 	Logging      *LoggingCapability     `json:"logging,omitempty"`
-	Completion   *CompletionCapability  `json:"completions,omitempty"` // MCP 2025-06-18: Parameter auto-completion
+	Completion   *CompletionCapability  `json:"completion,omitempty"` // MCP 2025-06-18: Parameter auto-completion
+	Tasks        *TasksCapability       `json:"tasks,omitempty"`       // MCP 2025-11-25
 	Experimental map[string]interface{} `json:"experimental,omitempty"`
 }
 
@@ -288,7 +380,10 @@ type RootsCapability struct {
 	ListChanged bool `json:"listChanged,omitempty"`
 }
 
-type SamplingCapability struct{}
+type SamplingCapability struct {
+	// Tools indicates client supports tool use in sampling requests (MCP 2025-11-25)
+	Tools *struct{} `json:"tools,omitempty"`
+}
 
 type ToolsCapability struct {
 	ListChanged bool `json:"listChanged,omitempty"`
@@ -386,7 +481,8 @@ type PaginatedResult struct {
 // IsVersionSupported checks if the protocol version is supported
 func IsVersionSupported(version string) bool {
 	supportedVersions := []string{
-		MCPVersion,           // 2025-06-18
+		MCPVersion,           // 2025-11-25
+		MCPVersion2025_06_18, // 2025-06-18
 		MCPVersion2025_03_26, // 2025-03-26
 		MCPVersionLegacy,     // 2024-11-05
 	}
@@ -402,6 +498,7 @@ func IsVersionSupported(version string) bool {
 func GetSupportedVersions() []string {
 	return []string{
 		MCPVersion,           // Latest version first
+		MCPVersion2025_06_18, // Previous stable version
 		MCPVersion2025_03_26, // Intermediate version
 		MCPVersionLegacy,     // Backward compatibility
 	}

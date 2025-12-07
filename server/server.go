@@ -24,6 +24,13 @@ type Server struct {
 	prompts               map[string]*serverPrompt
 	sessions              []*ServerSession
 	resourceSubscriptions map[string]map[*ServerSession]bool // uri -> session -> bool
+	tasks                 map[string]*serverTask             // taskId -> task (MCP 2025-11-25)
+}
+
+// serverTask represents a task stored in the server (MCP 2025-11-25)
+type serverTask struct {
+	task   *protocol.Task
+	result any
 }
 
 type ServerOptions struct {
@@ -49,6 +56,22 @@ type ServerOptions struct {
 	// KeepAlive defines the interval for periodic "ping" requests
 	// If the peer fails to respond to a keepalive ping, the session will be closed automatically
 	KeepAlive time.Duration
+
+	// Tasks capability options (MCP 2025-11-25)
+	TasksEnabled bool // Enable tasks support
+
+	// TaskGetHandler handles tasks/get requests (MCP 2025-11-25)
+	TaskGetHandler func(context.Context, *protocol.GetTaskParams) (*protocol.GetTaskResult, error)
+
+	// TaskListHandler handles tasks/list requests (MCP 2025-11-25)
+	TaskListHandler func(context.Context, *protocol.ListTasksParams) (*protocol.ListTasksResult, error)
+
+	// TaskCancelHandler handles tasks/cancel requests (MCP 2025-11-25)
+	TaskCancelHandler func(context.Context, *protocol.CancelTaskParams) (*protocol.CancelTaskResult, error)
+
+	// TaskResultHandler handles tasks/result requests (MCP 2025-11-25)
+	// Returns the original request's result type (e.g., *CallToolResult)
+	TaskResultHandler func(context.Context, *protocol.TaskResultParams) (interface{}, error)
 }
 
 type serverTool struct {
@@ -93,6 +116,7 @@ func NewServer(impl *protocol.ServerInfo, opts *ServerOptions) *Server {
 		prompts:               make(map[string]*serverPrompt),
 		sessions:              make([]*ServerSession, 0),
 		resourceSubscriptions: make(map[string]map[*ServerSession]bool),
+		tasks:                 make(map[string]*serverTask),
 	}
 	if opts != nil {
 		s.opts = *opts
@@ -488,6 +512,15 @@ func (s *Server) handleRequest(ctx context.Context, ss *ServerSession, method st
 		return s.handleComplete(ctx, ss, params)
 	case protocol.MethodLoggingSetLevel:
 		return s.handleSetLoggingLevel(ctx, ss, params)
+	// Tasks methods (MCP 2025-11-25)
+	case protocol.MethodTasksGet:
+		return s.handleTasksGet(ctx, ss, params)
+	case protocol.MethodTasksList:
+		return s.handleTasksList(ctx, ss, params)
+	case protocol.MethodTasksCancel:
+		return s.handleTasksCancel(ctx, ss, params)
+	case protocol.MethodTasksResult:
+		return s.handleTasksResult(ctx, ss, params)
 	default:
 		return nil, fmt.Errorf("unknown method: %s", method)
 	}
@@ -546,6 +579,23 @@ func (s *Server) handleInitialize(ctx context.Context, ss *ServerSession, params
 
 	if s.opts.CompletionHandler != nil {
 		capabilities.Completion = &protocol.CompletionCapability{}
+	}
+
+	// Add Tasks capability (MCP 2025-11-25)
+	if s.opts.TasksEnabled {
+		capabilities.Tasks = &protocol.TasksCapability{}
+		if s.opts.TaskListHandler != nil {
+			capabilities.Tasks.List = &struct{}{}
+		}
+		if s.opts.TaskCancelHandler != nil {
+			capabilities.Tasks.Cancel = &struct{}{}
+		}
+		// Add tools/call task support if any tool supports it
+		capabilities.Tasks.Requests = &protocol.ServerTaskRequestsCapability{
+			Tools: &protocol.ToolsTaskCapability{
+				Call: &struct{}{},
+			},
+		}
 	}
 
 	return &protocol.InitializeResult{
@@ -855,4 +905,165 @@ func (s *Server) HandleMessage(ctx context.Context, msg *protocol.JSONRPCMessage
 	// Handle message
 	response := s.handleMessage(ctx, ss, msg)
 	return response, nil
+}
+
+// handleTasksGet handles the tasks/get request (MCP 2025-11-25)
+func (s *Server) handleTasksGet(ctx context.Context, ss *ServerSession, params json.RawMessage) (*protocol.GetTaskResult, error) {
+	var req protocol.GetTaskParams
+	if err := json.Unmarshal(params, &req); err != nil {
+		return nil, fmt.Errorf("invalid tasks/get params: %w", err)
+	}
+
+	if s.opts.TaskGetHandler != nil {
+		return s.opts.TaskGetHandler(ctx, &req)
+	}
+
+	// Default implementation: look up task in internal storage
+	s.mu.Lock()
+	st, exists := s.tasks[req.TaskID]
+	s.mu.Unlock()
+
+	if !exists {
+		return nil, protocol.NewMCPError(protocol.InvalidParams, "task not found", nil)
+	}
+
+	return &protocol.GetTaskResult{
+		Task: *st.task,
+	}, nil
+}
+
+// handleTasksList handles the tasks/list request (MCP 2025-11-25)
+func (s *Server) handleTasksList(ctx context.Context, ss *ServerSession, params json.RawMessage) (*protocol.ListTasksResult, error) {
+	var req protocol.ListTasksParams
+	if err := json.Unmarshal(params, &req); err != nil {
+		return nil, fmt.Errorf("invalid tasks/list params: %w", err)
+	}
+
+	if s.opts.TaskListHandler != nil {
+		return s.opts.TaskListHandler(ctx, &req)
+	}
+
+	// Default implementation: return all tasks from internal storage
+	s.mu.Lock()
+	tasks := make([]protocol.Task, 0, len(s.tasks))
+	for _, st := range s.tasks {
+		tasks = append(tasks, *st.task)
+	}
+	s.mu.Unlock()
+
+	return &protocol.ListTasksResult{
+		Tasks: tasks,
+	}, nil
+}
+
+// handleTasksCancel handles the tasks/cancel request (MCP 2025-11-25)
+func (s *Server) handleTasksCancel(ctx context.Context, ss *ServerSession, params json.RawMessage) (*protocol.CancelTaskResult, error) {
+	var req protocol.CancelTaskParams
+	if err := json.Unmarshal(params, &req); err != nil {
+		return nil, fmt.Errorf("invalid tasks/cancel params: %w", err)
+	}
+
+	if s.opts.TaskCancelHandler != nil {
+		return s.opts.TaskCancelHandler(ctx, &req)
+	}
+
+	// Default implementation: update task status to cancelled
+	s.mu.Lock()
+	st, exists := s.tasks[req.TaskID]
+	if exists {
+		st.task.Status = protocol.TaskStatusCancelled
+		st.task.StatusMessage = req.Reason
+	}
+	s.mu.Unlock()
+
+	if !exists {
+		return nil, protocol.NewMCPError(protocol.InvalidParams, "task not found", nil)
+	}
+
+	return &protocol.CancelTaskResult{
+		Task: *st.task,
+	}, nil
+}
+
+// handleTasksResult handles the tasks/result request (MCP 2025-11-25)
+// Per spec, this returns the original request's result type directly
+func (s *Server) handleTasksResult(ctx context.Context, ss *ServerSession, params json.RawMessage) (interface{}, error) {
+	var req protocol.TaskResultParams
+	if err := json.Unmarshal(params, &req); err != nil {
+		return nil, fmt.Errorf("invalid tasks/result params: %w", err)
+	}
+
+	if s.opts.TaskResultHandler != nil {
+		return s.opts.TaskResultHandler(ctx, &req)
+	}
+
+	// Default implementation: return task result from internal storage
+	s.mu.Lock()
+	st, exists := s.tasks[req.TaskID]
+	s.mu.Unlock()
+
+	if !exists {
+		return nil, protocol.NewMCPError(protocol.InvalidParams, "task not found", nil)
+	}
+
+	// Return the original result directly (e.g., CallToolResult)
+	return st.result, nil
+}
+
+// StoreTask stores a task in the server's internal storage (MCP 2025-11-25)
+func (s *Server) StoreTask(task *protocol.Task, result any) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.tasks[task.TaskID] = &serverTask{
+		task:   task,
+		result: result,
+	}
+}
+
+// UpdateTask updates a task in the server's internal storage (MCP 2025-11-25)
+func (s *Server) UpdateTask(taskID string, status protocol.TaskStatus, statusMessage string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	st, exists := s.tasks[taskID]
+	if !exists {
+		return protocol.NewMCPError(protocol.InvalidParams, "task not found", nil)
+	}
+
+	st.task.Status = status
+	st.task.StatusMessage = statusMessage
+	return nil
+}
+
+// SetTaskResult sets the result for a task (MCP 2025-11-25)
+func (s *Server) SetTaskResult(taskID string, result any) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	st, exists := s.tasks[taskID]
+	if !exists {
+		return protocol.NewMCPError(protocol.InvalidParams, "task not found", nil)
+	}
+
+	st.result = result
+	return nil
+}
+
+// RemoveTask removes a task from the server's internal storage (MCP 2025-11-25)
+func (s *Server) RemoveTask(taskID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.tasks, taskID)
+}
+
+// NotifyTaskStatus sends a task status notification to all sessions (MCP 2025-11-25)
+func (s *Server) NotifyTaskStatus(task *protocol.Task) {
+	params := &protocol.TaskStatusNotificationParams{
+		Task: *task,
+	}
+	for _, ss := range s.sessions {
+		if ss.conn != nil {
+			_ = ss.conn.SendNotification(context.Background(), protocol.NotificationTasksStatus, params)
+		}
+	}
 }

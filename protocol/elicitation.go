@@ -13,14 +13,23 @@ const (
 	ElicitationActionCancel  ElicitationAction = "cancel"
 )
 
+// ElicitationCreateParams represents the parameters for elicitation/create request
 type ElicitationCreateParams struct {
 	Message         string     `json:"message"`
 	RequestedSchema JSONSchema `json:"requestedSchema"`
 }
 
+// ElicitationResult represents the result of an elicitation request
 type ElicitationResult struct {
 	Action  ElicitationAction `json:"action"`
 	Content interface{}       `json:"content,omitempty"`
+}
+
+// ElicitationCompleteNotificationParams represents the parameters for
+// notifications/elicitation/complete notification (MCP 2025-11-25)
+// Sent when URL mode elicitation is completed
+type ElicitationCompleteNotificationParams struct {
+	ElicitationID string `json:"elicitationId"`
 }
 
 func NewElicitationCreateParams(message string, schema JSONSchema) *ElicitationCreateParams {

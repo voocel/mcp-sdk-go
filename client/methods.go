@@ -131,3 +131,50 @@ func (cs *ClientSession) NotifyProgress(ctx context.Context, params *protocol.Pr
 func (cs *ClientSession) NotifyCancelled(ctx context.Context, params *protocol.CancelledNotificationParams) error {
 	return cs.sendNotification(ctx, protocol.NotificationCancelled, params)
 }
+
+// GetTask retrieves a task from the server (MCP 2025-11-25)
+func (cs *ClientSession) GetTask(ctx context.Context, params *protocol.GetTaskParams) (*protocol.GetTaskResult, error) {
+	var result protocol.GetTaskResult
+	if err := cs.sendRequest(ctx, protocol.MethodTasksGet, params, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+// ListTasks lists tasks from the server (MCP 2025-11-25)
+func (cs *ClientSession) ListTasks(ctx context.Context, params *protocol.ListTasksParams) (*protocol.ListTasksResult, error) {
+	if params == nil {
+		params = &protocol.ListTasksParams{}
+	}
+	var result protocol.ListTasksResult
+	if err := cs.sendRequest(ctx, protocol.MethodTasksList, params, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+// CancelTask cancels a task on the server (MCP 2025-11-25)
+func (cs *ClientSession) CancelTask(ctx context.Context, params *protocol.CancelTaskParams) (*protocol.CancelTaskResult, error) {
+	var result protocol.CancelTaskResult
+	if err := cs.sendRequest(ctx, protocol.MethodTasksCancel, params, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+// GetTaskResult retrieves the result of a task from the server (MCP 2025-11-25)
+// Per spec, this returns the original request's result type (e.g., CallToolResult)
+// The caller should unmarshal the result into the appropriate type
+func (cs *ClientSession) GetTaskResult(ctx context.Context, params *protocol.TaskResultParams, result interface{}) error {
+	return cs.sendRequest(ctx, protocol.MethodTasksResult, params, result)
+}
+
+// CallToolAsTask invokes a tool on the server as a task (MCP 2025-11-25)
+// This returns a CreateTaskResult instead of waiting for the tool to complete
+func (cs *ClientSession) CallToolAsTask(ctx context.Context, params *protocol.CallToolParams) (*protocol.CreateTaskResult, error) {
+	var result protocol.CreateTaskResult
+	if err := cs.sendRequest(ctx, protocol.MethodToolsCall, params, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}

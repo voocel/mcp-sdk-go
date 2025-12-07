@@ -36,9 +36,18 @@ type ClientOptions struct {
 	LoggingMessageHandler       func(context.Context, *protocol.LoggingMessageParams)
 	ProgressNotificationHandler func(context.Context, *protocol.ProgressNotificationParams)
 
+	// TaskStatusHandler handles notifications/tasks/status from the server (MCP 2025-11-25)
+	TaskStatusHandler func(context.Context, *protocol.TaskStatusNotificationParams)
+
 	// KeepAlive defines the interval for periodic "ping" requests
 	// If the peer fails to respond to a keepalive-initiated ping, the session will automatically close
 	KeepAlive time.Duration
+
+	// Tasks capability options (MCP 2025-11-25)
+	TasksEnabled bool // Enable tasks support for sampling and elicitation
+
+	// SamplingToolsEnabled enables tool use in sampling requests (MCP 2025-11-25)
+	SamplingToolsEnabled bool
 }
 
 type Client struct {
@@ -74,9 +83,33 @@ func (c *Client) capabilities() *protocol.ClientCapabilities {
 	}
 	if c.opts.CreateMessageHandler != nil {
 		caps.Sampling = &protocol.SamplingCapability{}
+		// Add tool use support if enabled (MCP 2025-11-25)
+		if c.opts.SamplingToolsEnabled {
+			caps.Sampling.Tools = &struct{}{}
+		}
 	}
 	if c.opts.ElicitationHandler != nil {
 		caps.Elicitation = &protocol.ElicitationCapability{}
+	}
+	// Add Tasks capability (MCP 2025-11-25)
+	if c.opts.TasksEnabled {
+		caps.Tasks = &protocol.ClientTasksCapability{
+			List:   &struct{}{},
+			Cancel: &struct{}{},
+		}
+		if c.opts.CreateMessageHandler != nil || c.opts.ElicitationHandler != nil {
+			caps.Tasks.Requests = &protocol.ClientTaskRequestsCapability{}
+			if c.opts.CreateMessageHandler != nil {
+				caps.Tasks.Requests.Sampling = &protocol.SamplingTaskCapability{
+					CreateMessage: &struct{}{},
+				}
+			}
+			if c.opts.ElicitationHandler != nil {
+				caps.Tasks.Requests.Elicitation = &protocol.ElicitationTaskCapability{
+					Create: &struct{}{},
+				}
+			}
+		}
 	}
 	return caps
 }

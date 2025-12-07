@@ -15,12 +15,20 @@ type ToolParameter struct {
 	Schema      JSONSchema `json:"schema,omitempty"`
 }
 
+// ToolExecution specifies execution behavior for a tool (MCP 2025-11-25)
+type ToolExecution struct {
+	// TaskSupport indicates the level of task support for this tool
+	// Can be "required", "optional", or "forbidden"
+	TaskSupport TaskSupport `json:"taskSupport,omitempty"`
+}
+
 type Tool struct {
 	Name         string         `json:"name"`
 	Title        string         `json:"title,omitempty"` // MCP 2025-06-18: Human-friendly title
 	Description  string         `json:"description,omitempty"`
 	InputSchema  JSONSchema     `json:"inputSchema"`
 	OutputSchema JSONSchema     `json:"outputSchema,omitempty"` // MCP 2025-06-18
+	Execution    *ToolExecution `json:"execution,omitempty"`    // MCP 2025-11-25: Execution behavior
 	Meta         map[string]any `json:"_meta,omitempty"`        // MCP 2025-06-18: Extended metadata
 }
 
@@ -32,6 +40,7 @@ type CallToolParams struct {
 	Meta      map[string]any `json:"_meta,omitempty"`
 	Name      string         `json:"name"`
 	Arguments map[string]any `json:"arguments"`
+	Task      *TaskMetadata  `json:"task,omitempty"` // MCP 2025-11-25: Task metadata for task-augmented requests
 }
 
 type ListToolsParams struct {
@@ -85,6 +94,7 @@ type ListToolsResult struct {
 type CallToolRequest struct {
 	Name      string         `json:"name"`
 	Arguments map[string]any `json:"arguments,omitempty"`
+	Task      *TaskMetadata  `json:"task,omitempty"` // MCP 2025-11-25: Task metadata for task-augmented requests
 }
 
 type ToolsListChangedNotification struct{}
