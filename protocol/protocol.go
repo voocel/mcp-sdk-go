@@ -359,11 +359,11 @@ const (
 )
 
 type ClientCapabilities struct {
-	Roots        *RootsCapability        `json:"roots,omitempty"`
-	Sampling     *SamplingCapability     `json:"sampling,omitempty"`
-	Elicitation  *ElicitationCapability  `json:"elicitation,omitempty"`
-	Tasks        *ClientTasksCapability  `json:"tasks,omitempty"` // MCP 2025-11-25
-	Experimental map[string]interface{}  `json:"experimental,omitempty"`
+	Roots        *RootsCapability       `json:"roots,omitempty"`
+	Sampling     *SamplingCapability    `json:"sampling,omitempty"`
+	Elicitation  *ElicitationCapability `json:"elicitation,omitempty"`
+	Tasks        *ClientTasksCapability `json:"tasks,omitempty"` // MCP 2025-11-25
+	Experimental map[string]interface{} `json:"experimental,omitempty"`
 }
 
 type ServerCapabilities struct {
@@ -372,7 +372,7 @@ type ServerCapabilities struct {
 	Prompts      *PromptsCapability     `json:"prompts,omitempty"`
 	Logging      *LoggingCapability     `json:"logging,omitempty"`
 	Completion   *CompletionCapability  `json:"completion,omitempty"` // MCP 2025-06-18: Parameter auto-completion
-	Tasks        *TasksCapability       `json:"tasks,omitempty"`       // MCP 2025-11-25
+	Tasks        *TasksCapability       `json:"tasks,omitempty"`      // MCP 2025-11-25
 	Experimental map[string]interface{} `json:"experimental,omitempty"`
 }
 
@@ -392,7 +392,6 @@ type ToolsCapability struct {
 type ResourcesCapability struct {
 	Subscribe   bool `json:"subscribe,omitempty"`
 	ListChanged bool `json:"listChanged,omitempty"`
-	Templates   bool `json:"templates,omitempty"`
 }
 
 type PromptsCapability struct {

@@ -3,10 +3,12 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/voocel/mcp-sdk-go/protocol"
 	"github.com/voocel/mcp-sdk-go/transport"
 )
@@ -29,8 +31,12 @@ type Server struct {
 
 // serverTask represents a task stored in the server (MCP 2025-11-25)
 type serverTask struct {
-	task   *protocol.Task
-	result any
+	task     *protocol.Task
+	result   any
+	rpcError *protocol.JSONRPCError
+	cancel   context.CancelFunc
+	done     chan struct{}
+	doneOnce sync.Once
 }
 
 type ServerOptions struct {
@@ -153,7 +159,6 @@ func (s *Server) AddTool(t *protocol.Tool, h ToolHandler) {
 	}
 
 	s.mu.Lock()
-	defer s.mu.Unlock()
 
 	// Apply middleware
 	wrappedHandler := applyMiddleware(h, s.middlewares)
@@ -163,83 +168,128 @@ func (s *Server) AddTool(t *protocol.Tool, h ToolHandler) {
 		handler: wrappedHandler,
 	}
 
+	sessions := make([]*ServerSession, len(s.sessions))
+	copy(sessions, s.sessions)
+	s.mu.Unlock()
+
 	// Notify all sessions that the tool list has changed
-	s.notifyToolListChanged()
+	notifyToolListChanged(sessions)
 }
 
 func (s *Server) RemoveTool(name string) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 
+	var changed bool
 	if _, exists := s.tools[name]; exists {
 		delete(s.tools, name)
-		s.notifyToolListChanged()
+		changed = true
+	}
+
+	sessions := make([]*ServerSession, len(s.sessions))
+	copy(sessions, s.sessions)
+	s.mu.Unlock()
+
+	if changed {
+		notifyToolListChanged(sessions)
 	}
 }
 
 func (s *Server) AddResource(r *protocol.Resource, h ResourceHandler) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 
 	s.resources[r.URI] = &serverResource{
 		resource: r,
 		handler:  h,
 	}
 
-	s.notifyResourceListChanged()
+	sessions := make([]*ServerSession, len(s.sessions))
+	copy(sessions, s.sessions)
+	s.mu.Unlock()
+
+	notifyResourceListChanged(sessions)
 }
 
 func (s *Server) RemoveResource(uri string) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 
+	var changed bool
 	if _, exists := s.resources[uri]; exists {
 		delete(s.resources, uri)
-		s.notifyResourceListChanged()
+		changed = true
+	}
+
+	sessions := make([]*ServerSession, len(s.sessions))
+	copy(sessions, s.sessions)
+	s.mu.Unlock()
+
+	if changed {
+		notifyResourceListChanged(sessions)
 	}
 }
 
 func (s *Server) AddResourceTemplate(t *protocol.ResourceTemplate, h ResourceHandler) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 
 	s.resourceTemplates[t.URITemplate] = &serverResourceTemplate{
 		template: t,
 		handler:  h,
 	}
 
-	s.notifyResourceTemplateListChanged()
+	sessions := make([]*ServerSession, len(s.sessions))
+	copy(sessions, s.sessions)
+	s.mu.Unlock()
+
+	notifyResourceListChanged(sessions)
 }
 
 func (s *Server) RemoveResourceTemplate(uriTemplate string) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 
+	var changed bool
 	if _, exists := s.resourceTemplates[uriTemplate]; exists {
 		delete(s.resourceTemplates, uriTemplate)
-		s.notifyResourceTemplateListChanged()
+		changed = true
+	}
+
+	sessions := make([]*ServerSession, len(s.sessions))
+	copy(sessions, s.sessions)
+	s.mu.Unlock()
+
+	if changed {
+		notifyResourceListChanged(sessions)
 	}
 }
 
 func (s *Server) AddPrompt(p *protocol.Prompt, h PromptHandler) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 
 	s.prompts[p.Name] = &serverPrompt{
 		prompt:  p,
 		handler: h,
 	}
 
-	s.notifyPromptListChanged()
+	sessions := make([]*ServerSession, len(s.sessions))
+	copy(sessions, s.sessions)
+	s.mu.Unlock()
+
+	notifyPromptListChanged(sessions)
 }
 
 func (s *Server) RemovePrompt(name string) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 
+	var changed bool
 	if _, exists := s.prompts[name]; exists {
 		delete(s.prompts, name)
-		s.notifyPromptListChanged()
+		changed = true
+	}
+
+	sessions := make([]*ServerSession, len(s.sessions))
+	copy(sessions, s.sessions)
+	s.mu.Unlock()
+
+	if changed {
+		notifyPromptListChanged(sessions)
 	}
 }
 
@@ -308,6 +358,57 @@ func (s *Server) Connect(ctx context.Context, t transport.Transport, opts *Serve
 	return ss, nil
 }
 
+func jsonRPCErrorFrom(err error) *protocol.JSONRPCError {
+	if err == nil {
+		return nil
+	}
+
+	// Preserve MCP error codes when available.
+	var mcpErr *protocol.MCPError
+	if errors.As(err, &mcpErr) {
+		return &protocol.JSONRPCError{
+			Code:    mcpErr.Code,
+			Message: mcpErr.Message,
+			Data:    mcpErr.Data,
+		}
+	}
+
+	return &protocol.JSONRPCError{
+		Code:    protocol.InternalError,
+		Message: err.Error(),
+	}
+}
+
+func relatedTaskMeta(taskID string) map[string]any {
+	return map[string]any{
+		"io.modelcontextprotocol/related-task": map[string]any{
+			"taskId": taskID,
+		},
+	}
+}
+
+func mergeMap(dst map[string]any, src map[string]any) map[string]any {
+	if dst == nil && src == nil {
+		return nil
+	}
+	if dst == nil {
+		dst = make(map[string]any, len(src))
+	}
+	for k, v := range src {
+		dst[k] = v
+	}
+	return dst
+}
+
+func isTerminalTaskStatus(status protocol.TaskStatus) bool {
+	switch status {
+	case protocol.TaskStatusCompleted, protocol.TaskStatusFailed, protocol.TaskStatusCancelled:
+		return true
+	default:
+		return false
+	}
+}
+
 // handleConnection handles the message loop for a connection
 func (s *Server) handleConnection(ctx context.Context, ss *ServerSession, conn Connection) error {
 	defer func() {
@@ -374,10 +475,7 @@ func (s *Server) handleMessage(ctx context.Context, ss *ServerSession, msg *prot
 			return &protocol.JSONRPCMessage{
 				JSONRPC: "2.0",
 				ID:      msg.ID,
-				Error: &protocol.JSONRPCError{
-					Code:    protocol.InternalError,
-					Message: err.Error(),
-				},
+				Error:   jsonRPCErrorFrom(err),
 			}
 		}
 
@@ -427,30 +525,20 @@ type ServerSessionOptions struct {
 	onClose func()
 }
 
-// notifyToolListChanged notifies all sessions that the tool list has changed
-func (s *Server) notifyToolListChanged() {
-	for _, ss := range s.sessions {
+func notifyToolListChanged(sessions []*ServerSession) {
+	for _, ss := range sessions {
 		_ = ss.conn.SendNotification(context.Background(), protocol.NotificationToolsListChanged, &protocol.ToolListChangedParams{})
 	}
 }
 
-// notifyResourceListChanged notifies all sessions that the resource list has changed
-func (s *Server) notifyResourceListChanged() {
-	for _, ss := range s.sessions {
+func notifyResourceListChanged(sessions []*ServerSession) {
+	for _, ss := range sessions {
 		_ = ss.conn.SendNotification(context.Background(), protocol.NotificationResourcesListChanged, &protocol.ResourceListChangedParams{})
 	}
 }
 
-// notifyResourceTemplateListChanged notifies all sessions that the resource template list has changed
-func (s *Server) notifyResourceTemplateListChanged() {
-	for _, ss := range s.sessions {
-		_ = ss.conn.SendNotification(context.Background(), protocol.NotificationResourcesTemplatesListChanged, &protocol.ResourceTemplateListChangedParams{})
-	}
-}
-
-// notifyPromptListChanged notifies all sessions that the prompt list has changed
-func (s *Server) notifyPromptListChanged() {
-	for _, ss := range s.sessions {
+func notifyPromptListChanged(sessions []*ServerSession) {
+	for _, ss := range sessions {
 		_ = ss.conn.SendNotification(context.Background(), protocol.NotificationPromptsListChanged, &protocol.PromptListChangedParams{})
 	}
 }
@@ -514,15 +602,27 @@ func (s *Server) handleRequest(ctx context.Context, ss *ServerSession, method st
 		return s.handleSetLoggingLevel(ctx, ss, params)
 	// Tasks methods (MCP 2025-11-25)
 	case protocol.MethodTasksGet:
+		if !s.opts.TasksEnabled {
+			return nil, protocol.NewMCPError(protocol.MethodNotFound, "Method not found", map[string]any{"method": method})
+		}
 		return s.handleTasksGet(ctx, ss, params)
 	case protocol.MethodTasksList:
+		if !s.opts.TasksEnabled {
+			return nil, protocol.NewMCPError(protocol.MethodNotFound, "Method not found", map[string]any{"method": method})
+		}
 		return s.handleTasksList(ctx, ss, params)
 	case protocol.MethodTasksCancel:
+		if !s.opts.TasksEnabled {
+			return nil, protocol.NewMCPError(protocol.MethodNotFound, "Method not found", map[string]any{"method": method})
+		}
 		return s.handleTasksCancel(ctx, ss, params)
 	case protocol.MethodTasksResult:
+		if !s.opts.TasksEnabled {
+			return nil, protocol.NewMCPError(protocol.MethodNotFound, "Method not found", map[string]any{"method": method})
+		}
 		return s.handleTasksResult(ctx, ss, params)
 	default:
-		return nil, fmt.Errorf("unknown method: %s", method)
+		return nil, protocol.NewMCPError(protocol.MethodNotFound, "Method not found", map[string]any{"method": method})
 	}
 }
 
@@ -546,12 +646,14 @@ func (s *Server) handleNotification(ctx context.Context, ss *ServerSession, meth
 func (s *Server) handleInitialize(ctx context.Context, ss *ServerSession, params json.RawMessage) (*protocol.InitializeResult, error) {
 	var req protocol.InitializeParams
 	if err := json.Unmarshal(params, &req); err != nil {
-		return nil, fmt.Errorf("invalid initialize params: %w", err)
+		return nil, protocol.NewMCPError(protocol.InvalidParams, "Invalid params", map[string]any{"method": protocol.MethodInitialize})
 	}
 
 	if !protocol.IsVersionSupported(req.ProtocolVersion) {
-		return nil, fmt.Errorf("unsupported protocol version: %s (supported: %v)",
-			req.ProtocolVersion, protocol.GetSupportedVersions())
+		return nil, protocol.NewMCPError(protocol.InvalidParams, "unsupported protocol version", map[string]any{
+			"protocolVersion":   req.ProtocolVersion,
+			"supportedVersions": protocol.GetSupportedVersions(),
+		})
 	}
 
 	ss.updateState(func(state *ServerSessionState) {
@@ -561,16 +663,21 @@ func (s *Server) handleInitialize(ctx context.Context, ss *ServerSession, params
 	capabilities := protocol.ServerCapabilities{}
 
 	s.mu.Lock()
-	if len(s.tools) > 0 {
+	hasTools := len(s.tools) > 0
+	hasResources := len(s.resources) > 0 || len(s.resourceTemplates) > 0
+	hasPrompts := len(s.prompts) > 0
+	subscribeSupported := s.opts.SubscribeHandler != nil && s.opts.UnsubscribeHandler != nil
+
+	if hasTools {
 		capabilities.Tools = &protocol.ToolsCapability{ListChanged: true}
 	}
-	if len(s.resources) > 0 {
+	if hasResources {
 		capabilities.Resources = &protocol.ResourcesCapability{
 			ListChanged: true,
-			Subscribe:   true,
+			Subscribe:   subscribeSupported,
 		}
 	}
-	if len(s.prompts) > 0 {
+	if hasPrompts {
 		capabilities.Prompts = &protocol.PromptsCapability{ListChanged: true}
 	}
 	s.mu.Unlock()
@@ -584,13 +691,11 @@ func (s *Server) handleInitialize(ctx context.Context, ss *ServerSession, params
 	// Add Tasks capability (MCP 2025-11-25)
 	if s.opts.TasksEnabled {
 		capabilities.Tasks = &protocol.TasksCapability{}
-		if s.opts.TaskListHandler != nil {
-			capabilities.Tasks.List = &struct{}{}
-		}
-		if s.opts.TaskCancelHandler != nil {
-			capabilities.Tasks.Cancel = &struct{}{}
-		}
-		// Add tools/call task support if any tool supports it
+		// Default implementations exist, so these are always available when TasksEnabled.
+		capabilities.Tasks.List = &struct{}{}
+		capabilities.Tasks.Cancel = &struct{}{}
+
+		// Server supports task augmentation for tools/call (per-tool allow/deny is negotiated via tool.execution.taskSupport).
 		capabilities.Tasks.Requests = &protocol.ServerTaskRequestsCapability{
 			Tools: &protocol.ToolsTaskCapability{
 				Call: &struct{}{},
@@ -645,10 +750,10 @@ func (s *Server) handleListTools(ctx context.Context, ss *ServerSession, params 
 }
 
 // handleCallTool handles the tools/call request
-func (s *Server) handleCallTool(ctx context.Context, ss *ServerSession, params json.RawMessage) (*protocol.CallToolResult, error) {
+func (s *Server) handleCallTool(ctx context.Context, ss *ServerSession, params json.RawMessage) (interface{}, error) {
 	var req protocol.CallToolParams
 	if err := json.Unmarshal(params, &req); err != nil {
-		return nil, fmt.Errorf("invalid call tool params: %w", err)
+		return nil, protocol.NewMCPError(protocol.InvalidParams, "Invalid params", map[string]any{"method": protocol.MethodToolsCall})
 	}
 
 	s.mu.Lock()
@@ -656,7 +761,129 @@ func (s *Server) handleCallTool(ctx context.Context, ss *ServerSession, params j
 	s.mu.Unlock()
 
 	if !exists {
-		return protocol.NewToolResultError(fmt.Sprintf("tool not found: %s", req.Name)), nil
+		return nil, protocol.NewMCPError(protocol.InvalidParams, fmt.Sprintf("Unknown tool: %s", req.Name), nil)
+	}
+
+	var taskSupport protocol.TaskSupport
+	if st.tool.Execution != nil {
+		taskSupport = st.tool.Execution.TaskSupport
+	}
+
+	// Tool-level task negotiation (MCP 2025-11-25)
+	//
+	// Default behavior: task augmentation is forbidden unless explicitly enabled.
+	if req.Task != nil {
+		if !s.opts.TasksEnabled {
+			return nil, protocol.NewMCPError(protocol.MethodNotFound, "Method not found", map[string]any{"method": protocol.MethodToolsCall})
+		}
+		// If taskSupport is not present or forbidden, servers SHOULD return -32601.
+		if st.tool.Execution == nil || taskSupport == "" || taskSupport == protocol.TaskSupportForbidden {
+			return nil, protocol.NewMCPError(protocol.MethodNotFound, "Method not found", map[string]any{"method": protocol.MethodToolsCall})
+		}
+	} else {
+		// If taskSupport is required, servers MUST return -32601 if client does not attempt task augmentation.
+		if taskSupport == protocol.TaskSupportRequired {
+			return nil, protocol.NewMCPError(protocol.MethodNotFound, "Method not found", map[string]any{"method": protocol.MethodToolsCall})
+		}
+	}
+
+	// Task-augmented tools/call (MCP 2025-11-25)
+	if req.Task != nil {
+		now := time.Now().UTC().Format(time.RFC3339Nano)
+		taskID := uuid.NewString()
+		task := &protocol.Task{
+			TaskID:        taskID,
+			Status:        protocol.TaskStatusWorking,
+			CreatedAt:     now,
+			LastUpdatedAt: now,
+			TTL:           req.Task.TTL,
+		}
+
+		taskCtx, cancel := context.WithCancel(context.Background())
+		taskCtx = contextWithTaskID(taskCtx, taskID)
+		meta := relatedTaskMeta(taskID)
+
+		s.mu.Lock()
+		s.tasks[taskID] = &serverTask{
+			task:     task,
+			result:   nil,
+			rpcError: nil,
+			cancel:   cancel,
+			done:     make(chan struct{}),
+		}
+		s.mu.Unlock()
+
+		s.NotifyTaskStatus(task)
+
+		toolReq := &CallToolRequest{
+			Session: ss,
+			Params:  &req,
+		}
+
+		go func() {
+			defer cancel()
+			result, err := st.handler(taskCtx, toolReq)
+
+			s.mu.Lock()
+			stored := s.tasks[taskID]
+			if stored == nil || stored.task == nil {
+				s.mu.Unlock()
+				return
+			}
+
+			// Once cancelled, task MUST remain cancelled even if execution continues.
+			if stored.task.Status == protocol.TaskStatusCancelled {
+				stored.doneOnce.Do(func() {
+					if stored.done != nil {
+						close(stored.done)
+					}
+				})
+				s.mu.Unlock()
+				return
+			}
+
+			if err != nil {
+				stored.rpcError = jsonRPCErrorFrom(err)
+				stored.result = nil
+				stored.task.Status = protocol.TaskStatusFailed
+				stored.task.StatusMessage = err.Error()
+				stored.task.LastUpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+				stored.doneOnce.Do(func() {
+					if stored.done != nil {
+						close(stored.done)
+					}
+				})
+				taskCopy := *stored.task
+				s.mu.Unlock()
+				s.NotifyTaskStatus(&taskCopy)
+				return
+			}
+
+			// Per spec: tool result with isError=true should lead to failed task status.
+			if result != nil {
+				result.Meta = mergeMap(result.Meta, meta)
+			}
+			stored.result = result
+			stored.rpcError = nil
+			if result != nil && result.IsError {
+				stored.task.Status = protocol.TaskStatusFailed
+			} else {
+				stored.task.Status = protocol.TaskStatusCompleted
+			}
+			stored.task.StatusMessage = ""
+			stored.task.LastUpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+			stored.doneOnce.Do(func() {
+				if stored.done != nil {
+					close(stored.done)
+				}
+			})
+			taskCopy := *stored.task
+			s.mu.Unlock()
+
+			s.NotifyTaskStatus(&taskCopy)
+		}()
+
+		return &protocol.CreateTaskResult{Meta: meta, Task: *task}, nil
 	}
 
 	toolReq := &CallToolRequest{
@@ -701,7 +928,7 @@ func (s *Server) handleListResourceTemplates(ctx context.Context, ss *ServerSess
 func (s *Server) handleReadResource(ctx context.Context, ss *ServerSession, params json.RawMessage) (*protocol.ReadResourceResult, error) {
 	var req protocol.ReadResourceParams
 	if err := json.Unmarshal(params, &req); err != nil {
-		return nil, fmt.Errorf("invalid read resource params: %w", err)
+		return nil, protocol.NewMCPError(protocol.InvalidParams, "Invalid params", map[string]any{"method": protocol.MethodResourcesRead})
 	}
 
 	s.mu.Lock()
@@ -709,7 +936,7 @@ func (s *Server) handleReadResource(ctx context.Context, ss *ServerSession, para
 	s.mu.Unlock()
 
 	if !exists {
-		return nil, fmt.Errorf("resource not found: %s", req.URI)
+		return nil, protocol.NewMCPError(protocol.ResourceNotFound, "resource not found", map[string]any{"uri": req.URI})
 	}
 
 	resourceReq := &ReadResourceRequest{
@@ -722,13 +949,13 @@ func (s *Server) handleReadResource(ctx context.Context, ss *ServerSession, para
 
 // handleSubscribe handles the resources/subscribe request
 func (s *Server) handleSubscribe(ctx context.Context, ss *ServerSession, params json.RawMessage) (*protocol.EmptyResult, error) {
-	if s.opts.SubscribeHandler == nil {
-		return nil, fmt.Errorf("resource subscription not supported")
+	if s.opts.SubscribeHandler == nil || s.opts.UnsubscribeHandler == nil {
+		return nil, protocol.NewMCPError(protocol.MethodNotFound, "Method not found", map[string]any{"method": protocol.MethodResourcesSubscribe})
 	}
 
 	var req protocol.SubscribeParams
 	if err := json.Unmarshal(params, &req); err != nil {
-		return nil, fmt.Errorf("invalid subscribe params: %w", err)
+		return nil, protocol.NewMCPError(protocol.InvalidParams, "Invalid params", map[string]any{"method": protocol.MethodResourcesSubscribe})
 	}
 
 	if err := s.opts.SubscribeHandler(ctx, &req); err != nil {
@@ -747,13 +974,13 @@ func (s *Server) handleSubscribe(ctx context.Context, ss *ServerSession, params 
 
 // handleUnsubscribe handles the resources/unsubscribe request
 func (s *Server) handleUnsubscribe(ctx context.Context, ss *ServerSession, params json.RawMessage) (*protocol.EmptyResult, error) {
-	if s.opts.UnsubscribeHandler == nil {
-		return nil, fmt.Errorf("resource unsubscription not supported")
+	if s.opts.SubscribeHandler == nil || s.opts.UnsubscribeHandler == nil {
+		return nil, protocol.NewMCPError(protocol.MethodNotFound, "Method not found", map[string]any{"method": protocol.MethodResourcesUnsubscribe})
 	}
 
 	var req protocol.UnsubscribeParams
 	if err := json.Unmarshal(params, &req); err != nil {
-		return nil, fmt.Errorf("invalid unsubscribe params: %w", err)
+		return nil, protocol.NewMCPError(protocol.InvalidParams, "Invalid params", map[string]any{"method": protocol.MethodResourcesUnsubscribe})
 	}
 
 	if err := s.opts.UnsubscribeHandler(ctx, &req); err != nil {
@@ -788,7 +1015,7 @@ func (s *Server) handleListPrompts(ctx context.Context, ss *ServerSession, param
 func (s *Server) handleGetPrompt(ctx context.Context, ss *ServerSession, params json.RawMessage) (*protocol.GetPromptResult, error) {
 	var req protocol.GetPromptParams
 	if err := json.Unmarshal(params, &req); err != nil {
-		return nil, fmt.Errorf("invalid get prompt params: %w", err)
+		return nil, protocol.NewMCPError(protocol.InvalidParams, "Invalid params", map[string]any{"method": protocol.MethodPromptsGet})
 	}
 
 	s.mu.Lock()
@@ -796,7 +1023,7 @@ func (s *Server) handleGetPrompt(ctx context.Context, ss *ServerSession, params 
 	s.mu.Unlock()
 
 	if !exists {
-		return nil, fmt.Errorf("prompt not found: %s", req.Name)
+		return nil, protocol.NewMCPError(protocol.PromptNotFound, "prompt not found", map[string]any{"name": req.Name})
 	}
 
 	promptReq := &GetPromptRequest{
@@ -810,12 +1037,12 @@ func (s *Server) handleGetPrompt(ctx context.Context, ss *ServerSession, params 
 // handleComplete handles the completion/complete request
 func (s *Server) handleComplete(ctx context.Context, ss *ServerSession, params json.RawMessage) (*protocol.CompleteResult, error) {
 	if s.opts.CompletionHandler == nil {
-		return nil, fmt.Errorf("completion not supported")
+		return nil, protocol.NewMCPError(protocol.MethodNotFound, "Method not found", map[string]any{"method": protocol.MethodCompletionComplete})
 	}
 
 	var req protocol.CompleteRequest
 	if err := json.Unmarshal(params, &req); err != nil {
-		return nil, fmt.Errorf("invalid complete params: %w", err)
+		return nil, protocol.NewMCPError(protocol.InvalidParams, "Invalid params", map[string]any{"method": protocol.MethodCompletionComplete})
 	}
 
 	return s.opts.CompletionHandler(ctx, &req)
@@ -877,7 +1104,7 @@ func (s *Server) handleRootsListChanged(ctx context.Context, ss *ServerSession, 
 func (s *Server) handleSetLoggingLevel(ctx context.Context, ss *ServerSession, params json.RawMessage) (*protocol.EmptyResult, error) {
 	var req protocol.SetLoggingLevelParams
 	if err := json.Unmarshal(params, &req); err != nil {
-		return nil, fmt.Errorf("invalid set level params: %w", err)
+		return nil, protocol.NewMCPError(protocol.InvalidParams, "Invalid params", map[string]any{"method": protocol.MethodLoggingSetLevel})
 	}
 
 	ss.updateState(func(state *ServerSessionState) {
@@ -911,7 +1138,7 @@ func (s *Server) HandleMessage(ctx context.Context, msg *protocol.JSONRPCMessage
 func (s *Server) handleTasksGet(ctx context.Context, ss *ServerSession, params json.RawMessage) (*protocol.GetTaskResult, error) {
 	var req protocol.GetTaskParams
 	if err := json.Unmarshal(params, &req); err != nil {
-		return nil, fmt.Errorf("invalid tasks/get params: %w", err)
+		return nil, protocol.NewMCPError(protocol.InvalidParams, "Invalid params", map[string]any{"method": protocol.MethodTasksGet})
 	}
 
 	if s.opts.TaskGetHandler != nil {
@@ -936,7 +1163,7 @@ func (s *Server) handleTasksGet(ctx context.Context, ss *ServerSession, params j
 func (s *Server) handleTasksList(ctx context.Context, ss *ServerSession, params json.RawMessage) (*protocol.ListTasksResult, error) {
 	var req protocol.ListTasksParams
 	if err := json.Unmarshal(params, &req); err != nil {
-		return nil, fmt.Errorf("invalid tasks/list params: %w", err)
+		return nil, protocol.NewMCPError(protocol.InvalidParams, "Invalid params", map[string]any{"method": protocol.MethodTasksList})
 	}
 
 	if s.opts.TaskListHandler != nil {
@@ -960,29 +1187,54 @@ func (s *Server) handleTasksList(ctx context.Context, ss *ServerSession, params 
 func (s *Server) handleTasksCancel(ctx context.Context, ss *ServerSession, params json.RawMessage) (*protocol.CancelTaskResult, error) {
 	var req protocol.CancelTaskParams
 	if err := json.Unmarshal(params, &req); err != nil {
-		return nil, fmt.Errorf("invalid tasks/cancel params: %w", err)
+		return nil, protocol.NewMCPError(protocol.InvalidParams, "Invalid params", map[string]any{"method": protocol.MethodTasksCancel})
 	}
 
 	if s.opts.TaskCancelHandler != nil {
 		return s.opts.TaskCancelHandler(ctx, &req)
 	}
 
-	// Default implementation: update task status to cancelled
 	s.mu.Lock()
-	st, exists := s.tasks[req.TaskID]
-	if exists {
-		st.task.Status = protocol.TaskStatusCancelled
-		st.task.StatusMessage = req.Reason
-	}
-	s.mu.Unlock()
-
-	if !exists {
+	st := s.tasks[req.TaskID]
+	if st == nil || st.task == nil {
+		s.mu.Unlock()
 		return nil, protocol.NewMCPError(protocol.InvalidParams, "task not found", nil)
 	}
+	if isTerminalTaskStatus(st.task.Status) {
+		s.mu.Unlock()
+		return nil, protocol.NewMCPError(protocol.InvalidParams, fmt.Sprintf("Cannot cancel task: already in terminal status %q", st.task.Status), nil)
+	}
 
-	return &protocol.CancelTaskResult{
-		Task: *st.task,
-	}, nil
+	st.task.Status = protocol.TaskStatusCancelled
+	st.task.StatusMessage = req.Reason
+	st.task.LastUpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+	st.result = nil
+	// tasks/result returns the original request's JSON-RPC error when a task is cancelled.
+	// MCP does not define a dedicated cancellation error code, so we use -32603 with a stable message.
+	data := map[string]any(nil)
+	if req.Reason != "" {
+		data = map[string]any{"reason": req.Reason}
+	}
+	st.rpcError = &protocol.JSONRPCError{
+		Code:    protocol.InternalError,
+		Message: "Request cancelled",
+		Data:    data,
+	}
+	st.doneOnce.Do(func() {
+		if st.done != nil {
+			close(st.done)
+		}
+	})
+	cancel := st.cancel
+	taskCopy := *st.task
+	s.mu.Unlock()
+
+	if cancel != nil {
+		cancel()
+	}
+	s.NotifyTaskStatus(&taskCopy)
+
+	return &protocol.CancelTaskResult{Task: taskCopy}, nil
 }
 
 // handleTasksResult handles the tasks/result request (MCP 2025-11-25)
@@ -990,7 +1242,7 @@ func (s *Server) handleTasksCancel(ctx context.Context, ss *ServerSession, param
 func (s *Server) handleTasksResult(ctx context.Context, ss *ServerSession, params json.RawMessage) (interface{}, error) {
 	var req protocol.TaskResultParams
 	if err := json.Unmarshal(params, &req); err != nil {
-		return nil, fmt.Errorf("invalid tasks/result params: %w", err)
+		return nil, protocol.NewMCPError(protocol.InvalidParams, "Invalid params", map[string]any{"method": protocol.MethodTasksResult})
 	}
 
 	if s.opts.TaskResultHandler != nil {
@@ -999,25 +1251,75 @@ func (s *Server) handleTasksResult(ctx context.Context, ss *ServerSession, param
 
 	// Default implementation: return task result from internal storage
 	s.mu.Lock()
-	st, exists := s.tasks[req.TaskID]
-	s.mu.Unlock()
-
-	if !exists {
+	st := s.tasks[req.TaskID]
+	if st == nil || st.task == nil {
+		s.mu.Unlock()
 		return nil, protocol.NewMCPError(protocol.InvalidParams, "task not found", nil)
 	}
+	status := st.task.Status
+	done := st.done
+	s.mu.Unlock()
 
-	// Return the original result directly (e.g., CallToolResult)
-	return st.result, nil
+	// Must block until terminal status.
+	if !isTerminalTaskStatus(status) {
+		if done == nil {
+			return nil, protocol.NewMCPError(protocol.InternalError, "task result not available", nil)
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-done:
+		}
+	}
+
+	s.mu.Lock()
+	st = s.tasks[req.TaskID]
+	if st == nil || st.task == nil {
+		s.mu.Unlock()
+		return nil, protocol.NewMCPError(protocol.InvalidParams, "task not found", nil)
+	}
+	taskID := st.task.TaskID
+	rpcErr := st.rpcError
+	result := st.result
+	s.mu.Unlock()
+
+	meta := relatedTaskMeta(taskID)
+
+	// If the original request would have produced a JSON-RPC error, return it here.
+	if rpcErr != nil {
+		data := map[string]any{"_meta": meta}
+		if existing, ok := rpcErr.Data.(map[string]any); ok {
+			data = mergeMap(data, existing)
+		}
+		return nil, protocol.NewMCPError(rpcErr.Code, rpcErr.Message, data)
+	}
+
+	// For tools/call, ensure the returned result carries related-task metadata.
+	if ctr, ok := result.(*protocol.CallToolResult); ok && ctr != nil {
+		ctr.Meta = mergeMap(ctr.Meta, meta)
+		return ctr, nil
+	}
+	if result == nil {
+		return nil, protocol.NewMCPError(protocol.InternalError, "task result missing", map[string]any{"_meta": meta})
+	}
+	return result, nil
 }
 
 // StoreTask stores a task in the server's internal storage (MCP 2025-11-25)
 func (s *Server) StoreTask(task *protocol.Task, result any) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.tasks[task.TaskID] = &serverTask{
-		task:   task,
-		result: result,
+	st := &serverTask{
+		task:     task,
+		result:   result,
+		rpcError: nil,
+		cancel:   nil,
+		done:     make(chan struct{}),
 	}
+	if task != nil && isTerminalTaskStatus(task.Status) {
+		st.doneOnce.Do(func() { close(st.done) })
+	}
+	s.tasks[task.TaskID] = st
 }
 
 // UpdateTask updates a task in the server's internal storage (MCP 2025-11-25)
@@ -1032,6 +1334,14 @@ func (s *Server) UpdateTask(taskID string, status protocol.TaskStatus, statusMes
 
 	st.task.Status = status
 	st.task.StatusMessage = statusMessage
+	st.task.LastUpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+	if isTerminalTaskStatus(status) {
+		st.doneOnce.Do(func() {
+			if st.done != nil {
+				close(st.done)
+			}
+		})
+	}
 	return nil
 }
 
@@ -1061,7 +1371,12 @@ func (s *Server) NotifyTaskStatus(task *protocol.Task) {
 	params := &protocol.TaskStatusNotificationParams{
 		Task: *task,
 	}
-	for _, ss := range s.sessions {
+	s.mu.Lock()
+	sessions := make([]*ServerSession, len(s.sessions))
+	copy(sessions, s.sessions)
+	s.mu.Unlock()
+
+	for _, ss := range sessions {
 		if ss.conn != nil {
 			_ = ss.conn.SendNotification(context.Background(), protocol.NotificationTasksStatus, params)
 		}

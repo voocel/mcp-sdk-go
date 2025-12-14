@@ -128,7 +128,7 @@ type ServerTaskRequestsCapability struct {
 
 // ToolsTaskCapability specifies task support for tool operations (MCP 2025-11-25)
 type ToolsTaskCapability struct {
-	// Call indicates server supports task-augmented tools/call requests
+	// Call specifies task augmentation support for tools/call (MCP 2025-11-25)
 	Call *struct{} `json:"call,omitempty"`
 }
 

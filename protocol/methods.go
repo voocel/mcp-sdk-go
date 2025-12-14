@@ -38,9 +38,8 @@ const (
 
 	NotificationToolsListChanged = "notifications/tools/list_changed"
 
-	NotificationResourcesListChanged          = "notifications/resources/list_changed"
-	NotificationResourcesUpdated              = "notifications/resources/updated"
-	NotificationResourcesTemplatesListChanged = "notifications/resources/templates/list_changed"
+	NotificationResourcesListChanged = "notifications/resources/list_changed"
+	NotificationResourcesUpdated     = "notifications/resources/updated"
 
 	NotificationPromptsListChanged = "notifications/prompts/list_changed"
 
@@ -57,4 +56,3 @@ const (
 	// Tasks notifications (MCP 2025-11-25)
 	NotificationTasksStatus = "notifications/tasks/status"
 )
-

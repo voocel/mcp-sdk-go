@@ -112,6 +112,14 @@ func (ss *ServerSession) hasInitialized() bool {
 
 // NotifyProgress sends a progress notification to the client
 func (ss *ServerSession) NotifyProgress(ctx context.Context, params *protocol.ProgressNotificationParams) error {
+	if params == nil {
+		return ss.conn.SendNotification(ctx, protocol.NotificationProgress, params)
+	}
+	if taskID, ok := taskIDFromContext(ctx); ok {
+		copied := *params
+		copied.Meta = mergeMap(copied.Meta, relatedTaskMeta(taskID))
+		return ss.conn.SendNotification(ctx, protocol.NotificationProgress, &copied)
+	}
 	return ss.conn.SendNotification(ctx, protocol.NotificationProgress, params)
 }
 
@@ -131,6 +139,14 @@ func (ss *ServerSession) Log(ctx context.Context, params *protocol.LoggingMessag
 		return nil
 	}
 
+	if params == nil {
+		return ss.conn.SendNotification(ctx, protocol.NotificationLoggingMessage, params)
+	}
+	if taskID, ok := taskIDFromContext(ctx); ok {
+		copied := *params
+		copied.Meta = mergeMap(copied.Meta, relatedTaskMeta(taskID))
+		return ss.conn.SendNotification(ctx, protocol.NotificationLoggingMessage, &copied)
+	}
 	return ss.conn.SendNotification(ctx, protocol.NotificationLoggingMessage, params)
 }
 
@@ -149,14 +165,37 @@ func (ss *ServerSession) ListRoots(ctx context.Context) (*protocol.ListRootsResu
 // CreateMessage sends a sampling request to the client
 func (ss *ServerSession) CreateMessage(ctx context.Context, params *protocol.CreateMessageParams) (*protocol.CreateMessageResult, error) {
 	var result protocol.CreateMessageResult
-	err := ss.conn.SendRequest(ctx, protocol.MethodSamplingCreateMessage, params, &result)
+	sendParams := any(params)
+	if params != nil {
+		if taskID, ok := taskIDFromContext(ctx); ok {
+			copied := *params
+			copied.Meta = mergeMap(copied.Meta, relatedTaskMeta(taskID))
+			sendParams = &copied
+		}
+	}
+	err := ss.conn.SendRequest(ctx, protocol.MethodSamplingCreateMessage, sendParams, &result)
 	return &result, err
 }
 
 // Elicit sends an elicitation request to the client, requesting user input
 func (ss *ServerSession) Elicit(ctx context.Context, params *protocol.ElicitationCreateParams) (*protocol.ElicitationResult, error) {
 	var result protocol.ElicitationResult
-	err := ss.conn.SendRequest(ctx, protocol.MethodElicitationCreate, params, &result)
+	sendParams := any(params)
+	if params != nil {
+		if taskID, ok := taskIDFromContext(ctx); ok {
+			// protocol.ElicitationCreateParams currently doesn't include _meta,
+			// but task-related messages must include related-task metadata.
+			wrapped := struct {
+				Meta map[string]any `json:"_meta,omitempty"`
+				*protocol.ElicitationCreateParams
+			}{
+				Meta:                    relatedTaskMeta(taskID),
+				ElicitationCreateParams: params,
+			}
+			sendParams = &wrapped
+		}
+	}
+	err := ss.conn.SendRequest(ctx, protocol.MethodElicitationCreate, sendParams, &result)
 	return &result, err
 }
 

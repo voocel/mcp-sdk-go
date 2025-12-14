@@ -60,6 +60,7 @@ func (t *CommandTransport) Connect(ctx context.Context) (transport.Connection, e
 		stdin:             stdin,
 		scanner:           bufio.NewScanner(stdout),
 		terminateDuration: td,
+		done:              make(chan struct{}),
 	}, nil
 }
 
@@ -72,6 +73,7 @@ type commandConn struct {
 	mu                sync.Mutex
 	closed            atomic.Bool
 	terminateDuration time.Duration
+	done              chan struct{}
 }
 
 func (c *commandConn) Read(ctx context.Context) (*protocol.JSONRPCMessage, error) {
@@ -111,6 +113,8 @@ func (c *commandConn) Read(ctx context.Context) (*protocol.JSONRPCMessage, error
 	select {
 	case <-ctx.Done():
 		return nil, ctx.Err()
+	case <-c.done:
+		return nil, transport.ErrConnectionClosed
 	case err := <-errChan:
 		return nil, err
 	case msg := <-msgChan:
@@ -154,6 +158,7 @@ func (c *commandConn) Close() error {
 	if !c.closed.CompareAndSwap(false, true) {
 		return nil
 	}
+	close(c.done)
 
 	// Close stdin
 	if err := c.stdin.Close(); err != nil {

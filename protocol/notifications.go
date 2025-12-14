@@ -27,11 +27,6 @@ type CancelledNotificationParams struct {
 	Reason string `json:"reason,omitempty"`
 }
 
-// ResourceTemplateListChangedParams resource template list change notification parameters
-type ResourceTemplateListChangedParams struct {
-	Meta map[string]any `json:"_meta,omitempty"`
-}
-
 // RootsListChangedParams roots list change notification parameters
 type RootsListChangedParams struct {
 	Meta map[string]any `json:"_meta,omitempty"`

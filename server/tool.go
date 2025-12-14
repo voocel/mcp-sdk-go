@@ -107,7 +107,10 @@ func wrapToolHandler[In, Out any](tool *protocol.Tool, handler ToolHandlerFor[In
 
 		input, err := unmarshalAndValidate[In](inputData, inputSchema)
 		if err != nil {
-			return nil, fmt.Errorf("invalid parameters: %w", err)
+			return nil, protocol.NewMCPError(protocol.InvalidParams, "Invalid params", map[string]any{
+				"method": protocol.MethodToolsCall,
+				"tool":   toolCopy.Name,
+			})
 		}
 
 		// Call user handler

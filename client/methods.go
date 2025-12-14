@@ -172,6 +172,9 @@ func (cs *ClientSession) GetTaskResult(ctx context.Context, params *protocol.Tas
 // CallToolAsTask invokes a tool on the server as a task (MCP 2025-11-25)
 // This returns a CreateTaskResult instead of waiting for the tool to complete
 func (cs *ClientSession) CallToolAsTask(ctx context.Context, params *protocol.CallToolParams) (*protocol.CreateTaskResult, error) {
+	if params.Task == nil {
+		params.Task = &protocol.TaskMetadata{}
+	}
 	var result protocol.CreateTaskResult
 	if err := cs.sendRequest(ctx, protocol.MethodToolsCall, params, &result); err != nil {
 		return nil, err

@@ -24,12 +24,22 @@ type stdioConn struct {
 	scanner *bufio.Scanner
 	mu      sync.Mutex
 	closed  atomic.Bool
+
+	done     chan struct{}
+	incoming chan *protocol.JSONRPCMessage
+	errs     chan error
 }
 
 func newStdioConn() *stdioConn {
-	return &stdioConn{
-		scanner: bufio.NewScanner(os.Stdin),
+	c := &stdioConn{
+		scanner:  bufio.NewScanner(os.Stdin),
+		done:     make(chan struct{}),
+		incoming: make(chan *protocol.JSONRPCMessage, 16),
+		errs:     make(chan error, 1),
 	}
+
+	go c.readLoop()
+	return c
 }
 
 func (c *stdioConn) Read(ctx context.Context) (*protocol.JSONRPCMessage, error) {
@@ -37,41 +47,70 @@ func (c *stdioConn) Read(ctx context.Context) (*protocol.JSONRPCMessage, error) 
 		return nil, transport.ErrConnectionClosed
 	}
 
-	msgChan := make(chan *protocol.JSONRPCMessage, 1)
-	errChan := make(chan error, 1)
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-c.done:
+		return nil, transport.ErrConnectionClosed
+	case err := <-c.errs:
+		return nil, err
+	case msg, ok := <-c.incoming:
+		if !ok {
+			return nil, transport.ErrConnectionClosed
+		}
+		return msg, nil
+	}
+}
 
-	go func() {
+func (c *stdioConn) readLoop() {
+	defer func() {
+		close(c.incoming)
+	}()
+
+	for {
+		select {
+		case <-c.done:
+			return
+		default:
+		}
+
 		if !c.scanner.Scan() {
-			if err := c.scanner.Err(); err != nil {
-				errChan <- fmt.Errorf("scanner error: %w", err)
+			var err error
+			if scanErr := c.scanner.Err(); scanErr != nil {
+				err = fmt.Errorf("scanner error: %w", scanErr)
 			} else {
-				errChan <- io.EOF
+				err = io.EOF
+			}
+			select {
+			case c.errs <- err:
+			default:
 			}
 			return
 		}
 
 		data := c.scanner.Bytes()
 		if len(data) == 0 {
-			errChan <- fmt.Errorf("empty message")
+			select {
+			case c.errs <- fmt.Errorf("empty message"):
+			default:
+			}
 			return
 		}
 
 		var msg protocol.JSONRPCMessage
 		if err := json.Unmarshal(data, &msg); err != nil {
-			errChan <- fmt.Errorf("invalid JSON-RPC message: %w", err)
+			select {
+			case c.errs <- fmt.Errorf("invalid JSON-RPC message: %w", err):
+			default:
+			}
 			return
 		}
 
-		msgChan <- &msg
-	}()
-
-	select {
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	case err := <-errChan:
-		return nil, err
-	case msg := <-msgChan:
-		return msg, nil
+		select {
+		case c.incoming <- &msg:
+		case <-c.done:
+			return
+		}
 	}
 }
 
@@ -100,7 +139,10 @@ func (c *stdioConn) Write(ctx context.Context, msg *protocol.JSONRPCMessage) err
 }
 
 func (c *stdioConn) Close() error {
-	c.closed.Store(true)
+	if !c.closed.CompareAndSwap(false, true) {
+		return nil
+	}
+	close(c.done)
 	return nil
 }
 
