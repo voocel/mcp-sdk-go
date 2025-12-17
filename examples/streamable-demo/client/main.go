@@ -27,7 +27,7 @@ func main() {
 	// ========== Initialize ==========
 	log.Println("Initializing connection")
 	initResult, sid, err := sendRequestWithSession(ctx, "initialize", map[string]interface{}{
-		"protocolVersion": "2025-06-18",
+		"protocolVersion": "2025-11-25",
 		"capabilities":    map[string]interface{}{},
 		"clientInfo": map[string]interface{}{
 			"name":    "HTTP Test Client",
@@ -230,7 +230,7 @@ func sendRequestWithSession(ctx context.Context, method string, params interface
 	}
 
 	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("MCP-Protocol-Version", "2025-06-18")
+	httpReq.Header.Set("MCP-Protocol-Version", "2025-11-25")
 
 	if sessionID != "" {
 		httpReq.Header.Set("Mcp-Session-Id", sessionID)

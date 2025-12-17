@@ -10,10 +10,11 @@ type PromptArgument struct {
 
 type Prompt struct {
 	Name        string           `json:"name"`
-	Title       string           `json:"title,omitempty"` // MCP 2025-06-18: Human-friendly title
+	Title       string           `json:"title,omitempty"`       // MCP 2025-06-18: Human-friendly title
 	Description string           `json:"description,omitempty"`
 	Arguments   []PromptArgument `json:"arguments,omitempty"`
-	Meta        map[string]any   `json:"_meta,omitempty"` // MCP 2025-06-18: Extended metadata
+	Icons       []Icon           `json:"icons,omitempty"`       // MCP 2025-11-25: Icons for UI display
+	Meta        map[string]any   `json:"_meta,omitempty"`       // MCP 2025-06-18: Extended metadata
 }
 
 type PromptMessage struct {

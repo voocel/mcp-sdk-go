@@ -34,6 +34,9 @@ const (
 	InvalidResource  = -32004 // Invalid resource
 	InvalidPrompt    = -32005 // Invalid prompt
 
+	// MCP 2025-11-25: URL elicitation required error
+	URLElicitationRequired = -32042
+
 	ErrorCodeInvalidParams = InvalidParams
 )
 
@@ -400,8 +403,14 @@ type PromptsCapability struct {
 
 type LoggingCapability struct{}
 
-// ElicitationCapability represents elicitation capability declaration
-type ElicitationCapability struct{}
+// ElicitationCapability represents elicitation capability declaration (MCP 2025-11-25)
+// Supports both form mode and URL mode
+type ElicitationCapability struct {
+	// Form indicates support for form-based elicitation (in-band structured data collection)
+	Form *struct{} `json:"form,omitempty"`
+	// URL indicates support for URL-based elicitation (out-of-band interaction)
+	URL *struct{} `json:"url,omitempty"`
+}
 
 // Icon defines icon for visual identification of resources, tools, prompts, and implementations
 type Icon struct {
@@ -418,19 +427,21 @@ type Icon struct {
 }
 
 type ClientInfo struct {
-	Name       string `json:"name"`
-	Title      string `json:"title,omitempty"`
-	Version    string `json:"version"`
-	WebsiteURL string `json:"websiteUrl,omitempty"`
-	Icons      []Icon `json:"icons,omitempty"`
+	Name        string `json:"name"`
+	Title       string `json:"title,omitempty"`
+	Version     string `json:"version"`
+	Description string `json:"description,omitempty"` // MCP 2025-11-25: Human-readable description
+	WebsiteURL  string `json:"websiteUrl,omitempty"`
+	Icons       []Icon `json:"icons,omitempty"`
 }
 
 type ServerInfo struct {
-	Name       string `json:"name"`
-	Title      string `json:"title,omitempty"`
-	Version    string `json:"version"`
-	WebsiteURL string `json:"websiteUrl,omitempty"`
-	Icons      []Icon `json:"icons,omitempty"`
+	Name        string `json:"name"`
+	Title       string `json:"title,omitempty"`
+	Version     string `json:"version"`
+	Description string `json:"description,omitempty"` // MCP 2025-11-25: Human-readable description
+	WebsiteURL  string `json:"websiteUrl,omitempty"`
+	Icons       []Icon `json:"icons,omitempty"`
 }
 
 // InitializeParams represents initialize request parameters
@@ -477,23 +488,6 @@ type PaginatedResult struct {
 	NextCursor *string `json:"nextCursor,omitempty"`
 }
 
-// IsVersionSupported checks if the protocol version is supported
-func IsVersionSupported(version string) bool {
-	supportedVersions := []string{
-		MCPVersion,           // 2025-11-25
-		MCPVersion2025_06_18, // 2025-06-18
-		MCPVersion2025_03_26, // 2025-03-26
-		MCPVersionLegacy,     // 2024-11-05
-	}
-
-	for _, supported := range supportedVersions {
-		if version == supported {
-			return true
-		}
-	}
-	return false
-}
-
 func GetSupportedVersions() []string {
 	return []string{
 		MCPVersion,           // Latest version first
@@ -501,6 +495,15 @@ func GetSupportedVersions() []string {
 		MCPVersion2025_03_26, // Intermediate version
 		MCPVersionLegacy,     // Backward compatibility
 	}
+}
+
+func IsVersionSupported(version string) bool {
+	for _, supported := range GetSupportedVersions() {
+		if version == supported {
+			return true
+		}
+	}
+	return false
 }
 
 func IDToString(id json.RawMessage) string {

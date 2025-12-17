@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strings"
 	"sync"
@@ -19,7 +20,7 @@ import (
 const (
 	MCPProtocolVersionHeader = "MCP-Protocol-Version"
 	MCPSessionIDHeader       = "Mcp-Session-Id"
-	DefaultProtocolVersion   = "2025-06-18"
+	DefaultProtocolVersion   = "2025-11-25"
 )
 
 type HTTPHandler struct {
@@ -52,10 +53,7 @@ func NewHTTPHandler(serverFactory func(*http.Request) *server.Server) *HTTPHandl
 func (h *HTTPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set(MCPProtocolVersionHeader, h.protocolVersion)
 
-	if err := h.validateProtocolVersion(r); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
+	h.checkProtocolVersion(r)
 
 	switch r.Method {
 	case http.MethodPost:
@@ -284,13 +282,16 @@ func (h *HTTPHandler) handleDelete(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
-func (h *HTTPHandler) validateProtocolVersion(r *http.Request) error {
+// checkProtocolVersion checks the protocol version and logs a warning if unsupported
+// It does not reject the connection to maintain compatibility with future protocol versions
+func (h *HTTPHandler) checkProtocolVersion(r *http.Request) {
 	clientVersion := r.Header.Get(MCPProtocolVersionHeader)
 	if clientVersion == "" {
-		return nil
+		return
 	}
 
 	supportedVersions := []string{
+		"2025-11-25",
 		"2025-06-18",
 		"2025-03-26",
 		"2024-11-05",
@@ -298,11 +299,12 @@ func (h *HTTPHandler) validateProtocolVersion(r *http.Request) error {
 
 	for _, version := range supportedVersions {
 		if clientVersion == version {
-			return nil
+			return
 		}
 	}
 
-	return fmt.Errorf("unsupported protocol version: %s", clientVersion)
+	// Log warning but don't reject connection
+	log.Printf("[MCP] Warning: client requested unsupported protocol version: %s (supported: %v)", clientVersion, supportedVersions)
 }
 
 func (h *HTTPHandler) cleanupSessions() {

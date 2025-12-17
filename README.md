@@ -23,11 +23,11 @@
 
 ## Introduction
 
-MCP Go SDK is a Go implementation of the Model Context Protocol, fully supporting the latest **MCP 2025-06-18** specification, while maintaining backward compatibility with **MCP 2025-03-26** and **MCP 2024-11-05**.
+MCP Go SDK is a Go implementation of the Model Context Protocol, fully supporting the latest **MCP 2025-11-25** specification, while maintaining backward compatibility with **MCP 2025-06-18**, **MCP 2025-03-26** and **MCP 2024-11-05**.
 
 ## Core Features
 
-- **Fully MCP Compliant** - Supports latest MCP 2025-06-18 spec, backward compatible with 2025-03-26, 2024-11-05
+- **Fully MCP Compliant** - Supports latest MCP 2025-11-25 spec, backward compatible with 2025-06-18, 2025-03-26, 2024-11-05
 - **Elegant Architecture** - Client/Server + Session pattern, high cohesion and low coupling
 - **Server SDK** - Quickly build MCP servers with tools, resources, and prompt templates
 - **Client SDK** - Complete client implementation for connecting to any MCP-compatible server
@@ -44,20 +44,28 @@ This SDK tracks and supports the latest developments in the MCP protocol, ensuri
 
 | Version | Release Date | Key Features | Support Status |
 |---------|--------------|--------------|----------------|
-| **2025-06-18** | June 2025 | Structured tool output, tool annotations, **Elicitation user interaction**, **Sampling LLM inference** | **Fully Supported** |
+| **2025-11-25** | November 2025 | **Tasks durable state machine**, **Tool use in Sampling**, enhanced Elicitation | **Fully Supported** |
+| **2025-06-18** | June 2025 | Structured tool output, tool annotations, Elicitation user interaction, Sampling LLM inference | **Fully Supported** |
 | **2025-03-26** | March 2025 | OAuth 2.1 authorization, Streamable HTTP, JSON-RPC batching | **Fully Supported** |
 | **2024-11-05** | November 2024 | HTTP+SSE transport, basic tools and resources | **Fully Supported** |
 
-### Latest Features (2025-06-18)
+### Latest Features (2025-11-25)
 
-- **Structured Tool Output**: Tools can return typed JSON data for programmatic processing
-- **Tool Annotations**: Describe tool behavior characteristics (read-only, destructive, caching strategy, etc.)
-- **User Interaction Requests**: Tools can proactively request user input or confirmation
-- **Resource Links**: Support for associations and references between resources
-- **Protocol Version Header**: HTTP transport requires `MCP-Protocol-Version` header
-- **Extended Metadata (_meta)**: Add custom metadata to tools, resources, and prompts
+- **Tasks**: Durable state machine for long-running operations with status tracking (working, input_required, completed, failed, cancelled)
+- **Tool Use in Sampling**: Servers can request LLM sampling with tool definitions, enabling agentic workflows
+- **ToolChoice**: Control tool selection behavior (auto, required, none) in sampling requests
+- **Task-Augmented Requests**: Support for task metadata in tools/call, sampling/createMessage, and elicitation/create
+- **Task Status Notifications**: Real-time task status updates via notifications/tasks/status
 
 ### Major Change History
+
+**2025-06-18 → 2025-11-25**:
+
+- Added Tasks durable state machine for long-running operations
+- Added tool use support in sampling requests (tools, toolChoice)
+- Added ToolUseContent and ToolResultContent content types
+- Added task-augmented request support
+- Enhanced elicitation with completion notifications
 
 **2025-03-26 → 2025-06-18**:
 
@@ -508,7 +516,7 @@ result, err := session.CreateMessage(ctx, &protocol.CreateMessageRequest{
 
 ## Transport Protocols
 
-**Fully compliant with MCP 2025-06-18 specification**, backward compatible with MCP 2025-03-26, 2024-11-05
+**Fully compliant with MCP 2025-11-25 specification**, backward compatible with MCP 2025-06-18, 2025-03-26, 2024-11-05
 
 ### Supported Transports
 
@@ -516,7 +524,7 @@ result, err := session.CreateMessage(ctx, &protocol.CreateMessageRequest{
 |----------|----------|------------------|------------------|
 | **STDIO** | Subprocess communication | Official standard | 2024-11-05+ |
 | **SSE** | Web applications | Official standard | 2024-11-05+ |
-| **Streamable HTTP** | Modern web applications | Official standard | 2025-06-18 |
+| **Streamable HTTP** | Modern web applications | Official standard | 2025-11-25 |
 | ~~**WebSocket**~~ | ~~Real-time applications~~ | Unofficial | - |
 | ~~**gRPC**~~ | ~~Microservices~~ | Unofficial | - |
 
@@ -585,7 +593,7 @@ MIT License - See [LICENSE](LICENSE) file for details
 
 ## Roadmap
 
-### Completed (MCP 2025-06-18 Fully Supported)
+### Completed (MCP 2025-11-25 Fully Supported)
 
 **Core Architecture**:
 - [x] **Client/Server + Session Pattern**
@@ -594,16 +602,18 @@ MIT License - See [LICENSE](LICENSE) file for details
 
 **Transport Protocols**:
 - [x] **STDIO Transport** - Standard input/output, suitable for CLI and Claude Desktop
-- [x] **Streamable HTTP Transport** - Latest HTTP transport protocol (MCP 2025-06-18)
+- [x] **Streamable HTTP Transport** - Latest HTTP transport protocol (MCP 2025-11-25)
 - [x] **SSE Transport** - Backward compatible with legacy HTTP+SSE (MCP 2024-11-05)
 
-**MCP 2025-06-18 Features**:
+**MCP 2025-11-25 Features**:
 - [x] **Tools** - Complete tool registration and invocation
 - [x] **Resources** - Resource management and subscription
 - [x] **Resource Templates** - Dynamic resource URI templates
 - [x] **Prompts** - Prompt template management
 - [x] **Roots** - Client roots management
-- [x] **Sampling** - LLM inference request support
+- [x] **Sampling** - LLM inference request support with tool use
+- [x] **Tasks** - Durable state machine for long-running operations
+- [x] **Elicitation** - User interaction request framework
 - [x] **Progress Tracking** - Progress feedback for long-running operations
 - [x] **Logging** - Structured log messages
 - [x] **Request Cancellation** - Cancel long-running operations

@@ -21,7 +21,7 @@ import (
 const (
 	MCPProtocolVersionHeader = "MCP-Protocol-Version"
 	MCPSessionIDHeader       = "MCP-Session-Id"
-	DefaultProtocolVersion   = "2025-06-18"
+	DefaultProtocolVersion   = "2025-11-25"
 )
 
 type SSETransport struct {

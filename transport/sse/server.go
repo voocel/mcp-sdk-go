@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"sync"
 	"time"
@@ -61,10 +62,7 @@ func NewHTTPHandler(serverFactory func(*http.Request) *server.Server) *HTTPHandl
 }
 
 func (h *HTTPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if err := h.validateProtocolVersion(r); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
+	h.checkProtocolVersion(r)
 
 	switch r.Method {
 	case http.MethodGet:
@@ -78,17 +76,19 @@ func (h *HTTPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// validateProtocolVersion validates the protocol version
-func (h *HTTPHandler) validateProtocolVersion(r *http.Request) error {
+// checkProtocolVersion checks the protocol version and logs a warning if unsupported
+// It does not reject the connection to maintain compatibility with future protocol versions
+func (h *HTTPHandler) checkProtocolVersion(r *http.Request) {
 	clientVersion := r.Header.Get(MCPProtocolVersionHeader)
 
-	// If no header, assume latest version
+	// If no header, assume compatible
 	if clientVersion == "" {
-		return nil
+		return
 	}
 
-	// Validate supported versions
+	// Check supported versions
 	supportedVersions := []string{
+		"2025-11-25",
 		"2025-06-18",
 		"2025-03-26",
 		"2024-11-05",
@@ -96,11 +96,12 @@ func (h *HTTPHandler) validateProtocolVersion(r *http.Request) error {
 
 	for _, version := range supportedVersions {
 		if clientVersion == version {
-			return nil
+			return
 		}
 	}
 
-	return fmt.Errorf("unsupported protocol version: %s", clientVersion)
+	// Log warning but don't reject connection
+	log.Printf("[MCP] Warning: client requested unsupported protocol version: %s (supported: %v)", clientVersion, supportedVersions)
 }
 
 // handleSSE handles SSE connections

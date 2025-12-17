@@ -13,10 +13,30 @@ const (
 	ElicitationActionCancel  ElicitationAction = "cancel"
 )
 
+// ElicitationMode represents the mode of elicitation (MCP 2025-11-25)
+type ElicitationMode string
+
+const (
+	// ElicitationModeForm is for in-band structured data collection
+	ElicitationModeForm ElicitationMode = "form"
+	// ElicitationModeURL is for out-of-band interaction via URL navigation
+	ElicitationModeURL ElicitationMode = "url"
+)
+
 // ElicitationCreateParams represents the parameters for elicitation/create request
+// Supports both form mode and URL mode (MCP 2025-11-25)
 type ElicitationCreateParams struct {
-	Message         string     `json:"message"`
-	RequestedSchema JSONSchema `json:"requestedSchema"`
+	// Mode specifies the elicitation mode: "form" or "url" (MCP 2025-11-25)
+	// Defaults to "form" for backward compatibility
+	Mode ElicitationMode `json:"mode,omitempty"`
+	// Message is the human-readable message to display to the user
+	Message string `json:"message"`
+	// RequestedSchema is the JSON schema for form mode validation (form mode only)
+	RequestedSchema JSONSchema `json:"requestedSchema,omitempty"`
+	// ElicitationID is a unique identifier for URL mode elicitation (url mode only)
+	ElicitationID string `json:"elicitationId,omitempty"`
+	// URL is the URL to navigate to for out-of-band interaction (url mode only)
+	URL string `json:"url,omitempty"`
 }
 
 // ElicitationResult represents the result of an elicitation request

@@ -3,8 +3,12 @@ package protocol
 type Resource struct {
 	URI         string         `json:"uri"`
 	Name        string         `json:"name"`
+	Title       string         `json:"title,omitempty"`       // MCP 2025-11-25: Human-readable display name
 	Description string         `json:"description,omitempty"`
 	MimeType    string         `json:"mimeType,omitempty"`
+	Icons       []Icon         `json:"icons,omitempty"`       // MCP 2025-11-25: Icons for UI display
+	Size        *int64         `json:"size,omitempty"`        // MCP 2025-11-25: Size in bytes
+	Annotations *Annotation    `json:"annotations,omitempty"` // MCP 2025-06-18: Resource annotations
 	Meta        map[string]any `json:"_meta,omitempty"`
 }
 
@@ -57,8 +61,10 @@ type ListResourceTemplatesParams = ListResourceTemplatesRequest
 type ResourceTemplate struct {
 	URITemplate string         `json:"uriTemplate"`
 	Name        string         `json:"name"`
+	Title       string         `json:"title,omitempty"`       // MCP 2025-11-25: Human-readable display name
 	Description string         `json:"description,omitempty"`
 	MimeType    string         `json:"mimeType,omitempty"`
+	Icons       []Icon         `json:"icons,omitempty"`       // MCP 2025-11-25: Icons for UI display
 	Meta        map[string]any `json:"_meta,omitempty"`
 }
 

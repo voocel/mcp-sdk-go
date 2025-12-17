@@ -313,7 +313,7 @@ Start Time: %s`,
 		log.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 		log.Println("Endpoint: http://localhost:8081/mcp")
 		log.Println("Transport: Streamable HTTP")
-		log.Println("MCP Version: 2025-06-18")
+		log.Println("MCP Version: 2025-11-25")
 		log.Println()
 		log.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 		log.Println()

@@ -23,13 +23,29 @@ type ToolExecution struct {
 }
 
 type Tool struct {
-	Name         string         `json:"name"`
-	Title        string         `json:"title,omitempty"` // MCP 2025-06-18: Human-friendly title
-	Description  string         `json:"description,omitempty"`
-	InputSchema  JSONSchema     `json:"inputSchema"`
-	OutputSchema JSONSchema     `json:"outputSchema,omitempty"` // MCP 2025-06-18
-	Execution    *ToolExecution `json:"execution,omitempty"`    // MCP 2025-11-25: Execution behavior
-	Meta         map[string]any `json:"_meta,omitempty"`        // MCP 2025-06-18: Extended metadata
+	Name         string          `json:"name"`
+	Title        string          `json:"title,omitempty"`       // MCP 2025-06-18: Human-friendly title
+	Description  string          `json:"description,omitempty"`
+	InputSchema  JSONSchema      `json:"inputSchema"`
+	OutputSchema JSONSchema      `json:"outputSchema,omitempty"` // MCP 2025-06-18
+	Execution    *ToolExecution  `json:"execution,omitempty"`    // MCP 2025-11-25: Execution behavior
+	Icons        []Icon          `json:"icons,omitempty"`        // MCP 2025-11-25: Icons for UI display
+	Annotations  *ToolAnnotation `json:"annotations,omitempty"`  // MCP 2025-06-18: Tool behavior annotations
+	Meta         map[string]any  `json:"_meta,omitempty"`        // MCP 2025-06-18: Extended metadata
+}
+
+// ToolAnnotation describes tool behavior characteristics (MCP 2025-06-18)
+type ToolAnnotation struct {
+	// Title is a human-readable title for the tool
+	Title string `json:"title,omitempty"`
+	// ReadOnlyHint indicates the tool only reads data without side effects
+	ReadOnlyHint bool `json:"readOnlyHint,omitempty"`
+	// DestructiveHint indicates the tool may have destructive/irreversible effects
+	DestructiveHint bool `json:"destructiveHint,omitempty"`
+	// IdempotentHint indicates calling the tool multiple times has the same effect
+	IdempotentHint bool `json:"idempotentHint,omitempty"`
+	// OpenWorldHint indicates the tool interacts with external entities
+	OpenWorldHint bool `json:"openWorldHint,omitempty"`
 }
 
 type ToolList struct {

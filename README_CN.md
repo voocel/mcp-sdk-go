@@ -23,11 +23,11 @@
 
 ## 介绍
 
-MCP Go SDK 是模型上下文协议（Model Context Protocol）的 Go 语言实现，完全支持最新的 **MCP 2025-06-18** 规范，同时向后兼容 **MCP 2025-03-26** 和 **MCP 2024-11-05**。
+MCP Go SDK 是模型上下文协议（Model Context Protocol）的 Go 语言实现，完全支持最新的 **MCP 2025-11-25** 规范，同时向后兼容 **MCP 2025-06-18**、**MCP 2025-03-26** 和 **MCP 2024-11-05**。
 
 ## 核心特性
 
-- **完全符合 MCP 标准** - 支持最新 MCP 2025-06-18 规范，向后兼容 2025-03-26, 2024-11-05
+- **完全符合 MCP 标准** - 支持最新 MCP 2025-11-25 规范，向后兼容 2025-06-18, 2025-03-26, 2024-11-05
 - **优雅的架构设计** - Client/Server + Session 模式,高内聚低耦合
 - **服务器 SDK** - 快速构建 MCP 服务器，支持工具、资源、提示模板
 - **客户端 SDK** - 连接任何 MCP 兼容服务器的完整客户端实现
@@ -44,20 +44,28 @@ MCP Go SDK 是模型上下文协议（Model Context Protocol）的 Go 语言实�
 
 | 版本 | 发布时间 | 主要特性 | 支持状态 |
 |------|----------|----------|----------|
-| **2025-06-18** | 2025年6月 | 结构化工具输出、工具注解、**Elicitation 用户交互**、**Sampling LLM推理** | **完全支持** |
+| **2025-11-25** | 2025年11月 | **Tasks 持久状态机**、**Sampling 中的工具调用**、增强 Elicitation | **完全支持** |
+| **2025-06-18** | 2025年6月 | 结构化工具输出、工具注解、Elicitation 用户交互、Sampling LLM推理 | **完全支持** |
 | **2025-03-26** | 2025年3月 | OAuth 2.1授权、Streamable HTTP、JSON-RPC批处理 | **完全支持** |
 | **2024-11-05** | 2024年11月 | HTTP+SSE传输、基础工具和资源 | **完全支持** |
 
-### 最新特性 (2025-06-18)
+### 最新特性 (2025-11-25)
 
-- **结构化工具输出**：工具可返回类型化JSON数据，便于程序化处理
-- **工具注解**：描述工具行为特征（只读、破坏性、缓存策略等）
-- **用户交互请求**：工具可主动请求用户输入或确认
-- **资源链接**：支持资源间的关联和引用
-- **协议版本头**：HTTP传输需要`MCP-Protocol-Version`头
-- **扩展元数据 (_meta)**：为工具、资源、提示添加自定义元数据
+- **Tasks 任务系统**：持久状态机，支持长时间运行操作的状态跟踪（working、input_required、completed、failed、cancelled）
+- **Sampling 工具调用**：服务器可在 LLM 采样请求中包含工具定义，实现代理式工作流
+- **ToolChoice**：控制采样请求中的工具选择行为（auto、required、none）
+- **任务增强请求**：tools/call、sampling/createMessage、elicitation/create 支持任务元数据
+- **任务状态通知**：通过 notifications/tasks/status 实时推送任务状态更新
 
 ### 主要变更历史
+
+**2025-06-18 → 2025-11-25**：
+
+- 新增 Tasks 持久状态机，支持长时间运行操作
+- 新增采样请求中的工具调用支持（tools、toolChoice）
+- 新增 ToolUseContent 和 ToolResultContent 内容类型
+- 新增任务增强请求支持
+- 增强 elicitation 完成通知
 
 **2025-03-26 → 2025-06-18**：
 
@@ -508,7 +516,7 @@ result, err := session.CreateMessage(ctx, &protocol.CreateMessageRequest{
 
 ## 传输协议
 
-**完全符合 MCP 2025-06-18 规范**，向后兼容 MCP 2025-03-26, 2024-11-05
+**完全符合 MCP 2025-11-25 规范**，向后兼容 MCP 2025-06-18, 2025-03-26, 2024-11-05
 
 ### 支持的传输方式
 
@@ -516,7 +524,7 @@ result, err := session.CreateMessage(ctx, &protocol.CreateMessageRequest{
 |------|----------|------|----------|
 | **STDIO** | 子进程通信 | 官方标准 | 2024-11-05+ |
 | **SSE** | Web 应用 | 官方标准 | 2024-11-05+ |
-| **Streamable HTTP** | 现代 Web 应用 | 官方标准 | 2025-06-18 |
+| **Streamable HTTP** | 现代 Web 应用 | 官方标准 | 2025-11-25 |
 | ~~**WebSocket**~~ | ~~实时应用~~ | 非官方标准 | - |
 | ~~**gRPC**~~ | ~~微服务~~ | 非官方标准 | - |
 
@@ -585,7 +593,7 @@ MIT License - 详见 [LICENSE](LICENSE) 文件
 
 ## Roadmap
 
-### 已完成 (MCP 2025-06-18 完全支持)
+### 已完成 (MCP 2025-11-25 完全支持)
 
 **核心架构**:
 - [x] **Client/Server + Session 模式**
@@ -594,16 +602,18 @@ MIT License - 详见 [LICENSE](LICENSE) 文件
 
 **传输协议**:
 - [x] **STDIO Transport** - 标准输入/输出,适用于 CLI 和 Claude Desktop
-- [x] **Streamable HTTP Transport** - 最新 HTTP 传输协议 (MCP 2025-06-18)
+- [x] **Streamable HTTP Transport** - 最新 HTTP 传输协议 (MCP 2025-11-25)
 - [x] **SSE Transport** - 向后兼容旧版 HTTP+SSE (MCP 2024-11-05)
 
-**MCP 2025-06-18 特性**:
+**MCP 2025-11-25 特性**:
 - [x] **工具 (Tools)** - 完整的工具注册和调用
 - [x] **资源 (Resources)** - 资源管理和订阅
 - [x] **资源模板 (Resource Templates)** - 动态资源 URI 模板
 - [x] **提示模板 (Prompts)** - 提示模板管理
 - [x] **根目录 (Roots)** - 客户端根目录管理
-- [x] **Sampling** - LLM 推理请求支持
+- [x] **Sampling** - LLM 推理请求支持（含工具调用）
+- [x] **Tasks** - 持久状态机，支持长时间运行操作
+- [x] **Elicitation** - 用户交互请求框架
 - [x] **进度跟踪 (Progress)** - 长时间操作进度反馈
 - [x] **日志 (Logging)** - 结构化日志消息
 - [x] **请求取消 (Cancellation)** - 取消长时间运行的操作

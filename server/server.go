@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"sync"
 	"time"
 
@@ -649,11 +650,14 @@ func (s *Server) handleInitialize(ctx context.Context, ss *ServerSession, params
 		return nil, protocol.NewMCPError(protocol.InvalidParams, "Invalid params", map[string]any{"method": protocol.MethodInitialize})
 	}
 
+	// Determine the protocol version to use
+	// If client version is supported, use it; otherwise use server's latest version
+	negotiatedVersion := req.ProtocolVersion
 	if !protocol.IsVersionSupported(req.ProtocolVersion) {
-		return nil, protocol.NewMCPError(protocol.InvalidParams, "unsupported protocol version", map[string]any{
-			"protocolVersion":   req.ProtocolVersion,
-			"supportedVersions": protocol.GetSupportedVersions(),
-		})
+		// Log warning but don't reject - use server's latest version instead
+		log.Printf("[MCP] Warning: client requested unsupported protocol version: %s, using server version: %s",
+			req.ProtocolVersion, protocol.MCPVersion)
+		negotiatedVersion = protocol.MCPVersion
 	}
 
 	ss.updateState(func(state *ServerSessionState) {
@@ -704,7 +708,7 @@ func (s *Server) handleInitialize(ctx context.Context, ss *ServerSession, params
 	}
 
 	return &protocol.InitializeResult{
-		ProtocolVersion: req.ProtocolVersion,
+		ProtocolVersion: negotiatedVersion,
 		Capabilities:    capabilities,
 		ServerInfo:      *s.impl,
 		Instructions:    s.opts.Instructions,
