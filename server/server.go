@@ -388,6 +388,17 @@ func relatedTaskMeta(taskID string) map[string]any {
 	}
 }
 
+func (s *Server) scheduleTaskCleanup(taskID string, ttlMs int) {
+	if ttlMs <= 0 {
+		return
+	}
+	time.AfterFunc(time.Duration(ttlMs)*time.Millisecond, func() {
+		s.mu.Lock()
+		delete(s.tasks, taskID)
+		s.mu.Unlock()
+	})
+}
+
 func mergeMap(dst map[string]any, src map[string]any) map[string]any {
 	if dst == nil && src == nil {
 		return nil
@@ -858,8 +869,12 @@ func (s *Server) handleCallTool(ctx context.Context, ss *ServerSession, params j
 					}
 				})
 				taskCopy := *stored.task
+				ttl := stored.task.TTL
 				s.mu.Unlock()
 				s.NotifyTaskStatus(&taskCopy)
+				if ttl != nil {
+					s.scheduleTaskCleanup(taskID, *ttl)
+				}
 				return
 			}
 
@@ -882,9 +897,13 @@ func (s *Server) handleCallTool(ctx context.Context, ss *ServerSession, params j
 				}
 			})
 			taskCopy := *stored.task
+			ttl := stored.task.TTL
 			s.mu.Unlock()
 
 			s.NotifyTaskStatus(&taskCopy)
+			if ttl != nil {
+				s.scheduleTaskCleanup(taskID, *ttl)
+			}
 		}()
 
 		return &protocol.CreateTaskResult{Meta: meta, Task: *task}, nil
@@ -1230,6 +1249,7 @@ func (s *Server) handleTasksCancel(ctx context.Context, ss *ServerSession, param
 		}
 	})
 	cancel := st.cancel
+	ttl := st.task.TTL
 	taskCopy := *st.task
 	s.mu.Unlock()
 
@@ -1237,6 +1257,9 @@ func (s *Server) handleTasksCancel(ctx context.Context, ss *ServerSession, param
 		cancel()
 	}
 	s.NotifyTaskStatus(&taskCopy)
+	if ttl != nil {
+		s.scheduleTaskCleanup(req.TaskID, *ttl)
+	}
 
 	return &protocol.CancelTaskResult{Task: taskCopy}, nil
 }
@@ -1324,27 +1347,40 @@ func (s *Server) StoreTask(task *protocol.Task, result any) {
 		st.doneOnce.Do(func() { close(st.done) })
 	}
 	s.tasks[task.TaskID] = st
+
+	if task != nil && task.TTL != nil && isTerminalTaskStatus(task.Status) {
+		s.scheduleTaskCleanup(task.TaskID, *task.TTL)
+	}
 }
 
 // UpdateTask updates a task in the server's internal storage (MCP 2025-11-25)
 func (s *Server) UpdateTask(taskID string, status protocol.TaskStatus, statusMessage string) error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 
 	st, exists := s.tasks[taskID]
 	if !exists {
+		s.mu.Unlock()
 		return protocol.NewMCPError(protocol.InvalidParams, "task not found", nil)
 	}
 
 	st.task.Status = status
 	st.task.StatusMessage = statusMessage
 	st.task.LastUpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+	shouldCleanup := false
+	ttl := (*int)(nil)
 	if isTerminalTaskStatus(status) {
 		st.doneOnce.Do(func() {
 			if st.done != nil {
 				close(st.done)
 			}
 		})
+		ttl = st.task.TTL
+		shouldCleanup = ttl != nil
+	}
+	s.mu.Unlock()
+	if shouldCleanup {
+		s.scheduleTaskCleanup(taskID, *ttl)
+		return nil
 	}
 	return nil
 }

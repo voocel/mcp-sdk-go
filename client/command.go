@@ -1,8 +1,10 @@
 package client
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os/exec"
@@ -22,6 +24,8 @@ type CommandTransport struct {
 	// TerminateDuration controls how long to wait for the process to exit after closing stdin before sending SIGTERM
 	// If zero or negative, defaults to 5 seconds
 	TerminateDuration time.Duration
+	// MaxMessageBytes limits the maximum size of a single message; 0 means unlimited.
+	MaxMessageBytes int
 }
 
 // NewCommandTransport creates a new CommandTransport
@@ -53,12 +57,22 @@ func (t *CommandTransport) Connect(ctx context.Context) (transport.Connection, e
 		td = 5 * time.Second
 	}
 
+	var reader *bufio.Reader
+	var decoder *json.Decoder
+	if t.MaxMessageBytes > 0 {
+		reader = bufio.NewReader(stdout)
+	} else {
+		decoder = json.NewDecoder(stdout)
+	}
+
 	return &commandConn{
 		cmd:               t.Command,
 		stdout:            stdout,
 		stdin:             stdin,
-		decoder:           json.NewDecoder(stdout),
+		reader:            reader,
+		decoder:           decoder,
 		terminateDuration: td,
+		maxMessageBytes:   t.MaxMessageBytes,
 		done:              make(chan struct{}),
 	}, nil
 }
@@ -68,7 +82,9 @@ type commandConn struct {
 	cmd               *exec.Cmd
 	stdout            io.ReadCloser
 	stdin             io.WriteCloser
+	reader            *bufio.Reader
 	decoder           *json.Decoder
+	maxMessageBytes   int
 	mu                sync.Mutex
 	closed            atomic.Bool
 	terminateDuration time.Duration
@@ -86,9 +102,22 @@ func (c *commandConn) Read(ctx context.Context) (*protocol.JSONRPCMessage, error
 
 	go func() {
 		var raw json.RawMessage
-		if err := c.decoder.Decode(&raw); err != nil {
-			errChan <- err
-			return
+		if c.maxMessageBytes > 0 {
+			var err error
+			raw, err = readRawMessage(c.reader, c.maxMessageBytes)
+			if err != nil {
+				errChan <- err
+				return
+			}
+		} else {
+			if c.decoder == nil {
+				errChan <- fmt.Errorf("decoder not initialized")
+				return
+			}
+			if err := c.decoder.Decode(&raw); err != nil {
+				errChan <- err
+				return
+			}
 		}
 
 		if len(raw) == 0 {
@@ -196,6 +225,43 @@ func (c *commandConn) Close() error {
 	}
 
 	return fmt.Errorf("unresponsive subprocess")
+}
+
+func readRawMessage(r *bufio.Reader, maxBytes int) (json.RawMessage, error) {
+	if r == nil {
+		return nil, fmt.Errorf("reader not initialized")
+	}
+	if maxBytes <= 0 {
+		return nil, fmt.Errorf("invalid max bytes: %d", maxBytes)
+	}
+
+	var buf []byte
+	for {
+		chunk, err := r.ReadSlice('\n')
+		if len(chunk) > 0 {
+			buf = append(buf, chunk...)
+			if len(buf) > maxBytes {
+				return nil, fmt.Errorf("message too large: limit %d bytes", maxBytes)
+			}
+		}
+
+		if err == nil {
+			return json.RawMessage(buf), nil
+		}
+
+		if errors.Is(err, bufio.ErrBufferFull) {
+			continue
+		}
+
+		if errors.Is(err, io.EOF) {
+			if len(buf) == 0 {
+				return nil, io.EOF
+			}
+			return json.RawMessage(buf), nil
+		}
+
+		return nil, err
+	}
 }
 
 func (c *commandConn) SessionID() string {

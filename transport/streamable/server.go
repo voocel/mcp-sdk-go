@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -21,11 +22,13 @@ const (
 	MCPProtocolVersionHeader = "MCP-Protocol-Version"
 	MCPSessionIDHeader       = "Mcp-Session-Id"
 	DefaultProtocolVersion   = "2025-11-25"
+	DefaultMaxBodyBytes      = 10 << 20 // 10 MiB
 )
 
 type HTTPHandler struct {
 	serverFactory   func(*http.Request) *server.Server
 	protocolVersion string
+	maxBodyBytes    int64
 
 	mu       sync.RWMutex
 	sessions map[string]*sessionInfo
@@ -41,6 +44,7 @@ func NewHTTPHandler(serverFactory func(*http.Request) *server.Server) *HTTPHandl
 	h := &HTTPHandler{
 		serverFactory:   serverFactory,
 		protocolVersion: DefaultProtocolVersion,
+		maxBodyBytes:    DefaultMaxBodyBytes,
 		sessions:        make(map[string]*sessionInfo),
 	}
 
@@ -48,6 +52,12 @@ func NewHTTPHandler(serverFactory func(*http.Request) *server.Server) *HTTPHandl
 	go h.cleanupSessions()
 
 	return h
+}
+
+// SetMaxBodyBytes sets the maximum allowed request body size for Streamable HTTP.
+// If n <= 0, the body size is not limited.
+func (h *HTTPHandler) SetMaxBodyBytes(n int64) {
+	h.maxBodyBytes = n
 }
 
 func (h *HTTPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -74,12 +84,22 @@ func (h *HTTPHandler) handlePost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if h.maxBodyBytes > 0 {
+		r.Body = http.MaxBytesReader(w, r.Body, h.maxBodyBytes)
+	}
+
+	defer r.Body.Close()
+
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			http.Error(w, "Request body too large", http.StatusRequestEntityTooLarge)
+			return
+		}
 		http.Error(w, "Failed to read request body", http.StatusBadRequest)
 		return
 	}
-	defer r.Body.Close()
 
 	var msg protocol.JSONRPCMessage
 	if err := json.Unmarshal(body, &msg); err != nil {

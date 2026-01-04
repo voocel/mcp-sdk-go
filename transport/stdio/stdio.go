@@ -1,9 +1,12 @@
 package stdio
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"sync"
 	"sync/atomic"
@@ -12,26 +15,31 @@ import (
 	"github.com/voocel/mcp-sdk-go/transport"
 )
 
-type StdioTransport struct{}
+type StdioTransport struct {
+	// MaxMessageBytes limits the maximum size of a single message; 0 means unlimited.
+	MaxMessageBytes int
+}
 
-func (*StdioTransport) Connect(ctx context.Context) (transport.Connection, error) {
-	return newStdioConn(), nil
+func (t *StdioTransport) Connect(ctx context.Context) (transport.Connection, error) {
+	return newStdioConn(t.MaxMessageBytes), nil
 }
 
 type stdioConn struct {
-	mu      sync.Mutex
-	closed  atomic.Bool
+	maxMessageBytes int
+	mu              sync.Mutex
+	closed          atomic.Bool
 
 	done     chan struct{}
 	incoming chan *protocol.JSONRPCMessage
 	errs     chan error
 }
 
-func newStdioConn() *stdioConn {
+func newStdioConn(maxMessageBytes int) *stdioConn {
 	c := &stdioConn{
-		done:     make(chan struct{}),
-		incoming: make(chan *protocol.JSONRPCMessage, 16),
-		errs:     make(chan error, 1),
+		maxMessageBytes: maxMessageBytes,
+		done:            make(chan struct{}),
+		incoming:        make(chan *protocol.JSONRPCMessage, 16),
+		errs:            make(chan error, 1),
 	}
 
 	go c.readLoop()
@@ -62,6 +70,48 @@ func (c *stdioConn) readLoop() {
 	defer func() {
 		close(c.incoming)
 	}()
+
+	if c.maxMessageBytes > 0 {
+		reader := bufio.NewReader(os.Stdin)
+		for {
+			select {
+			case <-c.done:
+				return
+			default:
+			}
+
+			raw, err := readRawMessage(reader, c.maxMessageBytes)
+			if err != nil {
+				select {
+				case c.errs <- err:
+				default:
+				}
+				return
+			}
+			if len(raw) == 0 {
+				select {
+				case c.errs <- fmt.Errorf("empty message"):
+				default:
+				}
+				return
+			}
+
+			var msg protocol.JSONRPCMessage
+			if err := json.Unmarshal(raw, &msg); err != nil {
+				select {
+				case c.errs <- fmt.Errorf("invalid JSON-RPC message: %w", err):
+				default:
+				}
+				return
+			}
+
+			select {
+			case c.incoming <- &msg:
+			case <-c.done:
+				return
+			}
+		}
+	}
 
 	decoder := json.NewDecoder(os.Stdin)
 
@@ -127,6 +177,40 @@ func (c *stdioConn) Write(ctx context.Context, msg *protocol.JSONRPCMessage) err
 	}
 
 	return nil
+}
+
+func readRawMessage(r *bufio.Reader, maxBytes int) (json.RawMessage, error) {
+	if maxBytes <= 0 {
+		return nil, fmt.Errorf("invalid max bytes: %d", maxBytes)
+	}
+
+	var buf []byte
+	for {
+		chunk, err := r.ReadSlice('\n')
+		if len(chunk) > 0 {
+			buf = append(buf, chunk...)
+			if len(buf) > maxBytes {
+				return nil, fmt.Errorf("message too large: limit %d bytes", maxBytes)
+			}
+		}
+
+		if err == nil {
+			return json.RawMessage(buf), nil
+		}
+
+		if errors.Is(err, bufio.ErrBufferFull) {
+			continue
+		}
+
+		if errors.Is(err, io.EOF) {
+			if len(buf) == 0 {
+				return nil, io.EOF
+			}
+			return json.RawMessage(buf), nil
+		}
+
+		return nil, err
+	}
 }
 
 func (c *stdioConn) Close() error {
