@@ -1,11 +1,9 @@
 package stdio
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"os"
 	"sync"
 	"sync/atomic"
@@ -21,7 +19,6 @@ func (*StdioTransport) Connect(ctx context.Context) (transport.Connection, error
 }
 
 type stdioConn struct {
-	scanner *bufio.Scanner
 	mu      sync.Mutex
 	closed  atomic.Bool
 
@@ -32,7 +29,6 @@ type stdioConn struct {
 
 func newStdioConn() *stdioConn {
 	c := &stdioConn{
-		scanner:  bufio.NewScanner(os.Stdin),
 		done:     make(chan struct{}),
 		incoming: make(chan *protocol.JSONRPCMessage, 16),
 		errs:     make(chan error, 1),
@@ -67,6 +63,8 @@ func (c *stdioConn) readLoop() {
 		close(c.incoming)
 	}()
 
+	decoder := json.NewDecoder(os.Stdin)
+
 	for {
 		select {
 		case <-c.done:
@@ -74,22 +72,15 @@ func (c *stdioConn) readLoop() {
 		default:
 		}
 
-		if !c.scanner.Scan() {
-			var err error
-			if scanErr := c.scanner.Err(); scanErr != nil {
-				err = fmt.Errorf("scanner error: %w", scanErr)
-			} else {
-				err = io.EOF
-			}
+		var raw json.RawMessage
+		if err := decoder.Decode(&raw); err != nil {
 			select {
 			case c.errs <- err:
 			default:
 			}
 			return
 		}
-
-		data := c.scanner.Bytes()
-		if len(data) == 0 {
+		if len(raw) == 0 {
 			select {
 			case c.errs <- fmt.Errorf("empty message"):
 			default:
@@ -98,7 +89,7 @@ func (c *stdioConn) readLoop() {
 		}
 
 		var msg protocol.JSONRPCMessage
-		if err := json.Unmarshal(data, &msg); err != nil {
+		if err := json.Unmarshal(raw, &msg); err != nil {
 			select {
 			case c.errs <- fmt.Errorf("invalid JSON-RPC message: %w", err):
 			default:

@@ -1,7 +1,6 @@
 package client
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -58,7 +57,7 @@ func (t *CommandTransport) Connect(ctx context.Context) (transport.Connection, e
 		cmd:               t.Command,
 		stdout:            stdout,
 		stdin:             stdin,
-		scanner:           bufio.NewScanner(stdout),
+		decoder:           json.NewDecoder(stdout),
 		terminateDuration: td,
 		done:              make(chan struct{}),
 	}, nil
@@ -69,7 +68,7 @@ type commandConn struct {
 	cmd               *exec.Cmd
 	stdout            io.ReadCloser
 	stdin             io.WriteCloser
-	scanner           *bufio.Scanner
+	decoder           *json.Decoder
 	mu                sync.Mutex
 	closed            atomic.Bool
 	terminateDuration time.Duration
@@ -86,23 +85,19 @@ func (c *commandConn) Read(ctx context.Context) (*protocol.JSONRPCMessage, error
 	errChan := make(chan error, 1)
 
 	go func() {
-		if !c.scanner.Scan() {
-			if err := c.scanner.Err(); err != nil {
-				errChan <- fmt.Errorf("scanner error: %w", err)
-			} else {
-				errChan <- io.EOF
-			}
+		var raw json.RawMessage
+		if err := c.decoder.Decode(&raw); err != nil {
+			errChan <- err
 			return
 		}
 
-		data := c.scanner.Bytes()
-		if len(data) == 0 {
+		if len(raw) == 0 {
 			errChan <- fmt.Errorf("empty message")
 			return
 		}
 
 		var msg protocol.JSONRPCMessage
-		if err := json.Unmarshal(data, &msg); err != nil {
+		if err := json.Unmarshal(raw, &msg); err != nil {
 			errChan <- fmt.Errorf("invalid JSON-RPC message: %w", err)
 			return
 		}
