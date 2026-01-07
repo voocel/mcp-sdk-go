@@ -167,6 +167,12 @@ func (c *Client) Connect(ctx context.Context, t transport.Transport, _ *ClientSe
 
 	cs.state.InitializeResult = &initResult
 
+	if updater, ok := conn.(interface {
+		SessionUpdated(*protocol.InitializeResult)
+	}); ok {
+		updater.SessionUpdated(&initResult)
+	}
+
 	if err := cs.sendNotification(ctx, protocol.NotificationInitialized, &protocol.InitializedParams{}); err != nil {
 		_ = cs.Close()
 		return nil, fmt.Errorf("send initialized notification failed: %w", err)

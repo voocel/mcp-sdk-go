@@ -50,6 +50,9 @@ type ServerOptions struct {
 	// Progress notification handler function
 	ProgressNotificationHandler func(context.Context, *ServerSession, *protocol.ProgressNotificationParams)
 
+	// Elicitation complete notification handler (MCP 2025-11-25)
+	ElicitationCompleteHandler func(context.Context, *ServerSession, *protocol.ElicitationCompleteNotificationParams)
+
 	// Completion handler function
 	CompletionHandler func(context.Context, *protocol.CompleteRequest) (*protocol.CompleteResult, error)
 
@@ -647,6 +650,8 @@ func (s *Server) handleNotification(ctx context.Context, ss *ServerSession, meth
 		return s.handleCancelled(ctx, ss, params)
 	case protocol.NotificationProgress:
 		return s.handleProgress(ctx, ss, params)
+	case protocol.NotificationElicitationComplete:
+		return s.handleElicitationComplete(ctx, ss, params)
 	case protocol.NotificationRootsListChanged:
 		return s.handleRootsListChanged(ctx, ss, params)
 	default:
@@ -1114,6 +1119,21 @@ func (s *Server) handleProgress(ctx context.Context, ss *ServerSession, params j
 	}
 
 	s.opts.ProgressNotificationHandler(ctx, ss, &req)
+	return nil
+}
+
+// handleElicitationComplete handles notifications/elicitation/complete (MCP 2025-11-25)
+func (s *Server) handleElicitationComplete(ctx context.Context, ss *ServerSession, params json.RawMessage) error {
+	if s.opts.ElicitationCompleteHandler == nil {
+		return nil
+	}
+
+	var req protocol.ElicitationCompleteNotificationParams
+	if err := json.Unmarshal(params, &req); err != nil {
+		return fmt.Errorf("invalid elicitation complete params: %w", err)
+	}
+
+	s.opts.ElicitationCompleteHandler(ctx, ss, &req)
 	return nil
 }
 

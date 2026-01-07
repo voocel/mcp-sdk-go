@@ -132,6 +132,11 @@ func (cs *ClientSession) NotifyCancelled(ctx context.Context, params *protocol.C
 	return cs.sendNotification(ctx, protocol.NotificationCancelled, params)
 }
 
+// NotifyElicitationComplete sends notifications/elicitation/complete (MCP 2025-11-25)
+func (cs *ClientSession) NotifyElicitationComplete(ctx context.Context, params *protocol.ElicitationCompleteNotificationParams) error {
+	return cs.sendNotification(ctx, protocol.NotificationElicitationComplete, params)
+}
+
 // GetTask retrieves a task from the server (MCP 2025-11-25)
 func (cs *ClientSession) GetTask(ctx context.Context, params *protocol.GetTaskParams) (*protocol.GetTaskResult, error) {
 	var result protocol.GetTaskResult
