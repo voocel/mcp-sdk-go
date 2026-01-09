@@ -6,9 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"strings"
 	"sync"
@@ -21,49 +19,53 @@ import (
 const (
 	MCPProtocolVersionHeader = "MCP-Protocol-Version"
 	MCPSessionIDHeader       = "Mcp-Session-Id"
+	LastEventIDHeader        = "Last-Event-ID"
 	DefaultProtocolVersion   = "2025-11-25"
 	DefaultMaxBodyBytes      = 10 << 20 // 10 MiB
 )
 
+// HTTPHandler handles Streamable HTTP MCP requests.
 type HTTPHandler struct {
 	serverFactory   func(*http.Request) *server.Server
+	writerFactory   StreamWriterFactory
 	protocolVersion string
 	maxBodyBytes    int64
 
 	mu       sync.RWMutex
-	sessions map[string]*sessionInfo
+	sessions map[string]*sessionState
 }
 
-type sessionInfo struct {
+type sessionState struct {
 	server     *server.Server
-	transport  *StreamableTransport
 	lastActive time.Time
 }
 
+// NewHTTPHandler creates a new handler with the given server factory.
 func NewHTTPHandler(serverFactory func(*http.Request) *server.Server) *HTTPHandler {
 	h := &HTTPHandler{
 		serverFactory:   serverFactory,
+		writerFactory:   NewSimpleWriterFactory(),
 		protocolVersion: DefaultProtocolVersion,
 		maxBodyBytes:    DefaultMaxBodyBytes,
-		sessions:        make(map[string]*sessionInfo),
+		sessions:        make(map[string]*sessionState),
 	}
-
-	// Start session cleanup
-	go h.cleanupSessions()
-
+	go h.cleanupLoop()
 	return h
 }
 
-// SetMaxBodyBytes sets the maximum allowed request body size for Streamable HTTP.
-// If n <= 0, the body size is not limited.
+// SetWriterFactory sets the factory used to create stream writers.
+// Use NewResumableWriterFactory(store) to enable stream resumption.
+func (h *HTTPHandler) SetWriterFactory(factory StreamWriterFactory) {
+	h.writerFactory = factory
+}
+
+// SetMaxBodyBytes sets the maximum request body size.
 func (h *HTTPHandler) SetMaxBodyBytes(n int64) {
 	h.maxBodyBytes = n
 }
 
 func (h *HTTPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set(MCPProtocolVersionHeader, h.protocolVersion)
-
-	h.checkProtocolVersion(r)
 
 	switch r.Method {
 	case http.MethodPost:
@@ -78,26 +80,19 @@ func (h *HTTPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *HTTPHandler) handlePost(w http.ResponseWriter, r *http.Request) {
-	contentType := r.Header.Get("Content-Type")
-	if !strings.Contains(contentType, "application/json") {
-		http.Error(w, "Invalid content type: must be 'application/json'", http.StatusBadRequest)
+	// Validate request
+	if r.Header.Get(LastEventIDHeader) != "" {
+		http.Error(w, "Last-Event-ID not allowed for POST", http.StatusBadRequest)
+		return
+	}
+	if !strings.Contains(r.Header.Get("Content-Type"), "application/json") {
+		http.Error(w, "Content-Type must be application/json", http.StatusBadRequest)
 		return
 	}
 
-	if h.maxBodyBytes > 0 {
-		r.Body = http.MaxBytesReader(w, r.Body, h.maxBodyBytes)
-	}
-
-	defer r.Body.Close()
-
-	body, err := io.ReadAll(r.Body)
+	// Read and parse message
+	body, err := h.readBody(w, r)
 	if err != nil {
-		var maxErr *http.MaxBytesError
-		if errors.As(err, &maxErr) {
-			http.Error(w, "Request body too large", http.StatusRequestEntityTooLarge)
-			return
-		}
-		http.Error(w, "Failed to read request body", http.StatusBadRequest)
 		return
 	}
 
@@ -107,181 +102,134 @@ func (h *HTTPHandler) handlePost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	isRequest := msg.ID != nil && msg.Method != ""
-	isNotification := msg.ID == nil && msg.Method != ""
-	isInitialize := msg.Method == protocol.MethodInitialize
-
+	// Session handling
 	sessionID := r.Header.Get(MCPSessionIDHeader)
+	isInitialize := msg.Method == protocol.MethodInitialize
 
 	if isInitialize {
 		if sessionID != "" {
-			http.Error(w, "Initialize request must not include session ID", http.StatusBadRequest)
+			http.Error(w, "Initialize must not include session ID", http.StatusBadRequest)
 			return
 		}
-		sessionID = NewSessionID()
-	} else {
-		if sessionID == "" {
-			http.Error(w, "Missing session ID", http.StatusBadRequest)
-			return
-		}
+		sessionID = newSessionID()
+	} else if sessionID == "" {
+		http.Error(w, "Missing session ID", http.StatusBadRequest)
+		return
 	}
 
-	h.mu.Lock()
-	info, exists := h.sessions[sessionID]
-
-	if !exists {
-		if !isInitialize {
-			h.mu.Unlock()
-			http.Error(w, "Session not found", http.StatusNotFound)
-			return
-		}
-
-		// Create new session
-		mcpServer := h.serverFactory(r)
-		transport := NewStreamableTransport(sessionID)
-
-		// Note: Don't call Connect, as Streamable HTTP doesn't need long-running connections
-		// We directly create the session object
-		info = &sessionInfo{
-			server:     mcpServer,
-			transport:  transport,
-			lastActive: time.Now(),
-		}
-		h.sessions[sessionID] = info
+	// Get or create session
+	session, err := h.getOrCreateSession(r, sessionID, isInitialize)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
 	}
-	info.lastActive = time.Now()
-	h.mu.Unlock()
 
-	// If it's a notification, handle directly and return 202 Accepted
-	if isNotification {
-		// Notifications don't need responses, handle directly
-		_, _ = info.server.HandleMessage(r.Context(), &msg)
+	// Handle notification (no response needed)
+	if msg.ID == nil && msg.Method != "" {
+		_, _ = session.server.HandleMessage(r.Context(), &msg)
 		w.WriteHeader(http.StatusAccepted)
 		return
 	}
 
-	// If it's a request, need to wait for response
-	if isRequest {
-		// Create a stream to track this request
-		streamID := NewSessionID()
-		requests := make(map[string]struct{})
-		requests[msg.GetIDString()] = struct{}{}
+	// Handle request
+	h.handleRequest(w, r, session, sessionID, &msg, isInitialize)
+}
 
-		done := make(chan struct{})
-		var responseData []byte
+func (h *HTTPHandler) handleRequest(w http.ResponseWriter, r *http.Request, session *sessionState, sessionID string, msg *protocol.JSONRPCMessage, isInitialize bool) {
+	wantsStream := acceptsEventStream(r)
 
-		deliver := func(data []byte, final bool) error {
-			responseData = data
-			if final {
-				close(done)
-			}
-			return nil
-		}
+	// Process message
+	response, err := session.server.HandleMessage(r.Context(), msg)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 
-		// Register stream
-		info.transport.RegisterStream(streamID, requests, deliver)
-		defer info.transport.UnregisterStream(streamID)
+	if response == nil {
+		w.WriteHeader(http.StatusAccepted)
+		return
+	}
 
-		// Handle message directly, as each Streamable HTTP request is independent
-		response, err := info.server.HandleMessage(r.Context(), &msg)
-		if err != nil {
-			http.Error(w, fmt.Sprintf("HandleMessage failed: %v", err), http.StatusInternalServerError)
-			return
-		}
+	data, err := json.Marshal(response)
+	if err != nil {
+		http.Error(w, "Failed to marshal response", http.StatusInternalServerError)
+		return
+	}
 
-		// If there's a response, send it via Write
-		if response != nil {
-			conn := &streamableConn{transport: info.transport}
-			if err := conn.Write(r.Context(), response); err != nil {
-				http.Error(w, fmt.Sprintf("Failed to write response: %v", err), http.StatusInternalServerError)
-				return
-			}
-		}
+	// Set session ID header if initialize
+	if isInitialize {
+		w.Header().Set(MCPSessionIDHeader, sessionID)
+	}
 
-		// Wait for response
-		ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
-		defer cancel()
-
-		select {
-		case <-done:
-			// Return JSON response
-			w.Header().Set("Content-Type", "application/json")
-			if isInitialize {
-				w.Header().Set(MCPSessionIDHeader, sessionID)
-			}
-			w.WriteHeader(http.StatusOK)
-			w.Write(responseData)
-
-		case <-ctx.Done():
-			http.Error(w, "Request timeout", http.StatusRequestTimeout)
-		}
+	// Respond based on client preference
+	if wantsStream {
+		h.respondSSE(w, r, sessionID, data)
+	} else {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(data)
 	}
 }
 
-// handleGet handles GET requests (receive SSE stream)
+func (h *HTTPHandler) respondSSE(w http.ResponseWriter, r *http.Request, sessionID string, data []byte) {
+	writer := h.writerFactory.Create(sessionID)
+	defer writer.Close()
+
+	streamID := newStreamID()
+	if _, err := writer.Init(r.Context(), w, streamID, ""); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	_ = writer.Write(r.Context(), data, true)
+}
+
 func (h *HTTPHandler) handleGet(w http.ResponseWriter, r *http.Request) {
 	sessionID := r.Header.Get(MCPSessionIDHeader)
 	if sessionID == "" {
-		http.Error(w, "Method not allowed without session", http.StatusMethodNotAllowed)
+		http.Error(w, "Missing session ID", http.StatusBadRequest)
 		return
 	}
 
 	h.mu.RLock()
-	info, exists := h.sessions[sessionID]
+	_, ok := h.sessions[sessionID]
 	h.mu.RUnlock()
 
-	if !exists {
+	if !ok {
 		http.Error(w, "Session not found", http.StatusNotFound)
 		return
 	}
 
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-	w.WriteHeader(http.StatusOK)
+	lastEventID := r.Header.Get(LastEventIDHeader)
+	writer := h.writerFactory.Create(sessionID)
+	defer writer.Close()
 
-	flusher, ok := w.(http.Flusher)
-	if !ok {
-		http.Error(w, "Streaming unsupported", http.StatusInternalServerError)
+	streamID := extractStreamID(lastEventID)
+	if streamID == "" {
+		streamID = newStreamID()
+	}
+
+	replay, err := writer.Init(r.Context(), w, streamID, lastEventID)
+	if err != nil {
+		if errors.Is(err, ErrReplayUnsupported) {
+			http.Error(w, "Stream resumption not enabled", http.StatusBadRequest)
+		} else {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		}
 		return
 	}
-	flusher.Flush()
 
-	// Set deliver callback for standalone SSE stream
-	done := make(chan struct{})
-
-	info.transport.streamsMu.Lock()
-	standaloneStream := info.transport.streams[""]
-	if standaloneStream != nil {
-		standaloneStream.mu.Lock()
-		standaloneStream.deliver = func(data []byte, final bool) error {
-			if err := r.Context().Err(); err != nil {
-				return err
-			}
-			fmt.Fprintf(w, "event: message\ndata: %s\n\n", data)
-			flusher.Flush()
-			return nil
+	// Replay stored events
+	for _, data := range replay {
+		if err := writer.Write(r.Context(), data, false); err != nil {
+			return
 		}
-		standaloneStream.mu.Unlock()
 	}
-	info.transport.streamsMu.Unlock()
 
-	defer func() {
-		if standaloneStream != nil {
-			standaloneStream.mu.Lock()
-			standaloneStream.deliver = nil
-			standaloneStream.mu.Unlock()
-		}
-	}()
-
-	// Keep connection until client disconnects
-	select {
-	case <-done:
-	case <-r.Context().Done():
-	}
+	// Keep connection open for future events
+	<-r.Context().Done()
 }
 
-// handleDelete handles DELETE requests (close session)
 func (h *HTTPHandler) handleDelete(w http.ResponseWriter, r *http.Request) {
 	sessionID := r.Header.Get(MCPSessionIDHeader)
 	if sessionID == "" {
@@ -290,64 +238,105 @@ func (h *HTTPHandler) handleDelete(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.mu.Lock()
-	info, exists := h.sessions[sessionID]
-	if exists {
-		if info.transport != nil {
-			info.transport.Close()
-		}
+	_, ok := h.sessions[sessionID]
+	if ok {
 		delete(h.sessions, sessionID)
 	}
 	h.mu.Unlock()
 
-	w.WriteHeader(http.StatusOK)
-}
-
-// checkProtocolVersion checks the protocol version and logs a warning if unsupported
-// It does not reject the connection to maintain compatibility with future protocol versions
-func (h *HTTPHandler) checkProtocolVersion(r *http.Request) {
-	clientVersion := r.Header.Get(MCPProtocolVersionHeader)
-	if clientVersion == "" {
+	if !ok {
+		http.Error(w, "Session not found", http.StatusNotFound)
 		return
 	}
 
-	supportedVersions := []string{
-		"2025-11-25",
-		"2025-06-18",
-		"2025-03-26",
-		"2024-11-05",
-	}
-
-	for _, version := range supportedVersions {
-		if clientVersion == version {
-			return
-		}
-	}
-
-	// Log warning but don't reject connection
-	log.Printf("[MCP] Warning: client requested unsupported protocol version: %s (supported: %v)", clientVersion, supportedVersions)
+	h.writerFactory.OnSessionClose(r.Context(), sessionID)
+	w.WriteHeader(http.StatusOK)
 }
 
-func (h *HTTPHandler) cleanupSessions() {
+// Helper functions
+
+func (h *HTTPHandler) readBody(w http.ResponseWriter, r *http.Request) ([]byte, error) {
+	if r.ContentLength > h.maxBodyBytes {
+		http.Error(w, "Request body too large", http.StatusRequestEntityTooLarge)
+		return nil, errors.New("body too large")
+	}
+	body, err := io.ReadAll(io.LimitReader(r.Body, h.maxBodyBytes))
+	if err != nil {
+		http.Error(w, "Failed to read request body", http.StatusBadRequest)
+		return nil, err
+	}
+	return body, nil
+}
+
+func (h *HTTPHandler) getOrCreateSession(r *http.Request, sessionID string, isInitialize bool) (*sessionState, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	if isInitialize {
+		srv := h.serverFactory(r)
+		h.sessions[sessionID] = &sessionState{
+			server:     srv,
+			lastActive: time.Now(),
+		}
+		return h.sessions[sessionID], nil
+	}
+
+	session, ok := h.sessions[sessionID]
+	if !ok {
+		return nil, errors.New("session not found")
+	}
+	session.lastActive = time.Now()
+	return session, nil
+}
+
+func (h *HTTPHandler) cleanupLoop() {
 	ticker := time.NewTicker(5 * time.Minute)
 	defer ticker.Stop()
 
 	for range ticker.C {
-		h.mu.Lock()
-		now := time.Now()
-		for id, info := range h.sessions {
-			if now.Sub(info.lastActive) > 30*time.Minute {
-				if info.transport != nil {
-					info.transport.Close()
-				}
-				delete(h.sessions, id)
-			}
-		}
-		h.mu.Unlock()
+		h.cleanupSessions(30 * time.Minute)
 	}
 }
 
-func NewSessionID() string {
-	b := make([]byte, 16)
-	rand.Read(b)
+func (h *HTTPHandler) cleanupSessions(maxAge time.Duration) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	now := time.Now()
+	for id, session := range h.sessions {
+		if now.Sub(session.lastActive) > maxAge {
+			delete(h.sessions, id)
+			go h.writerFactory.OnSessionClose(context.Background(), id)
+		}
+	}
+}
+
+func acceptsEventStream(r *http.Request) bool {
+	accept := r.Header.Get("Accept")
+	return strings.Contains(accept, "text/event-stream")
+}
+
+func extractStreamID(lastEventID string) string {
+	if lastEventID == "" {
+		return ""
+	}
+	streamID, _, ok := parseEventID(lastEventID)
+	if !ok {
+		return ""
+	}
+	return streamID
+}
+
+func newSessionID() string {
+	return randomHex(16)
+}
+
+func newStreamID() string {
+	return randomHex(8)
+}
+
+func randomHex(n int) string {
+	b := make([]byte, n)
+	_, _ = rand.Read(b)
 	return hex.EncodeToString(b)
 }
