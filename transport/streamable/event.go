@@ -178,7 +178,8 @@ type dataList struct {
 func (dl *dataList) appendData(d []byte) int {
 	dl.data = append(dl.data, d)
 	dl.size += len(d)
-	return dl.first + len(dl.data) - 1
+	// Start from 1 to reserve 0 for prime event
+	return dl.first + len(dl.data)
 }
 
 func (dl *dataList) removeFirst() int {
@@ -258,14 +259,18 @@ func (s *MemoryEventStore) After(_ context.Context, sessionID, streamID string, 
 	if !ok {
 		return nil, fmt.Errorf("unknown stream %q", streamID)
 	}
+	// Events are 1-indexed (0 is reserved for prime event)
+	// index is the last seen event ID, we want events after it
 	start := index + 1
-	if dl.first > start {
+	// Convert to 0-based array index: first real event (ID=1) is at array[0]
+	firstEventID := dl.first + 1
+	if firstEventID > start {
 		return nil, ErrEventsPurged
 	}
-	if start < dl.first {
-		start = dl.first
+	if start < firstEventID {
+		start = firstEventID
 	}
-	offset := start - dl.first
+	offset := start - firstEventID
 	if offset >= len(dl.data) {
 		return nil, nil
 	}

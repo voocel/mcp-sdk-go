@@ -101,6 +101,16 @@ func (rw *ResumableWriter) Init(ctx context.Context, w http.ResponseWriter, stre
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 	w.WriteHeader(http.StatusOK)
+
+	// Send prime event per MCP spec: empty data with event ID to enable client reconnection
+	// Only send if not resuming (lastEventID is empty)
+	if lastEventID == "" {
+		primeEvt := Event{ID: formatEventID(streamID, 0), Data: []byte{}}
+		if err := writeEvent(w, primeEvt); err != nil {
+			return nil, err
+		}
+		rw.lastEventID = 0 // Prime event uses ID 0
+	}
 	flusher.Flush()
 	rw.initDone = true
 
@@ -146,4 +156,3 @@ func (rw *ResumableWriter) Write(ctx context.Context, data []byte, final bool) e
 func (rw *ResumableWriter) Close() error {
 	return nil
 }
-

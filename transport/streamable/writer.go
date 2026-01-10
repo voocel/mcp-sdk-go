@@ -31,11 +31,11 @@ type StreamWriterFactory interface {
 
 // SimpleWriter is a basic StreamWriter without resumption support.
 type SimpleWriter struct {
-	w         http.ResponseWriter
-	flusher   http.Flusher
-	streamID  string
-	retryMs   int64
-	initDone  bool
+	w        http.ResponseWriter
+	flusher  http.Flusher
+	streamID string
+	retryMs  int64
+	initDone bool
 }
 
 // SimpleWriterFactory creates SimpleWriter instances.
@@ -75,6 +75,12 @@ func (sw *SimpleWriter) Init(ctx context.Context, w http.ResponseWriter, streamI
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 	w.WriteHeader(http.StatusOK)
+
+	// Send prime event per MCP spec: empty data with event ID to enable client reconnection
+	primeEvt := Event{ID: formatEventID(streamID, 0), Data: []byte{}}
+	if err := writeEvent(w, primeEvt); err != nil {
+		return nil, err
+	}
 	flusher.Flush()
 	sw.initDone = true
 
@@ -101,4 +107,3 @@ func (sw *SimpleWriter) Write(ctx context.Context, data []byte, final bool) erro
 func (sw *SimpleWriter) Close() error {
 	return nil
 }
-

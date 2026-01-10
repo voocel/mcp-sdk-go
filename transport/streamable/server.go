@@ -31,6 +31,10 @@ type HTTPHandler struct {
 	protocolVersion string
 	maxBodyBytes    int64
 
+	// Origin validation for DNS rebinding protection
+	allowedOrigins map[string]bool
+	validateOrigin bool
+
 	mu       sync.RWMutex
 	sessions map[string]*sessionState
 }
@@ -47,10 +51,23 @@ func NewHTTPHandler(serverFactory func(*http.Request) *server.Server) *HTTPHandl
 		writerFactory:   NewSimpleWriterFactory(),
 		protocolVersion: DefaultProtocolVersion,
 		maxBodyBytes:    DefaultMaxBodyBytes,
+		allowedOrigins:  make(map[string]bool),
+		validateOrigin:  false,
 		sessions:        make(map[string]*sessionState),
 	}
 	go h.cleanupLoop()
 	return h
+}
+
+// SetAllowedOrigins enables Origin validation and sets the allowed origins.
+// This is required to prevent DNS rebinding attacks per the MCP specification.
+// Pass nil or empty slice to disable validation.
+func (h *HTTPHandler) SetAllowedOrigins(origins []string) {
+	h.allowedOrigins = make(map[string]bool)
+	for _, o := range origins {
+		h.allowedOrigins[o] = true
+	}
+	h.validateOrigin = len(origins) > 0
 }
 
 // SetWriterFactory sets the factory used to create stream writers.
@@ -65,6 +82,12 @@ func (h *HTTPHandler) SetMaxBodyBytes(n int64) {
 }
 
 func (h *HTTPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// Origin validation to prevent DNS rebinding attacks (MCP spec requirement)
+	if h.validateOrigin && !h.checkOrigin(r) {
+		http.Error(w, "Forbidden: invalid origin", http.StatusForbidden)
+		return
+	}
+
 	w.Header().Set(MCPProtocolVersionHeader, h.protocolVersion)
 
 	switch r.Method {
@@ -77,6 +100,17 @@ func (h *HTTPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 	}
+}
+
+// checkOrigin validates the Origin header against allowed origins.
+// Returns true if the request is allowed.
+func (h *HTTPHandler) checkOrigin(r *http.Request) bool {
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		// No Origin header (non-browser request) - allow
+		return true
+	}
+	return h.allowedOrigins[origin]
 }
 
 func (h *HTTPHandler) handlePost(w http.ResponseWriter, r *http.Request) {
@@ -185,6 +219,12 @@ func (h *HTTPHandler) respondSSE(w http.ResponseWriter, r *http.Request, session
 }
 
 func (h *HTTPHandler) handleGet(w http.ResponseWriter, r *http.Request) {
+	// Validate Accept header per MCP spec
+	if !strings.Contains(r.Header.Get("Accept"), "text/event-stream") {
+		http.Error(w, "Accept header must include text/event-stream", http.StatusBadRequest)
+		return
+	}
+
 	sessionID := r.Header.Get(MCPSessionIDHeader)
 	if sessionID == "" {
 		http.Error(w, "Missing session ID", http.StatusBadRequest)
@@ -212,7 +252,8 @@ func (h *HTTPHandler) handleGet(w http.ResponseWriter, r *http.Request) {
 	replay, err := writer.Init(r.Context(), w, streamID, lastEventID)
 	if err != nil {
 		if errors.Is(err, ErrReplayUnsupported) {
-			http.Error(w, "Stream resumption not enabled", http.StatusBadRequest)
+			// Per MCP spec: return 405 if SSE/resumption not supported
+			http.Error(w, "Method not allowed: SSE not supported", http.StatusMethodNotAllowed)
 		} else {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 		}
