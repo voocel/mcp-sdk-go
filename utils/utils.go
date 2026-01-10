@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
-	"strings"
 
 	"github.com/google/uuid"
 	"github.com/voocel/mcp-sdk-go/protocol"
@@ -79,6 +78,9 @@ func NewJSONRPCNotification(method string, params any) (*protocol.JSONRPCMessage
 
 func StructToJSONSchema(v any) (protocol.JSONSchema, error) {
 	t := reflect.TypeOf(v)
+	if t == nil {
+		return nil, fmt.Errorf("input must be a struct or pointer to struct")
+	}
 	if t.Kind() == reflect.Ptr {
 		t = t.Elem()
 	}
@@ -87,106 +89,11 @@ func StructToJSONSchema(v any) (protocol.JSONSchema, error) {
 		return nil, fmt.Errorf("input must be a struct or pointer to struct")
 	}
 
-	return createStructSchema(t), nil
-}
-
-func createStructSchema(t reflect.Type) protocol.JSONSchema {
-	schema := protocol.JSONSchema{
-		"type":       "object",
-		"properties": make(map[string]interface{}),
-		"required":   []string{},
+	schema, err := InferSchemaFromType(t, nil)
+	if err != nil {
+		return nil, err
 	}
-
-	properties := schema["properties"].(map[string]interface{})
-	var required []string
-
-	for i := 0; i < t.NumField(); i++ {
-		field := t.Field(i)
-		if field.PkgPath != "" {
-			continue // Skip private fields
-		}
-
-		jsonTag := field.Tag.Get("json")
-		if jsonTag == "-" {
-			continue
-		}
-
-		jsonName := field.Name
-		tagParts := strings.Split(jsonTag, ",")
-		if tagParts[0] != "" {
-			jsonName = tagParts[0]
-		}
-
-		isRequired := !contains(tagParts, "omitempty")
-		if isRequired {
-			required = append(required, jsonName)
-		}
-
-		// Add field description (from jsonschema tag)
-		fieldSchema := createFieldSchema(field.Type)
-		if desc := field.Tag.Get("jsonschema"); desc != "" {
-			parts := strings.Split(desc, ",")
-			for _, part := range parts {
-				if strings.HasPrefix(part, "description=") {
-					fieldSchema["description"] = strings.TrimPrefix(part, "description=")
-				}
-			}
-		}
-
-		properties[jsonName] = fieldSchema
-	}
-
-	if len(required) > 0 {
-		schema["required"] = required
-	}
-
-	return schema
-}
-
-func createFieldSchema(t reflect.Type) map[string]interface{} {
-	schema := make(map[string]interface{})
-
-	switch t.Kind() {
-	case reflect.String:
-		schema["type"] = "string"
-	case reflect.Bool:
-		schema["type"] = "boolean"
-	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-		schema["type"] = "integer"
-	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
-		schema["type"] = "integer"
-		schema["minimum"] = 0
-	case reflect.Float32, reflect.Float64:
-		schema["type"] = "number"
-	case reflect.Array, reflect.Slice:
-		schema["type"] = "array"
-		schema["items"] = createFieldSchema(t.Elem())
-	case reflect.Map:
-		schema["type"] = "object"
-		if t.Elem().Kind() != reflect.Interface {
-			schema["additionalProperties"] = createFieldSchema(t.Elem())
-		}
-	case reflect.Struct:
-		schema = createStructSchema(t)
-	case reflect.Ptr:
-		return createFieldSchema(t.Elem())
-	case reflect.Interface:
-		// For interface{} type, allow any type
-		schema = map[string]interface{}{}
-	default:
-		schema["type"] = "string"
-	}
-
-	return schema
-}
-
-func contains(slice []string, item string) bool {
-	for _, s := range slice {
-		if s == item {
-			return true
-		}
-	}
-	return false
+	return SchemaToJSONMap(schema)
 }
 
 func JSONToStruct(data []byte, v any) error {

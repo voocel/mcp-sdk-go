@@ -48,7 +48,7 @@ type sessionState struct {
 func NewHTTPHandler(serverFactory func(*http.Request) *server.Server) *HTTPHandler {
 	h := &HTTPHandler{
 		serverFactory:   serverFactory,
-		writerFactory:   NewSimpleWriterFactory(),
+		writerFactory:   NewResumableWriterFactory(NewMemoryEventStore()),
 		protocolVersion: DefaultProtocolVersion,
 		maxBodyBytes:    DefaultMaxBodyBytes,
 		allowedOrigins:  make(map[string]bool),

@@ -8,6 +8,7 @@ import (
 
 	invopop "github.com/invopop/jsonschema"
 	"github.com/santhosh-tekuri/jsonschema/v6"
+	"github.com/voocel/mcp-sdk-go/utils"
 )
 
 var (
@@ -18,39 +19,11 @@ var (
 // inferSchema Inferring JSON Schema from Type T
 func inferSchema[T any](customTypes ...map[reflect.Type]*invopop.Schema) (*invopop.Schema, error) {
 	rt := reflect.TypeFor[T]()
-
-	// If the type is any, return a generic object schema.
-	if rt == reflect.TypeFor[any]() {
-		return &invopop.Schema{
-			Type: "object",
-		}, nil
+	var custom map[reflect.Type]*invopop.Schema
+	if len(customTypes) > 0 {
+		custom = customTypes[0]
 	}
-
-	reflector := &invopop.Reflector{
-		AllowAdditionalProperties: true, // Allow additional properties, handled by validator
-		DoNotReference:            true, // Inline directly without using $ref
-	}
-
-	// Add custom type schemas
-	if len(customTypes) > 0 && customTypes[0] != nil {
-		for typ := range customTypes[0] {
-			reflector.AddGoComments("", typ.PkgPath())
-			// Note: invopop/jsonschema doesn't have direct type override
-			// But we can customize through Reflector methods
-		}
-	}
-
-	var zero T
-	schema := reflector.Reflect(zero)
-	if schema == nil {
-		return nil, fmt.Errorf("failed to generate schema for type %v", rt)
-	}
-
-	if schema.Type != "object" {
-		return nil, fmt.Errorf("schema must have type 'object', got %q", schema.Type)
-	}
-
-	return schema, nil
+	return utils.InferSchemaFromType(rt, custom)
 }
 
 // compileSchema compiles JSON Schema and caches the result

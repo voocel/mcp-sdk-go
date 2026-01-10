@@ -202,7 +202,7 @@ type MemoryEventStore struct {
 	store    map[string]map[string]*dataList
 }
 
-const defaultMaxEventBytes = 10 << 20 // 10 MiB
+const defaultMaxEventBytes = 20 << 20 // 20 MiB
 
 // NewMemoryEventStore creates a MemoryEventStore with default limits.
 func NewMemoryEventStore() *MemoryEventStore {
