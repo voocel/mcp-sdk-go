@@ -38,6 +38,7 @@ type serverTask struct {
 	cancel   context.CancelFunc
 	done     chan struct{}
 	doneOnce sync.Once
+	sessionID string
 }
 
 type ServerOptions struct {
@@ -830,6 +831,7 @@ func (s *Server) handleCallTool(ctx context.Context, ss *ServerSession, params j
 			rpcError: nil,
 			cancel:   cancel,
 			done:     make(chan struct{}),
+			sessionID: ss.ID(),
 		}
 		s.mu.Unlock()
 
@@ -1196,6 +1198,9 @@ func (s *Server) handleTasksGet(ctx context.Context, ss *ServerSession, params j
 	if !exists {
 		return nil, protocol.NewMCPError(protocol.InvalidParams, "task not found", nil)
 	}
+	if !ss.sameSession(st.sessionID) {
+		return nil, protocol.NewMCPError(protocol.InvalidParams, "task not found", nil)
+	}
 
 	return &protocol.GetTaskResult{
 		Task: *st.task,
@@ -1217,6 +1222,12 @@ func (s *Server) handleTasksList(ctx context.Context, ss *ServerSession, params 
 	s.mu.Lock()
 	tasks := make([]protocol.Task, 0, len(s.tasks))
 	for _, st := range s.tasks {
+		if st == nil || st.task == nil {
+			continue
+		}
+		if !ss.sameSession(st.sessionID) {
+			continue
+		}
 		tasks = append(tasks, *st.task)
 	}
 	s.mu.Unlock()
@@ -1240,6 +1251,10 @@ func (s *Server) handleTasksCancel(ctx context.Context, ss *ServerSession, param
 	s.mu.Lock()
 	st := s.tasks[req.TaskID]
 	if st == nil || st.task == nil {
+		s.mu.Unlock()
+		return nil, protocol.NewMCPError(protocol.InvalidParams, "task not found", nil)
+	}
+	if !ss.sameSession(st.sessionID) {
 		s.mu.Unlock()
 		return nil, protocol.NewMCPError(protocol.InvalidParams, "task not found", nil)
 	}
@@ -1303,6 +1318,10 @@ func (s *Server) handleTasksResult(ctx context.Context, ss *ServerSession, param
 		s.mu.Unlock()
 		return nil, protocol.NewMCPError(protocol.InvalidParams, "task not found", nil)
 	}
+	if !ss.sameSession(st.sessionID) {
+		s.mu.Unlock()
+		return nil, protocol.NewMCPError(protocol.InvalidParams, "task not found", nil)
+	}
 	status := st.task.Status
 	done := st.done
 	s.mu.Unlock()
@@ -1322,6 +1341,10 @@ func (s *Server) handleTasksResult(ctx context.Context, ss *ServerSession, param
 	s.mu.Lock()
 	st = s.tasks[req.TaskID]
 	if st == nil || st.task == nil {
+		s.mu.Unlock()
+		return nil, protocol.NewMCPError(protocol.InvalidParams, "task not found", nil)
+	}
+	if !ss.sameSession(st.sessionID) {
 		s.mu.Unlock()
 		return nil, protocol.NewMCPError(protocol.InvalidParams, "task not found", nil)
 	}

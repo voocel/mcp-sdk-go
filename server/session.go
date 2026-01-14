@@ -62,6 +62,16 @@ func (ss *ServerSession) ID() string {
 	return ""
 }
 
+func (ss *ServerSession) sameSession(id string) bool {
+	if id == "" {
+		return true
+	}
+	if ss == nil {
+		return false
+	}
+	return ss.ID() == id
+}
+
 func (ss *ServerSession) Close() error {
 	if ss.keepaliveCancel != nil {
 		ss.keepaliveCancel()
