@@ -20,7 +20,7 @@
 *Easily integrate large language model capabilities with MCP Go SDK*
 
 </div>
-
+// Enforce task session isolation
 ## Introduction
 
 MCP Go SDK is a Go implementation of the Model Context Protocol, fully supporting the latest **MCP 2025-11-25** specification, while maintaining backward compatibility with **MCP 2025-06-18**, **MCP 2025-03-26** and **MCP 2024-11-05**.
@@ -549,7 +549,7 @@ handler := streamable.NewHTTPHandler(func(r *http.Request) *server.Server {
 http.ListenAndServe(":8081", handler)
 
 // Client side
-transport, err := streamable.NewStreamableTransport("http://localhost:8081/mcp")
+transport, err := streamable.NewStreamableClientTransport("http://localhost:8081/mcp")
 session, err := mcpClient.Connect(ctx, transport, nil)
 ```
 

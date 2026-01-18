@@ -549,7 +549,7 @@ handler := streamable.NewHTTPHandler(func(r *http.Request) *server.Server {
 http.ListenAndServe(":8081", handler)
 
 // 客户端
-transport, err := streamable.NewStreamableTransport("http://localhost:8081/mcp")
+transport, err := streamable.NewStreamableClientTransport("http://localhost:8081/mcp")
 session, err := mcpClient.Connect(ctx, transport, nil)
 ```
 
