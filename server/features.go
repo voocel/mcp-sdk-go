@@ -1,0 +1,161 @@
+package server
+
+import (
+	"bytes"
+	"encoding/base64"
+	"encoding/gob"
+	"fmt"
+	"iter"
+	"maps"
+	"slices"
+)
+
+// featureSet is a generic collection for managing tools/resources/prompts/resourceTemplates.
+// sortedKeys is lazily computed: set to nil after add/remove, re-sorted on first access.
+type featureSet[T any] struct {
+	uniqueID   func(T) string
+	features   map[string]T
+	sortedKeys []string
+}
+
+func newFeatureSet[T any](uniqueIDFunc func(T) string) *featureSet[T] {
+	return &featureSet[T]{
+		uniqueID: uniqueIDFunc,
+		features: make(map[string]T),
+	}
+}
+
+// add adds or replaces features.
+func (s *featureSet[T]) add(fs ...T) {
+	for _, f := range fs {
+		s.features[s.uniqueID(f)] = f
+	}
+	s.sortedKeys = nil
+}
+
+// remove removes features by uid, returns true if any were removed.
+func (s *featureSet[T]) remove(uids ...string) bool {
+	changed := false
+	for _, uid := range uids {
+		if _, ok := s.features[uid]; ok {
+			changed = true
+			delete(s.features, uid)
+		}
+	}
+	if changed {
+		s.sortedKeys = nil
+	}
+	return changed
+}
+
+// get retrieves a feature by uid.
+func (s *featureSet[T]) get(uid string) (T, bool) {
+	t, ok := s.features[uid]
+	return t, ok
+}
+
+// len returns the number of features.
+func (s *featureSet[T]) len() int { return len(s.features) }
+
+// all returns an iterator over all features sorted by uid.
+func (s *featureSet[T]) all() iter.Seq[T] {
+	s.sortKeys()
+	return func(yield func(T) bool) {
+		s.yieldFrom(0, yield)
+	}
+}
+
+// above returns an iterator over features with uid greater than the given value (for cursor pagination).
+func (s *featureSet[T]) above(uid string) iter.Seq[T] {
+	s.sortKeys()
+	index, found := slices.BinarySearch(s.sortedKeys, uid)
+	if found {
+		index++
+	}
+	return func(yield func(T) bool) {
+		s.yieldFrom(index, yield)
+	}
+}
+
+func (s *featureSet[T]) sortKeys() {
+	if s.sortedKeys != nil {
+		return
+	}
+	s.sortedKeys = slices.Sorted(maps.Keys(s.features))
+}
+
+func (s *featureSet[T]) yieldFrom(index int, yield func(T) bool) {
+	for i := index; i < len(s.sortedKeys); i++ {
+		if !yield(s.features[s.sortedKeys[i]]) {
+			return
+		}
+	}
+}
+
+// DefaultPageSize is the default page size for list pagination.
+const DefaultPageSize = 1000
+
+// pageToken is the internal representation of a pagination cursor.
+type pageToken struct {
+	LastUID string
+}
+
+// encodeCursor encodes a uid into an opaque pagination cursor string.
+func encodeCursor(uid string) (string, error) {
+	var buf bytes.Buffer
+	if err := gob.NewEncoder(&buf).Encode(pageToken{LastUID: uid}); err != nil {
+		return "", fmt.Errorf("failed to encode page token: %w", err)
+	}
+	return base64.URLEncoding.EncodeToString(buf.Bytes()), nil
+}
+
+// decodeCursor decodes an opaque pagination cursor string into a pageToken.
+func decodeCursor(cursor string) (*pageToken, error) {
+	data, err := base64.URLEncoding.DecodeString(cursor)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode cursor: %w", err)
+	}
+	var token pageToken
+	if err := gob.NewDecoder(bytes.NewReader(data)).Decode(&token); err != nil {
+		return nil, fmt.Errorf("failed to decode page token: %w", err)
+	}
+	return &token, nil
+}
+
+// paginateList performs cursor-based pagination on a featureSet.
+// Empty cursor starts from the beginning. pageSize <= 0 returns all items.
+func paginateList[T any](fs *featureSet[T], pageSize int, cursor string) (items []T, nextCursor string, err error) {
+	var seq iter.Seq[T]
+	if cursor == "" {
+		seq = fs.all()
+	} else {
+		pt, err := decodeCursor(cursor)
+		if err != nil {
+			return nil, "", err
+		}
+		seq = fs.above(pt.LastUID)
+	}
+
+	if pageSize <= 0 {
+		for f := range seq {
+			items = append(items, f)
+		}
+		return items, "", nil
+	}
+
+	var count int
+	for f := range seq {
+		count++
+		if count > pageSize {
+			break
+		}
+		items = append(items, f)
+	}
+
+	if count <= pageSize {
+		return items, "", nil
+	}
+
+	nextCursor, err = encodeCursor(fs.uniqueID(items[len(items)-1]))
+	return items, nextCursor, err
+}

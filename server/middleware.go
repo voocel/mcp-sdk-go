@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"runtime/debug"
@@ -12,16 +13,23 @@ import (
 
 type Middleware func(ToolHandler) ToolHandler
 
-// Use adds middleware to the Server. Middleware is executed in the order added (onion model).
+// MethodHandler is a generic handler for any MCP RPC method.
+type MethodHandler func(ctx context.Context, method string, params json.RawMessage, session *ServerSession) (any, error)
+
+// MethodMiddleware is a method-level middleware that can intercept any inbound RPC request.
+type MethodMiddleware func(MethodHandler) MethodHandler
+
+// Use adds tool-level middleware to the Server. Middleware is executed in the order added (onion model).
+// Tool-level middleware only intercepts tools/call requests.
+// For intercepting all RPC methods, use [Server.AddReceivingMiddleware].
 func (s *Server) Use(middleware ...Middleware) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	s.middlewares = append(s.middlewares, middleware...)
 
-	for name, st := range s.tools {
-		wrappedHandler := applyMiddleware(st.handler, middleware)
-		s.tools[name].handler = wrappedHandler
+	for st := range s.tools.all() {
+		st.handler = applyMiddleware(st.handler, middleware)
 	}
 }
 
@@ -193,11 +201,11 @@ func AuthMiddleware(validator AuthValidator) Middleware {
 
 // AuthValidator is the authentication validator interface
 type AuthValidator interface {
-	Validate(authInfo interface{}, tool string) bool
+	Validate(authInfo any, tool string) bool
 }
 
 // extractAuthInfo extracts auth info from the request (can be from ctx or req.Params.Meta)
-func extractAuthInfo(ctx context.Context, req *CallToolRequest) interface{} {
+func extractAuthInfo(ctx context.Context, req *CallToolRequest) any {
 	if req.Params.Meta != nil {
 		if auth, ok := req.Params.Meta["auth"]; ok {
 			return auth
@@ -254,4 +262,59 @@ func ValidationMiddleware(validator ParamsValidator) Middleware {
 
 type ParamsValidator interface {
 	Validate(tool string, arguments map[string]any) error
+}
+
+// AddReceivingMiddleware adds method-level middleware that intercepts all inbound RPC requests.
+// Middleware is eagerly wrapped onto the handler in the order added.
+func (s *Server) AddReceivingMiddleware(middleware ...MethodMiddleware) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := len(middleware) - 1; i >= 0; i-- {
+		s.receivingHandler = middleware[i](s.receivingHandler)
+	}
+}
+
+// MethodLoggingMiddleware is a method-level middleware that logs all RPC method calls.
+func MethodLoggingMiddleware(logger *slog.Logger) MethodMiddleware {
+	return func(next MethodHandler) MethodHandler {
+		return func(ctx context.Context, method string, params json.RawMessage, session *ServerSession) (any, error) {
+			start := time.Now()
+			logger.Info("RPC request started",
+				slog.String("method", method),
+				slog.String("session", session.ID()),
+			)
+
+			result, err := next(ctx, method, params, session)
+
+			duration := time.Since(start)
+			if err != nil {
+				logger.Error("RPC request failed",
+					slog.String("method", method),
+					slog.Duration("duration", duration),
+					slog.String("error", err.Error()),
+				)
+			} else {
+				logger.Info("RPC request completed",
+					slog.String("method", method),
+					slog.Duration("duration", duration),
+				)
+			}
+			return result, err
+		}
+	}
+}
+
+// MethodRecoveryMiddleware is a method-level middleware that recovers from panics.
+func MethodRecoveryMiddleware() MethodMiddleware {
+	return func(next MethodHandler) MethodHandler {
+		return func(ctx context.Context, method string, params json.RawMessage, session *ServerSession) (result any, err error) {
+			defer func() {
+				if r := recover(); r != nil {
+					stack := debug.Stack()
+					err = fmt.Errorf("panic recovered in %s: %v\n%s", method, r, stack)
+				}
+			}()
+			return next(ctx, method, params, session)
+		}
+	}
 }

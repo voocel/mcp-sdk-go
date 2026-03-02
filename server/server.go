@@ -20,11 +20,12 @@ type Server struct {
 	opts ServerOptions
 
 	mu                    sync.Mutex
-	middlewares           []Middleware // Middleware chain
-	tools                 map[string]*serverTool
-	resources             map[string]*serverResource
-	resourceTemplates     map[string]*serverResourceTemplate
-	prompts               map[string]*serverPrompt
+	middlewares           []Middleware       // Tool-level middleware chain
+	receivingHandler      MethodHandler      // Pre-wrapped method-level handler
+	tools                 *featureSet[*serverTool]
+	resources             *featureSet[*serverResource]
+	resourceTemplates     *featureSet[*serverResourceTemplate]
+	prompts               *featureSet[*serverPrompt]
 	sessions              []*ServerSession
 	resourceSubscriptions map[string]map[*ServerSession]bool // uri -> session -> bool
 	tasks                 map[string]*serverTask             // taskId -> task (MCP 2025-11-25)
@@ -82,7 +83,11 @@ type ServerOptions struct {
 
 	// TaskResultHandler handles tasks/result requests (MCP 2025-11-25)
 	// Returns the original request's result type (e.g., *CallToolResult)
-	TaskResultHandler func(context.Context, *protocol.TaskResultParams) (interface{}, error)
+	TaskResultHandler func(context.Context, *protocol.TaskResultParams) (any, error)
+
+	// PageSize is the maximum number of items returned per page in list methods.
+	// Zero means DefaultPageSize (1000).
+	PageSize int
 }
 
 type serverTool struct {
@@ -120,11 +125,19 @@ type GetPromptRequest struct {
 
 func NewServer(impl *protocol.ServerInfo, opts *ServerOptions) *Server {
 	s := &Server{
-		impl:                  impl,
-		tools:                 make(map[string]*serverTool),
-		resources:             make(map[string]*serverResource),
-		resourceTemplates:     make(map[string]*serverResourceTemplate),
-		prompts:               make(map[string]*serverPrompt),
+		impl: impl,
+		tools: newFeatureSet(func(st *serverTool) string {
+			return st.tool.Name
+		}),
+		resources: newFeatureSet(func(sr *serverResource) string {
+			return sr.resource.URI
+		}),
+		resourceTemplates: newFeatureSet(func(srt *serverResourceTemplate) string {
+			return srt.template.URITemplate
+		}),
+		prompts: newFeatureSet(func(sp *serverPrompt) string {
+			return sp.prompt.Name
+		}),
 		sessions:              make([]*ServerSession, 0),
 		resourceSubscriptions: make(map[string]map[*ServerSession]bool),
 		tasks:                 make(map[string]*serverTask),
@@ -132,7 +145,28 @@ func NewServer(impl *protocol.ServerInfo, opts *ServerOptions) *Server {
 	if opts != nil {
 		s.opts = *opts
 	}
+	if s.opts.PageSize <= 0 {
+		s.opts.PageSize = DefaultPageSize
+	}
+	s.receivingHandler = s.dispatchRequest
 	return s
+}
+
+// changeAndNotify executes a change under lock and notifies all sessions if the change returns true.
+func (s *Server) changeAndNotify(notification string, change func() bool) {
+	s.mu.Lock()
+	changed := change()
+	sessions := make([]*ServerSession, len(s.sessions))
+	copy(sessions, s.sessions)
+	s.mu.Unlock()
+
+	if changed {
+		for _, ss := range sessions {
+			if ss.conn != nil {
+				_ = ss.conn.SendNotification(context.Background(), notification, &struct{}{})
+			}
+		}
+	}
 }
 
 // AddTool adds a tool to the server, or replaces a tool with the same name (low-level API).
@@ -163,139 +197,59 @@ func (s *Server) AddTool(t *protocol.Tool, h ToolHandler) {
 		panic(fmt.Errorf("AddTool %q: missing input schema", t.Name))
 	}
 
-	s.mu.Lock()
-
-	// Apply middleware
-	wrappedHandler := applyMiddleware(h, s.middlewares)
-
-	s.tools[t.Name] = &serverTool{
-		tool:    t,
-		handler: wrappedHandler,
-	}
-
-	sessions := make([]*ServerSession, len(s.sessions))
-	copy(sessions, s.sessions)
-	s.mu.Unlock()
-
-	// Notify all sessions that the tool list has changed
-	notifyToolListChanged(sessions)
+	s.changeAndNotify(protocol.NotificationToolsListChanged, func() bool {
+		wrappedHandler := applyMiddleware(h, s.middlewares)
+		s.tools.add(&serverTool{tool: t, handler: wrappedHandler})
+		return true
+	})
 }
 
 func (s *Server) RemoveTool(name string) {
-	s.mu.Lock()
-
-	var changed bool
-	if _, exists := s.tools[name]; exists {
-		delete(s.tools, name)
-		changed = true
-	}
-
-	sessions := make([]*ServerSession, len(s.sessions))
-	copy(sessions, s.sessions)
-	s.mu.Unlock()
-
-	if changed {
-		notifyToolListChanged(sessions)
-	}
+	s.changeAndNotify(protocol.NotificationToolsListChanged, func() bool {
+		return s.tools.remove(name)
+	})
 }
 
 func (s *Server) AddResource(r *protocol.Resource, h ResourceHandler) {
-	s.mu.Lock()
-
-	s.resources[r.URI] = &serverResource{
-		resource: r,
-		handler:  h,
-	}
-
-	sessions := make([]*ServerSession, len(s.sessions))
-	copy(sessions, s.sessions)
-	s.mu.Unlock()
-
-	notifyResourceListChanged(sessions)
+	sr := &serverResource{resource: r, handler: h}
+	s.changeAndNotify(protocol.NotificationResourcesListChanged, func() bool {
+		s.resources.add(sr)
+		return true
+	})
 }
 
 func (s *Server) RemoveResource(uri string) {
-	s.mu.Lock()
-
-	var changed bool
-	if _, exists := s.resources[uri]; exists {
-		delete(s.resources, uri)
-		changed = true
-	}
-
-	sessions := make([]*ServerSession, len(s.sessions))
-	copy(sessions, s.sessions)
-	s.mu.Unlock()
-
-	if changed {
-		notifyResourceListChanged(sessions)
-	}
+	s.changeAndNotify(protocol.NotificationResourcesListChanged, func() bool {
+		return s.resources.remove(uri)
+	})
 }
 
 func (s *Server) AddResourceTemplate(t *protocol.ResourceTemplate, h ResourceHandler) {
-	s.mu.Lock()
-
-	s.resourceTemplates[t.URITemplate] = &serverResourceTemplate{
-		template: t,
-		handler:  h,
-	}
-
-	sessions := make([]*ServerSession, len(s.sessions))
-	copy(sessions, s.sessions)
-	s.mu.Unlock()
-
-	notifyResourceListChanged(sessions)
+	srt := &serverResourceTemplate{template: t, handler: h}
+	s.changeAndNotify(protocol.NotificationResourcesListChanged, func() bool {
+		s.resourceTemplates.add(srt)
+		return true
+	})
 }
 
 func (s *Server) RemoveResourceTemplate(uriTemplate string) {
-	s.mu.Lock()
-
-	var changed bool
-	if _, exists := s.resourceTemplates[uriTemplate]; exists {
-		delete(s.resourceTemplates, uriTemplate)
-		changed = true
-	}
-
-	sessions := make([]*ServerSession, len(s.sessions))
-	copy(sessions, s.sessions)
-	s.mu.Unlock()
-
-	if changed {
-		notifyResourceListChanged(sessions)
-	}
+	s.changeAndNotify(protocol.NotificationResourcesListChanged, func() bool {
+		return s.resourceTemplates.remove(uriTemplate)
+	})
 }
 
 func (s *Server) AddPrompt(p *protocol.Prompt, h PromptHandler) {
-	s.mu.Lock()
-
-	s.prompts[p.Name] = &serverPrompt{
-		prompt:  p,
-		handler: h,
-	}
-
-	sessions := make([]*ServerSession, len(s.sessions))
-	copy(sessions, s.sessions)
-	s.mu.Unlock()
-
-	notifyPromptListChanged(sessions)
+	sp := &serverPrompt{prompt: p, handler: h}
+	s.changeAndNotify(protocol.NotificationPromptsListChanged, func() bool {
+		s.prompts.add(sp)
+		return true
+	})
 }
 
 func (s *Server) RemovePrompt(name string) {
-	s.mu.Lock()
-
-	var changed bool
-	if _, exists := s.prompts[name]; exists {
-		delete(s.prompts, name)
-		changed = true
-	}
-
-	sessions := make([]*ServerSession, len(s.sessions))
-	copy(sessions, s.sessions)
-	s.mu.Unlock()
-
-	if changed {
-		notifyPromptListChanged(sessions)
-	}
+	s.changeAndNotify(protocol.NotificationPromptsListChanged, func() bool {
+		return s.prompts.remove(name)
+	})
 }
 
 // Run runs the server on the given transport.
@@ -541,24 +495,6 @@ type ServerSessionOptions struct {
 	onClose func()
 }
 
-func notifyToolListChanged(sessions []*ServerSession) {
-	for _, ss := range sessions {
-		_ = ss.conn.SendNotification(context.Background(), protocol.NotificationToolsListChanged, &protocol.ToolListChangedParams{})
-	}
-}
-
-func notifyResourceListChanged(sessions []*ServerSession) {
-	for _, ss := range sessions {
-		_ = ss.conn.SendNotification(context.Background(), protocol.NotificationResourcesListChanged, &protocol.ResourceListChangedParams{})
-	}
-}
-
-func notifyPromptListChanged(sessions []*ServerSession) {
-	for _, ss := range sessions {
-		_ = ss.conn.SendNotification(context.Background(), protocol.NotificationPromptsListChanged, &protocol.PromptListChangedParams{})
-	}
-}
-
 // NotifyResourceUpdated notifies all sessions subscribed to the specified resource that it has been updated.
 // Only clients that have previously called resources/subscribe to subscribe to this URI will receive the notification.
 func (s *Server) NotifyResourceUpdated(uri string) {
@@ -587,8 +523,17 @@ func (s *Server) NotifyResourceUpdated(uri string) {
 	}
 }
 
-// handleRequest handles requests from the client
-func (s *Server) handleRequest(ctx context.Context, ss *ServerSession, method string, params json.RawMessage) (interface{}, error) {
+// handleRequest handles requests from the client, through the pre-wrapped MethodMiddleware chain.
+func (s *Server) handleRequest(ctx context.Context, ss *ServerSession, method string, params json.RawMessage) (any, error) {
+	s.mu.Lock()
+	handler := s.receivingHandler
+	s.mu.Unlock()
+
+	return handler(ctx, method, params, ss)
+}
+
+// dispatchRequest is the core method dispatch logic.
+func (s *Server) dispatchRequest(ctx context.Context, method string, params json.RawMessage, ss *ServerSession) (any, error) {
 	switch method {
 	case protocol.MethodInitialize:
 		return s.handleInitialize(ctx, ss, params)
@@ -684,9 +629,9 @@ func (s *Server) handleInitialize(ctx context.Context, ss *ServerSession, params
 	capabilities := protocol.ServerCapabilities{}
 
 	s.mu.Lock()
-	hasTools := len(s.tools) > 0
-	hasResources := len(s.resources) > 0 || len(s.resourceTemplates) > 0
-	hasPrompts := len(s.prompts) > 0
+	hasTools := s.tools.len() > 0
+	hasResources := s.resources.len() > 0 || s.resourceTemplates.len() > 0
+	hasPrompts := s.prompts.len() > 0
 	subscribeSupported := s.opts.SubscribeHandler != nil && s.opts.UnsubscribeHandler != nil
 
 	if hasTools {
@@ -757,28 +702,41 @@ func (s *Server) handleInitialized(ctx context.Context, ss *ServerSession, param
 
 // handleListTools handles the tools/list request
 func (s *Server) handleListTools(ctx context.Context, ss *ServerSession, params json.RawMessage) (*protocol.ListToolsResult, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	var req protocol.ListToolsParams
+	if len(params) > 0 {
+		if err := json.Unmarshal(params, &req); err != nil {
+			return nil, protocol.NewMCPError(protocol.InvalidParams, "Invalid params", nil)
+		}
+	}
 
-	tools := make([]protocol.Tool, 0, len(s.tools))
-	for _, st := range s.tools {
+	s.mu.Lock()
+	items, nextCursor, err := paginateList(s.tools, s.opts.PageSize, req.Cursor)
+	s.mu.Unlock()
+	if err != nil {
+		return nil, protocol.NewMCPError(protocol.InvalidParams, "Invalid cursor", nil)
+	}
+
+	tools := make([]protocol.Tool, 0, len(items))
+	for _, st := range items {
 		tools = append(tools, *st.tool)
 	}
 
-	return &protocol.ListToolsResult{
-		Tools: tools,
-	}, nil
+	result := &protocol.ListToolsResult{Tools: tools}
+	if nextCursor != "" {
+		result.NextCursor = &nextCursor
+	}
+	return result, nil
 }
 
 // handleCallTool handles the tools/call request
-func (s *Server) handleCallTool(ctx context.Context, ss *ServerSession, params json.RawMessage) (interface{}, error) {
+func (s *Server) handleCallTool(ctx context.Context, ss *ServerSession, params json.RawMessage) (any, error) {
 	var req protocol.CallToolParams
 	if err := json.Unmarshal(params, &req); err != nil {
 		return nil, protocol.NewMCPError(protocol.InvalidParams, "Invalid params", map[string]any{"method": protocol.MethodToolsCall})
 	}
 
 	s.mu.Lock()
-	st, exists := s.tools[req.Name]
+	st, exists := s.tools.get(req.Name)
 	s.mu.Unlock()
 
 	if !exists {
@@ -926,32 +884,58 @@ func (s *Server) handleCallTool(ctx context.Context, ss *ServerSession, params j
 
 // handleListResources handles the resources/list request
 func (s *Server) handleListResources(ctx context.Context, ss *ServerSession, params json.RawMessage) (*protocol.ListResourcesResult, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	var req protocol.ListResourcesParams
+	if len(params) > 0 {
+		if err := json.Unmarshal(params, &req); err != nil {
+			return nil, protocol.NewMCPError(protocol.InvalidParams, "Invalid params", nil)
+		}
+	}
 
-	resources := make([]protocol.Resource, 0, len(s.resources))
-	for _, sr := range s.resources {
+	s.mu.Lock()
+	items, nextCursor, err := paginateList(s.resources, s.opts.PageSize, req.Cursor)
+	s.mu.Unlock()
+	if err != nil {
+		return nil, protocol.NewMCPError(protocol.InvalidParams, "Invalid cursor", nil)
+	}
+
+	resources := make([]protocol.Resource, 0, len(items))
+	for _, sr := range items {
 		resources = append(resources, *sr.resource)
 	}
 
-	return &protocol.ListResourcesResult{
-		Resources: resources,
-	}, nil
+	result := &protocol.ListResourcesResult{Resources: resources}
+	if nextCursor != "" {
+		result.NextCursor = &nextCursor
+	}
+	return result, nil
 }
 
 // handleListResourceTemplates handles the resources/templates/list request
 func (s *Server) handleListResourceTemplates(ctx context.Context, ss *ServerSession, params json.RawMessage) (*protocol.ListResourceTemplatesResult, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	var req protocol.ListResourceTemplatesParams
+	if len(params) > 0 {
+		if err := json.Unmarshal(params, &req); err != nil {
+			return nil, protocol.NewMCPError(protocol.InvalidParams, "Invalid params", nil)
+		}
+	}
 
-	templates := make([]protocol.ResourceTemplate, 0, len(s.resourceTemplates))
-	for _, srt := range s.resourceTemplates {
+	s.mu.Lock()
+	items, nextCursor, err := paginateList(s.resourceTemplates, s.opts.PageSize, req.Cursor)
+	s.mu.Unlock()
+	if err != nil {
+		return nil, protocol.NewMCPError(protocol.InvalidParams, "Invalid cursor", nil)
+	}
+
+	templates := make([]protocol.ResourceTemplate, 0, len(items))
+	for _, srt := range items {
 		templates = append(templates, *srt.template)
 	}
 
-	return &protocol.ListResourceTemplatesResult{
-		ResourceTemplates: templates,
-	}, nil
+	result := &protocol.ListResourceTemplatesResult{ResourceTemplates: templates}
+	if nextCursor != "" {
+		result.NextCursor = &nextCursor
+	}
+	return result, nil
 }
 
 // handleReadResource handles the resources/read request
@@ -962,7 +946,7 @@ func (s *Server) handleReadResource(ctx context.Context, ss *ServerSession, para
 	}
 
 	s.mu.Lock()
-	sr, exists := s.resources[req.URI]
+	sr, exists := s.resources.get(req.URI)
 	s.mu.Unlock()
 
 	if !exists {
@@ -1028,17 +1012,30 @@ func (s *Server) handleUnsubscribe(ctx context.Context, ss *ServerSession, param
 
 // handleListPrompts handles the prompts/list request
 func (s *Server) handleListPrompts(ctx context.Context, ss *ServerSession, params json.RawMessage) (*protocol.ListPromptsResult, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	var req protocol.ListPromptsParams
+	if len(params) > 0 {
+		if err := json.Unmarshal(params, &req); err != nil {
+			return nil, protocol.NewMCPError(protocol.InvalidParams, "Invalid params", nil)
+		}
+	}
 
-	prompts := make([]protocol.Prompt, 0, len(s.prompts))
-	for _, sp := range s.prompts {
+	s.mu.Lock()
+	items, nextCursor, err := paginateList(s.prompts, s.opts.PageSize, req.Cursor)
+	s.mu.Unlock()
+	if err != nil {
+		return nil, protocol.NewMCPError(protocol.InvalidParams, "Invalid cursor", nil)
+	}
+
+	prompts := make([]protocol.Prompt, 0, len(items))
+	for _, sp := range items {
 		prompts = append(prompts, *sp.prompt)
 	}
 
-	return &protocol.ListPromptsResult{
-		Prompts: prompts,
-	}, nil
+	result := &protocol.ListPromptsResult{Prompts: prompts}
+	if nextCursor != "" {
+		result.NextCursor = &nextCursor
+	}
+	return result, nil
 }
 
 // handleGetPrompt handles the prompts/get request
@@ -1049,7 +1046,7 @@ func (s *Server) handleGetPrompt(ctx context.Context, ss *ServerSession, params 
 	}
 
 	s.mu.Lock()
-	sp, exists := s.prompts[req.Name]
+	sp, exists := s.prompts.get(req.Name)
 	s.mu.Unlock()
 
 	if !exists {
@@ -1301,7 +1298,7 @@ func (s *Server) handleTasksCancel(ctx context.Context, ss *ServerSession, param
 
 // handleTasksResult handles the tasks/result request (MCP 2025-11-25)
 // Per spec, this returns the original request's result type directly
-func (s *Server) handleTasksResult(ctx context.Context, ss *ServerSession, params json.RawMessage) (interface{}, error) {
+func (s *Server) handleTasksResult(ctx context.Context, ss *ServerSession, params json.RawMessage) (any, error) {
 	var req protocol.TaskResultParams
 	if err := json.Unmarshal(params, &req); err != nil {
 		return nil, protocol.NewMCPError(protocol.InvalidParams, "Invalid params", map[string]any{"method": protocol.MethodTasksResult})
