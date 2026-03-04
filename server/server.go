@@ -29,6 +29,7 @@ type Server struct {
 	sessions              []*ServerSession
 	resourceSubscriptions map[string]map[*ServerSession]bool // uri -> session -> bool
 	tasks                 map[string]*serverTask             // taskId -> task (MCP 2025-11-25)
+	pendingNotifications  map[string]*time.Timer             // debounced notification timers
 }
 
 // serverTask represents a task stored in the server (MCP 2025-11-25)
@@ -141,6 +142,7 @@ func NewServer(impl *protocol.ServerInfo, opts *ServerOptions) *Server {
 		sessions:              make([]*ServerSession, 0),
 		resourceSubscriptions: make(map[string]map[*ServerSession]bool),
 		tasks:                 make(map[string]*serverTask),
+		pendingNotifications:  make(map[string]*time.Timer),
 	}
 	if opts != nil {
 		s.opts = *opts
@@ -152,19 +154,37 @@ func NewServer(impl *protocol.ServerInfo, opts *ServerOptions) *Server {
 	return s
 }
 
-// changeAndNotify executes a change under lock and notifies all sessions if the change returns true.
+// notificationDelay is the debounce interval for change notifications.
+const notificationDelay = 10 * time.Millisecond
+
+// changeAndNotify executes a change under lock and debounces notification sending.
+// Multiple changes within notificationDelay are coalesced into a single notification.
 func (s *Server) changeAndNotify(notification string, change func() bool) {
 	s.mu.Lock()
-	changed := change()
+	defer s.mu.Unlock()
+	if !change() {
+		return
+	}
+	if t := s.pendingNotifications[notification]; t == nil {
+		s.pendingNotifications[notification] = time.AfterFunc(notificationDelay, func() {
+			s.sendPendingNotification(notification)
+		})
+	} else {
+		t.Reset(notificationDelay)
+	}
+}
+
+// sendPendingNotification sends a debounced notification to all sessions.
+func (s *Server) sendPendingNotification(notification string) {
+	s.mu.Lock()
 	sessions := make([]*ServerSession, len(s.sessions))
 	copy(sessions, s.sessions)
+	s.pendingNotifications[notification] = nil
 	s.mu.Unlock()
 
-	if changed {
-		for _, ss := range sessions {
-			if ss.conn != nil {
-				_ = ss.conn.SendNotification(context.Background(), notification, &struct{}{})
-			}
+	for _, ss := range sessions {
+		if ss.conn != nil {
+			_ = ss.conn.SendNotification(context.Background(), notification, &struct{}{})
 		}
 	}
 }
