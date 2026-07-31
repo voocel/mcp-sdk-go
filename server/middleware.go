@@ -2,8 +2,6 @@ package server
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
 	"log/slog"
 	"runtime/debug"
 	"time"
@@ -11,310 +9,47 @@ import (
 	"github.com/voocel/mcp-sdk-go/protocol"
 )
 
-type Middleware func(ToolHandler) ToolHandler
+// RawHandler is the uniform shape every method resolves to at dispatch time.
+type RawHandler func(ctx context.Context, req *Request) (protocol.Result, error)
 
-// MethodHandler is a generic handler for any MCP RPC method.
-type MethodHandler func(ctx context.Context, method string, params json.RawMessage, session *ServerSession) (any, error)
+// Middleware wraps a RawHandler. Middleware is applied at dispatch time, so
+// registration order of tools and middleware does not matter.
+type Middleware func(RawHandler) RawHandler
 
-// MethodMiddleware is a method-level middleware that can intercept any inbound RPC request.
-type MethodMiddleware func(MethodHandler) MethodHandler
-
-// Use adds tool-level middleware to the Server. Middleware is executed in the order added (onion model).
-// Tool-level middleware only intercepts tools/call requests.
-// For intercepting all RPC methods, use [Server.AddReceivingMiddleware].
-func (s *Server) Use(middleware ...Middleware) {
+// Use appends middleware. The first Use'd middleware is outermost.
+func (s *Server) Use(m ...Middleware) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-
-	s.middlewares = append(s.middlewares, middleware...)
-
-	for st := range s.tools.all() {
-		st.handler = applyMiddleware(st.handler, middleware)
-	}
+	s.middleware = append(s.middleware, m...)
 }
 
-// applyMiddleware applies the middleware chain
-func applyMiddleware(handler ToolHandler, middlewares []Middleware) ToolHandler {
-	// Apply middleware from back to front (forming the onion model)
-	for i := len(middlewares) - 1; i >= 0; i-- {
-		handler = middlewares[i](handler)
-	}
-	return handler
-}
-
-// LoggingMiddleware is a logging middleware
-func LoggingMiddleware(logger *slog.Logger) Middleware {
-	return func(next ToolHandler) ToolHandler {
-		return func(ctx context.Context, req *CallToolRequest) (*protocol.CallToolResult, error) {
-			start := time.Now()
-			toolName := req.Params.Name
-
-			logger.Info("tool call started",
-				slog.String("tool", toolName),
-				slog.Any("arguments", req.Params.Arguments),
-			)
-
-			result, err := next(ctx, req)
-
-			duration := time.Since(start)
-
-			if err != nil {
-				logger.Error("tool call failed",
-					slog.String("tool", toolName),
-					slog.Duration("duration", duration),
-					slog.String("error", err.Error()),
-				)
-			} else {
-				logger.Info("tool call completed",
-					slog.String("tool", toolName),
-					slog.Duration("duration", duration),
-					slog.Bool("isError", result.IsError),
-				)
-			}
-
-			return result, err
-		}
-	}
-}
-
-// RecoveryMiddleware is a recovery middleware
-func RecoveryMiddleware() Middleware {
-	return func(next ToolHandler) ToolHandler {
-		return func(ctx context.Context, req *CallToolRequest) (result *protocol.CallToolResult, err error) {
+// Recovery converts handler panics into -32603 errors. The stack trace goes
+// to slog, never to the wire.
+func Recovery() Middleware {
+	return func(next RawHandler) RawHandler {
+		return func(ctx context.Context, req *Request) (res protocol.Result, err error) {
 			defer func() {
 				if r := recover(); r != nil {
-					// Capture panic
-					stack := debug.Stack()
-					err = fmt.Errorf("panic recovered: %v\n%s", r, stack)
-					result = ErrorResult("Internal server error", err)
+					slog.Error("mcp handler panic", "method", req.Method(), "panic", r, "stack", string(debug.Stack()))
+					res, err = nil, protocol.Errorf(protocol.CodeInternal, "internal error")
 				}
 			}()
-
 			return next(ctx, req)
 		}
 	}
 }
 
-// TimeoutMiddleware is a timeout middleware
-func TimeoutMiddleware(timeout time.Duration) Middleware {
-	return func(next ToolHandler) ToolHandler {
-		return func(ctx context.Context, req *CallToolRequest) (*protocol.CallToolResult, error) {
-			// Create context with timeout
-			timeoutCtx, cancel := context.WithTimeout(ctx, timeout)
+// Timeout bounds each request. subscriptions/listen is exempt: its lifetime
+// is the stream itself.
+func Timeout(d time.Duration) Middleware {
+	return func(next RawHandler) RawHandler {
+		return func(ctx context.Context, req *Request) (protocol.Result, error) {
+			if req.Method() == protocol.MethodSubscriptionsListen {
+				return next(ctx, req)
+			}
+			ctx, cancel := context.WithTimeout(ctx, d)
 			defer cancel()
-
-			// Use channel to receive result
-			resultCh := make(chan struct {
-				result *protocol.CallToolResult
-				err    error
-			}, 1)
-
-			go func() {
-				result, err := next(timeoutCtx, req)
-				resultCh <- struct {
-					result *protocol.CallToolResult
-					err    error
-				}{result, err}
-			}()
-
-			select {
-			case res := <-resultCh:
-				return res.result, res.err
-			case <-timeoutCtx.Done():
-				return nil, TimeoutError(
-					fmt.Sprintf("tool execution exceeded %v", timeout),
-					WithDetail("tool", req.Params.Name),
-				)
-			}
-		}
-	}
-}
-
-// MetricsMiddleware is a metrics middleware
-func MetricsMiddleware(collector MetricsCollector) Middleware {
-	return func(next ToolHandler) ToolHandler {
-		return func(ctx context.Context, req *CallToolRequest) (*protocol.CallToolResult, error) {
-			start := time.Now()
-			toolName := req.Params.Name
-
-			result, err := next(ctx, req)
-
-			duration := time.Since(start)
-
-			// Record metrics
-			collector.RecordToolCall(toolName, duration, err == nil)
-
-			return result, err
-		}
-	}
-}
-
-// MetricsCollector is the metrics collector interface
-type MetricsCollector interface {
-	RecordToolCall(tool string, duration time.Duration, success bool)
-}
-
-// RateLimitMiddleware is a rate limiting middleware
-func RateLimitMiddleware(limiter RateLimiter) Middleware {
-	return func(next ToolHandler) ToolHandler {
-		return func(ctx context.Context, req *CallToolRequest) (*protocol.CallToolResult, error) {
-			toolName := req.Params.Name
-
-			// Check rate limit
-			if !limiter.Allow(toolName) {
-				return nil, NewToolError(
-					ErrTooManyRequest,
-					fmt.Sprintf("rate limit exceeded for tool %s", toolName),
-					WithDetail("tool", toolName),
-				)
-			}
-
 			return next(ctx, req)
-		}
-	}
-}
-
-// RateLimiter is the rate limiter interface
-type RateLimiter interface {
-	Allow(tool string) bool
-}
-
-// AuthMiddleware is an authentication middleware
-func AuthMiddleware(validator AuthValidator) Middleware {
-	return func(next ToolHandler) ToolHandler {
-		return func(ctx context.Context, req *CallToolRequest) (*protocol.CallToolResult, error) {
-			// Extract auth info from context or meta
-			authInfo := extractAuthInfo(ctx, req)
-
-			// Validate permissions
-			if !validator.Validate(authInfo, req.Params.Name) {
-				return nil, UnauthorizedError(
-					fmt.Sprintf("not authorized to call tool %s", req.Params.Name),
-					WithDetail("tool", req.Params.Name),
-				)
-			}
-
-			return next(ctx, req)
-		}
-	}
-}
-
-// AuthValidator is the authentication validator interface
-type AuthValidator interface {
-	Validate(authInfo any, tool string) bool
-}
-
-// extractAuthInfo extracts auth info from the request (can be from ctx or req.Params.Meta)
-func extractAuthInfo(ctx context.Context, req *CallToolRequest) any {
-	if req.Params.Meta != nil {
-		if auth, ok := req.Params.Meta["auth"]; ok {
-			return auth
-		}
-	}
-	return nil
-}
-
-// RetryMiddleware is a retry middleware
-func RetryMiddleware(maxRetries int, shouldRetry func(error) bool) Middleware {
-	return func(next ToolHandler) ToolHandler {
-		return func(ctx context.Context, req *CallToolRequest) (*protocol.CallToolResult, error) {
-			var lastErr error
-			var result *protocol.CallToolResult
-
-			for attempt := 0; attempt <= maxRetries; attempt++ {
-				result, lastErr = next(ctx, req)
-
-				// If success or should not retry, return directly
-				if lastErr == nil || !shouldRetry(lastErr) {
-					return result, lastErr
-				}
-
-				if attempt < maxRetries {
-					select {
-					case <-ctx.Done():
-						return nil, ctx.Err()
-					case <-time.After(time.Duration(attempt+1) * 100 * time.Millisecond):
-						// Exponential backoff
-					}
-				}
-			}
-
-			return result, lastErr
-		}
-	}
-}
-
-// ValidationMiddleware is a parameter validation middleware
-func ValidationMiddleware(validator ParamsValidator) Middleware {
-	return func(next ToolHandler) ToolHandler {
-		return func(ctx context.Context, req *CallToolRequest) (*protocol.CallToolResult, error) {
-			if err := validator.Validate(req.Params.Name, req.Params.Arguments); err != nil {
-				return nil, InvalidParamsError(
-					err.Error(),
-					WithDetail("tool", req.Params.Name),
-				)
-			}
-
-			return next(ctx, req)
-		}
-	}
-}
-
-type ParamsValidator interface {
-	Validate(tool string, arguments map[string]any) error
-}
-
-// AddReceivingMiddleware adds method-level middleware that intercepts all inbound RPC requests.
-// Middleware is eagerly wrapped onto the handler in the order added.
-func (s *Server) AddReceivingMiddleware(middleware ...MethodMiddleware) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for i := len(middleware) - 1; i >= 0; i-- {
-		s.receivingHandler = middleware[i](s.receivingHandler)
-	}
-}
-
-// MethodLoggingMiddleware is a method-level middleware that logs all RPC method calls.
-func MethodLoggingMiddleware(logger *slog.Logger) MethodMiddleware {
-	return func(next MethodHandler) MethodHandler {
-		return func(ctx context.Context, method string, params json.RawMessage, session *ServerSession) (any, error) {
-			start := time.Now()
-			logger.Info("RPC request started",
-				slog.String("method", method),
-				slog.String("session", session.ID()),
-			)
-
-			result, err := next(ctx, method, params, session)
-
-			duration := time.Since(start)
-			if err != nil {
-				logger.Error("RPC request failed",
-					slog.String("method", method),
-					slog.Duration("duration", duration),
-					slog.String("error", err.Error()),
-				)
-			} else {
-				logger.Info("RPC request completed",
-					slog.String("method", method),
-					slog.Duration("duration", duration),
-				)
-			}
-			return result, err
-		}
-	}
-}
-
-// MethodRecoveryMiddleware is a method-level middleware that recovers from panics.
-func MethodRecoveryMiddleware() MethodMiddleware {
-	return func(next MethodHandler) MethodHandler {
-		return func(ctx context.Context, method string, params json.RawMessage, session *ServerSession) (result any, err error) {
-			defer func() {
-				if r := recover(); r != nil {
-					stack := debug.Stack()
-					err = fmt.Errorf("panic recovered in %s: %v\n%s", method, r, stack)
-				}
-			}()
-			return next(ctx, method, params, session)
 		}
 	}
 }

@@ -1,289 +1,93 @@
 package protocol
 
-import (
-	"encoding/json"
-	"fmt"
-	"sync"
+import "encoding/json"
 
-	"github.com/santhosh-tekuri/jsonschema/v6"
-)
+// JSONSchema is a JSON Schema document. 2026-07-28 permits any JSON Schema
+// 2020-12 keywords; the default dialect when $schema is absent is 2020-12.
+type JSONSchema map[string]any
 
-type ToolParameter struct {
-	Name        string     `json:"name"`
-	Description string     `json:"description,omitempty"`
-	Required    bool       `json:"required,omitempty"`
-	Schema      JSONSchema `json:"schema,omitempty"`
-}
-
-// ToolExecution specifies execution behavior for a tool (MCP 2025-11-25)
-type ToolExecution struct {
-	// TaskSupport indicates the level of task support for this tool
-	// Can be "required", "optional", or "forbidden"
-	TaskSupport TaskSupport `json:"taskSupport,omitempty"`
+type Icon struct {
+	Src      string   `json:"src"`
+	MimeType string   `json:"mimeType,omitempty"`
+	Sizes    []string `json:"sizes,omitempty"`
 }
 
 type Tool struct {
-	Name         string          `json:"name"`
-	Title        string          `json:"title,omitempty"`       // MCP 2025-06-18: Human-friendly title
-	Description  string          `json:"description,omitempty"`
-	InputSchema  JSONSchema      `json:"inputSchema"`
-	OutputSchema JSONSchema      `json:"outputSchema,omitempty"` // MCP 2025-06-18
-	Execution    *ToolExecution  `json:"execution,omitempty"`    // MCP 2025-11-25: Execution behavior
-	Icons        []Icon          `json:"icons,omitempty"`        // MCP 2025-11-25: Icons for UI display
-	Annotations  *ToolAnnotation `json:"annotations,omitempty"`  // MCP 2025-06-18: Tool behavior annotations
-	Meta         map[string]any  `json:"_meta,omitempty"`        // MCP 2025-06-18: Extended metadata
+	Name        string `json:"name"`
+	Title       string `json:"title,omitempty"`
+	Description string `json:"description,omitempty"`
+	// InputSchema must be an object schema at the root.
+	InputSchema JSONSchema `json:"inputSchema"`
+	// OutputSchema has no root type constraint (SEP-2106).
+	OutputSchema JSONSchema                 `json:"outputSchema,omitempty"`
+	Annotations  *ToolAnnotations           `json:"annotations,omitempty"`
+	Icons        []Icon                     `json:"icons,omitempty"`
+	Meta         map[string]json.RawMessage `json:"_meta,omitempty"`
 }
 
-// ToolAnnotation describes tool behavior characteristics (MCP 2025-06-18)
-type ToolAnnotation struct {
-	// Title is a human-readable title for the tool
-	Title string `json:"title,omitempty"`
-	// ReadOnlyHint indicates the tool only reads data without side effects
-	ReadOnlyHint bool `json:"readOnlyHint,omitempty"`
-	// DestructiveHint indicates the tool may have destructive/irreversible effects
-	DestructiveHint bool `json:"destructiveHint,omitempty"`
-	// IdempotentHint indicates calling the tool multiple times has the same effect
-	IdempotentHint bool `json:"idempotentHint,omitempty"`
-	// OpenWorldHint indicates the tool interacts with external entities
-	OpenWorldHint bool `json:"openWorldHint,omitempty"`
-}
-
-type ToolList struct {
-	Tools []Tool `json:"tools"`
-}
-
-type CallToolParams struct {
-	Meta      map[string]any `json:"_meta,omitempty"`
-	Name      string         `json:"name"`
-	Arguments map[string]any `json:"arguments"`
-	Task      *TaskMetadata  `json:"task,omitempty"` // MCP 2025-11-25: Task metadata for task-augmented requests
+// ToolAnnotations are untrusted hints. Pointers distinguish "false" from
+// "unset".
+type ToolAnnotations struct {
+	Title           string `json:"title,omitempty"`
+	ReadOnlyHint    *bool  `json:"readOnlyHint,omitempty"`
+	DestructiveHint *bool  `json:"destructiveHint,omitempty"`
+	IdempotentHint  *bool  `json:"idempotentHint,omitempty"`
+	OpenWorldHint   *bool  `json:"openWorldHint,omitempty"`
 }
 
 type ListToolsParams struct {
-	Cursor string `json:"cursor,omitempty"`
-}
-
-type CallToolResult struct {
-	Content           []Content      `json:"content"`
-	IsError           bool           `json:"isError,omitempty"`
-	StructuredContent any            `json:"structuredContent,omitempty"` // MCP 2025-06-18
-	Meta              map[string]any `json:"_meta,omitempty"`             // MCP 2025-06-18: Extended metadata
-}
-
-func (ctr *CallToolResult) UnmarshalJSON(data []byte) error {
-	var temp struct {
-		Content           []json.RawMessage `json:"content"`
-		IsError           bool              `json:"isError,omitempty"`
-		StructuredContent any               `json:"structuredContent,omitempty"`
-		Meta              map[string]any    `json:"_meta,omitempty"`
-	}
-
-	if err := json.Unmarshal(data, &temp); err != nil {
-		return err
-	}
-
-	ctr.IsError = temp.IsError
-	ctr.StructuredContent = temp.StructuredContent
-	ctr.Meta = temp.Meta
-	ctr.Content = make([]Content, len(temp.Content))
-
-	for i, raw := range temp.Content {
-		content, err := UnmarshalContent(raw)
-		if err != nil {
-			return err
-		}
-		ctr.Content[i] = content
-	}
-
-	return nil
-}
-
-type ListToolsRequest struct {
-	Cursor string `json:"cursor,omitempty"`
+	Meta   RequestMeta `json:"_meta"`
+	Cursor string      `json:"cursor,omitempty"`
 }
 
 type ListToolsResult struct {
-	Tools []Tool `json:"tools"`
-	PaginatedResult
+	WithMeta
+	CacheControl
+	Tools      []*Tool `json:"tools"`
+	NextCursor string  `json:"nextCursor,omitempty"`
 }
 
-type CallToolRequest struct {
+func (*ListToolsResult) ResultType() string { return ResultTypeComplete }
+
+type CallToolParams struct {
+	Meta      RequestMeta    `json:"_meta"`
 	Name      string         `json:"name"`
 	Arguments map[string]any `json:"arguments,omitempty"`
-	Task      *TaskMetadata  `json:"task,omitempty"` // MCP 2025-11-25: Task metadata for task-augmented requests
+	// InputResponses and RequestState are set only on an MRTR retry.
+	InputResponses InputResponses `json:"inputResponses,omitempty"`
+	RequestState   string         `json:"requestState,omitempty"`
 }
 
-type ToolsListChangedNotification struct{}
-
-func NewTool(name, description string, inputSchema JSONSchema) Tool {
-	return Tool{
-		Name:        name,
-		Description: description,
-		InputSchema: inputSchema,
-	}
+type CallToolResult struct {
+	WithMeta
+	Content ContentList `json:"content"`
+	// StructuredContent may be any JSON value (SEP-2106).
+	StructuredContent any  `json:"structuredContent,omitempty"`
+	IsError           bool `json:"isError,omitempty"`
 }
 
-// NewToolWithOutput creates a tool with output schema (MCP 2025-06-18)
-func NewToolWithOutput(name, description string, inputSchema, outputSchema JSONSchema) Tool {
-	return Tool{
-		Name:         name,
-		Description:  description,
-		InputSchema:  inputSchema,
-		OutputSchema: outputSchema,
-	}
-}
-
-func NewToolResult(content []Content, isError bool) *CallToolResult {
-	return &CallToolResult{
-		Content: content,
-		IsError: isError,
-	}
-}
+func (*CallToolResult) ResultType() string { return ResultTypeComplete }
+func (*CallToolResult) toolResponse()      {}
 
 func NewToolResultText(text string) *CallToolResult {
-	return &CallToolResult{
-		Content: []Content{NewTextContent(text)},
-		IsError: false,
-	}
+	return &CallToolResult{Content: ContentList{NewTextContent(text)}}
 }
 
-func NewToolResultError(errorMsg string) *CallToolResult {
-	return &CallToolResult{
-		Content: []Content{NewTextContent(errorMsg)},
-		IsError: true,
-	}
+// NewToolResultError reports a tool execution error (isError, not a protocol
+// error).
+func NewToolResultError(text string) *CallToolResult {
+	return &CallToolResult{Content: ContentList{NewTextContent(text)}, IsError: true}
 }
 
-// NewToolResultWithStructured creates a tool result with structured content (MCP 2025-06-18)
-func NewToolResultWithStructured(content []Content, structuredContent interface{}) *CallToolResult {
-	return &CallToolResult{
-		Content:           content,
-		StructuredContent: structuredContent,
-		IsError:           false,
-	}
-}
-
-// NewToolResultTextWithStructured creates a tool result with text and structured content
-func NewToolResultTextWithStructured(text string, structuredContent interface{}) *CallToolResult {
-	return &CallToolResult{
-		Content:           []Content{NewTextContent(text)},
-		StructuredContent: structuredContent,
-		IsError:           false,
-	}
-}
-
-// Cache compiled schemas to improve performance
-var (
-	schemaCache = make(map[string]*jsonschema.Schema)
-	cacheMutex  sync.RWMutex
-)
-
-// ValidateStructuredOutput validates whether structured output conforms to the schema
-func ValidateStructuredOutput(data interface{}, schema JSONSchema) error {
-	if len(schema) == 0 {
-		return nil
-	}
-
-	return validateWithJSONSchema(data, schema)
-}
-
-// validateWithJSONSchema validates using jsonschema library
-func validateWithJSONSchema(data interface{}, schema JSONSchema) error {
-	schemaBytes, err := json.Marshal(schema)
+// NewToolResultStructured returns structured content mirrored as serialized
+// JSON in a text block, as the spec recommends for backwards compatibility.
+func NewToolResultStructured(v any) (*CallToolResult, error) {
+	raw, err := json.Marshal(v)
 	if err != nil {
-		return fmt.Errorf("failed to marshal schema: %v", err)
+		return nil, err
 	}
-	schemaKey := string(schemaBytes)
-
-	// Check cache
-	cacheMutex.RLock()
-	compiledSchema, exists := schemaCache[schemaKey]
-	cacheMutex.RUnlock()
-
-	if !exists {
-		compiler := jsonschema.NewCompiler()
-
-		var schemaInterface interface{}
-		if err := json.Unmarshal(schemaBytes, &schemaInterface); err != nil {
-			return fmt.Errorf("failed to convert schema: %v", err)
-		}
-
-		if err := compiler.AddResource("schema.json", schemaInterface); err != nil {
-			return fmt.Errorf("failed to add schema resource: %v", err)
-		}
-
-		compiledSchema, err = compiler.Compile("schema.json")
-		if err != nil {
-			return fmt.Errorf("failed to compile schema: %v", err)
-		}
-
-		// Cache compiled schema
-		cacheMutex.Lock()
-		schemaCache[schemaKey] = compiledSchema
-		cacheMutex.Unlock()
-	}
-
-	if err := compiledSchema.Validate(data); err != nil {
-		return fmt.Errorf("validation failed: %v", err)
-	}
-
-	return nil
-}
-
-func ContentToJSON(content []Content) ([]json.RawMessage, error) {
-	result := make([]json.RawMessage, len(content))
-	for i, c := range content {
-		bytes, err := json.Marshal(c)
-		if err != nil {
-			return nil, err
-		}
-		result[i] = bytes
-	}
-	return result, nil
-}
-
-func StringParameter(name, description string, required bool) ToolParameter {
-	return ToolParameter{
-		Name:        name,
-		Description: description,
-		Required:    required,
-		Schema: JSONSchema{
-			"type": "string",
-		},
-	}
-}
-
-func NumberParameter(name, description string, required bool) ToolParameter {
-	return ToolParameter{
-		Name:        name,
-		Description: description,
-		Required:    required,
-		Schema: JSONSchema{
-			"type": "number",
-		},
-	}
-}
-
-func BooleanParameter(name, description string, required bool) ToolParameter {
-	return ToolParameter{
-		Name:        name,
-		Description: description,
-		Required:    required,
-		Schema: JSONSchema{
-			"type": "boolean",
-		},
-	}
-}
-
-func ObjectParameter(name, description string, required bool, properties JSONSchema, required_props []string) ToolParameter {
-	return ToolParameter{
-		Name:        name,
-		Description: description,
-		Required:    required,
-		Schema: JSONSchema{
-			"type":       "object",
-			"properties": properties,
-			"required":   required_props,
-		},
-	}
+	return &CallToolResult{
+		Content:           ContentList{NewTextContent(string(raw))},
+		StructuredContent: v,
+	}, nil
 }

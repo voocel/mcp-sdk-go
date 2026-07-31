@@ -10,8 +10,11 @@ import (
 	"slices"
 )
 
-// featureSet is a generic collection for managing tools/resources/prompts/resourceTemplates.
-// sortedKeys is lazily computed: set to nil after add/remove, re-sorted on first access.
+// featureSet is a generic collection for managing tools/resources/prompts/
+// resourceTemplates. Iteration order is sorted by uid, which also satisfies
+// the spec's deterministic-ordering recommendation for list results.
+// sortedKeys is lazily computed: set to nil after add/remove, re-sorted on
+// first access.
 type featureSet[T any] struct {
 	uniqueID   func(T) string
 	features   map[string]T
@@ -54,9 +57,6 @@ func (s *featureSet[T]) get(uid string) (T, bool) {
 	return t, ok
 }
 
-// len returns the number of features.
-func (s *featureSet[T]) len() int { return len(s.features) }
-
 // all returns an iterator over all features sorted by uid.
 func (s *featureSet[T]) all() iter.Seq[T] {
 	s.sortKeys()
@@ -65,7 +65,8 @@ func (s *featureSet[T]) all() iter.Seq[T] {
 	}
 }
 
-// above returns an iterator over features with uid greater than the given value (for cursor pagination).
+// above returns an iterator over features with uid greater than the given
+// value (for cursor pagination).
 func (s *featureSet[T]) above(uid string) iter.Seq[T] {
 	s.sortKeys()
 	index, found := slices.BinarySearch(s.sortedKeys, uid)

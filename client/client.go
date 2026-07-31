@@ -1,327 +1,268 @@
+// Package client implements a stateless MCP client for protocol revision
+// 2026-07-28. There is no session: a Client is configuration plus a transport;
+// every request carries its own context in _meta.
 package client
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
+	"log/slog"
+	"maps"
 	"sync"
 	"sync/atomic"
-	"time"
 
+	"github.com/voocel/mcp-sdk-go/internal/headerbind"
 	"github.com/voocel/mcp-sdk-go/protocol"
 	"github.com/voocel/mcp-sdk-go/transport"
 )
 
-type ClientInfo struct {
-	Name    string
-	Version string
-}
+// ElicitHandler answers a form-mode elicitation input request.
+type ElicitHandler func(ctx context.Context, p *protocol.ElicitParams) (*protocol.ElicitResult, error)
 
-// ClientOptions configures client behavior
-type ClientOptions struct {
-	// CreateMessageHandler handles sampling/createMessage requests from the server
-	//
-	// Setting this to a non-nil value causes the client to declare sampling capability
-	CreateMessageHandler func(context.Context, *protocol.CreateMessageRequest) (*protocol.CreateMessageResult, error)
+type Options struct {
+	// Info is sent as clientInfo in every request's _meta.
+	Info *protocol.Implementation
 
-	// ElicitationHandler handles elicitation/create requests from the server
-	//
-	// Setting this to a non-nil value causes the client to declare elicitation capability
-	ElicitationHandler func(context.Context, *protocol.ElicitationCreateParams) (*protocol.ElicitationResult, error)
+	// Elicitor enables form-mode elicitation: it is declared in the client
+	// capabilities and drives the automatic MRTR fulfillment loop.
+	Elicitor ElicitHandler
 
-	// Notification handlers from server
-	ToolListChangedHandler      func(context.Context, *protocol.ToolsListChangedNotification)
-	PromptListChangedHandler    func(context.Context, *protocol.PromptListChangedParams)
-	ResourceListChangedHandler  func(context.Context, *protocol.ResourceListChangedParams)
-	ResourceUpdatedHandler      func(context.Context, *protocol.ResourceUpdatedNotificationParams)
-	LoggingMessageHandler       func(context.Context, *protocol.LoggingMessageParams)
-	ProgressNotificationHandler func(context.Context, *protocol.ProgressNotificationParams)
+	// URLOpener enables url-mode elicitation. It should return once the user
+	// has completed the out-of-band interaction; the outcome is learned by
+	// retrying the original request.
+	URLOpener func(ctx context.Context, url, message string) error
 
-	// TaskStatusHandler handles notifications/tasks/status from the server (MCP 2025-11-25)
-	TaskStatusHandler func(context.Context, *protocol.TaskStatusNotificationParams)
+	// OnProgress receives notifications/progress for requests issued by this
+	// client. When set, every request carries an auto-generated progressToken.
+	OnProgress func(p *protocol.ProgressParams)
 
-	// KeepAlive defines the interval for periodic "ping" requests
-	// If the peer fails to respond to a keepalive-initiated ping, the session will automatically close
-	KeepAlive time.Duration
+	// Extensions is declared verbatim in clientCapabilities.extensions on
+	// every request (e.g. tasks.ID -> struct{}{}).
+	Extensions map[string]any
 
-	// Tasks capability options (MCP 2025-11-25)
-	TasksEnabled bool // Enable tasks support for sampling and elicitation
+	// RouteNames maps extension methods to the params key whose string value
+	// must be sent as the Mcp-Name routing header over Streamable HTTP (the
+	// tasks extension maps its methods to "taskId"; see tasks.EnableClient).
+	// Core methods are built in.
+	RouteNames map[string]string
 
-	// SamplingToolsEnabled enables tool use in sampling requests (MCP 2025-11-25)
-	SamplingToolsEnabled bool
+	// MaxInputRounds caps MRTR retries per call (default 10).
+	MaxInputRounds int
+	// MaxLoadSheddingRetries caps retries when the server returns an
+	// input_required result with no inputRequests (default 3).
+	MaxLoadSheddingRetries int
+	// NoAutoInput disables the automatic MRTR fulfillment loop; interim
+	// results surface as *InputRequiredError for manual continuation.
+	NoAutoInput bool
+
+	// Logger receives warnings (e.g. invalid tools excluded from tools/list).
+	// Defaults to slog.Default().
+	Logger *slog.Logger
 }
 
 type Client struct {
-	info     *ClientInfo
-	opts     ClientOptions
-	mu       sync.Mutex
-	roots    []*protocol.Root
-	sessions []*ClientSession
+	t       transport.Transport
+	opts    Options
+	extCaps map[string]json.RawMessage // Options.Extensions, marshaled once
+	nextID  atomic.Int64
+
+	mu       sync.RWMutex
+	bindings map[string][]headerbind.Binding // tool name -> x-mcp-header bindings
 }
 
-func NewClient(info *ClientInfo, opts *ClientOptions) *Client {
-	if info == nil {
-		panic("nil ClientInfo")
-	}
-	c := &Client{
-		info:  info,
-		roots: make([]*protocol.Root, 0),
-	}
+// New builds a client. It panics on unmarshalable Options.Extensions values —
+// configuration errors must fail loudly, not degrade into empty declarations.
+func New(t transport.Transport, opts *Options) *Client {
+	c := &Client{t: t, bindings: make(map[string][]headerbind.Binding)}
 	if opts != nil {
 		c.opts = *opts
+	}
+	if c.opts.MaxInputRounds <= 0 {
+		c.opts.MaxInputRounds = 10
+	}
+	if c.opts.MaxLoadSheddingRetries <= 0 {
+		c.opts.MaxLoadSheddingRetries = 3
+	}
+	if c.opts.Logger == nil {
+		c.opts.Logger = slog.Default()
+	}
+	if len(c.opts.Extensions) > 0 {
+		c.extCaps = make(map[string]json.RawMessage, len(c.opts.Extensions))
+		for id, settings := range c.opts.Extensions {
+			raw, err := json.Marshal(settings)
+			if err != nil {
+				panic(fmt.Sprintf("client: extension %s settings do not marshal: %v", id, err))
+			}
+			c.extCaps[id] = raw
+		}
 	}
 	return c
 }
 
-type ClientSessionOptions struct{}
+func (c *Client) Close() error { return c.t.Close() }
 
-// capabilities returns the client's capability declaration
-func (c *Client) capabilities() *protocol.ClientCapabilities {
-	caps := &protocol.ClientCapabilities{
-		Roots: &protocol.RootsCapability{
-			ListChanged: true,
-		},
+// Call issues a raw request and decodes its result — the escape hatch for
+// extension methods (it satisfies the tasks extension's Caller interface).
+// Error responses surface as *protocol.Error.
+func (c *Client) Call(ctx context.Context, method string, params, result any) error {
+	raw, err := c.do(ctx, method, params)
+	if err != nil {
+		return err
 	}
-	if c.opts.CreateMessageHandler != nil {
-		caps.Sampling = &protocol.SamplingCapability{}
-		// Add tool use support if enabled (MCP 2025-11-25)
-		if c.opts.SamplingToolsEnabled {
-			caps.Sampling.Tools = &struct{}{}
+	if result != nil {
+		return json.Unmarshal(raw, result)
+	}
+	return nil
+}
+
+// do sends one request and returns the raw result body. Request-scoped
+// notifications are dispatched along the way.
+func (c *Client) do(ctx context.Context, method string, params any) (json.RawMessage, error) {
+	pm, err := paramsToMap(params)
+	if err != nil {
+		return nil, err
+	}
+	id := protocol.IntID(c.nextID.Add(1))
+	if err := c.stampMeta(pm, id); err != nil {
+		return nil, err
+	}
+	rawParams, err := json.Marshal(pm)
+	if err != nil {
+		return nil, err
+	}
+	msg := &protocol.Message{JSONRPC: protocol.JSONRPCVersion, ID: id, Method: method, Params: rawParams}
+
+	headers, err := c.headers(method, pm)
+	if err != nil {
+		return nil, err
+	}
+	stream, err := c.t.Do(ctx, &transport.Request{Message: msg, Headers: headers})
+	if err != nil {
+		return nil, err
+	}
+	defer stream.Close()
+
+	for {
+		m, err := stream.Recv()
+		if err == io.EOF {
+			return nil, fmt.Errorf("client: stream ended without a response for %s", method)
+		}
+		if err != nil {
+			return nil, err
+		}
+		switch m.Kind() {
+		case protocol.KindNotification:
+			c.dispatchNotification(m)
+		case protocol.KindResponse:
+			if m.ID == id {
+				// Servers implementing 2026-07-28 MUST include resultType; the
+				// absent-means-complete leniency exists only for servers on
+				// earlier revisions, which this client does not speak to.
+				if !hasResultType(m.Result) {
+					return nil, fmt.Errorf("client: result for %s lacks resultType (required of %s servers)", method, protocol.Version)
+				}
+				return m.Result, nil
+			}
+		case protocol.KindError:
+			if m.ID == id || m.ID.IsZero() {
+				return nil, m.Error
+			}
 		}
 	}
-	if c.opts.ElicitationHandler != nil {
+}
+
+func hasResultType(raw json.RawMessage) bool {
+	var probe struct {
+		ResultType *string `json:"resultType"`
+	}
+	return json.Unmarshal(raw, &probe) == nil && probe.ResultType != nil
+}
+
+func (c *Client) dispatchNotification(m *protocol.Message) {
+	if m.Method == protocol.NotificationProgress && c.opts.OnProgress != nil {
+		var p protocol.ProgressParams
+		if err := json.Unmarshal(m.Params, &p); err == nil {
+			c.opts.OnProgress(&p)
+		}
+	}
+}
+
+// stampMeta injects the required per-request _meta fields, preserving any
+// caller-provided keys (progressToken, traceparent, vendor keys).
+func (c *Client) stampMeta(pm map[string]any, id protocol.RequestID) error {
+	meta, _ := pm["_meta"].(map[string]any)
+	if meta == nil {
+		meta = make(map[string]any)
+	}
+	meta[protocol.MetaProtocolVersion] = protocol.Version
+	caps, err := toJSONValue(c.capabilities())
+	if err != nil {
+		return err
+	}
+	meta[protocol.MetaClientCapabilities] = caps
+	if c.opts.Info != nil {
+		info, err := toJSONValue(c.opts.Info)
+		if err != nil {
+			return err
+		}
+		meta[protocol.MetaClientInfo] = info
+	}
+	if c.opts.OnProgress != nil {
+		if _, has := meta["progressToken"]; !has {
+			meta["progressToken"] = fmt.Sprintf("pt-%s", id)
+		}
+	}
+	pm["_meta"] = meta
+	return nil
+}
+
+// capabilities derives the per-request declaration from what is actually
+// configured, so it can never lie.
+func (c *Client) capabilities() protocol.ClientCapabilities {
+	var caps protocol.ClientCapabilities
+	if c.opts.Elicitor != nil || c.opts.URLOpener != nil {
 		caps.Elicitation = &protocol.ElicitationCapability{}
+		if c.opts.Elicitor != nil {
+			caps.Elicitation.Form = &struct{}{}
+		}
+		if c.opts.URLOpener != nil {
+			caps.Elicitation.URL = &struct{}{}
+		}
 	}
-	// Add Tasks capability (MCP 2025-11-25)
-	if c.opts.TasksEnabled {
-		caps.Tasks = &protocol.ClientTasksCapability{
-			List:   &struct{}{},
-			Cancel: &struct{}{},
-		}
-		if c.opts.CreateMessageHandler != nil || c.opts.ElicitationHandler != nil {
-			caps.Tasks.Requests = &protocol.ClientTaskRequestsCapability{}
-			if c.opts.CreateMessageHandler != nil {
-				caps.Tasks.Requests.Sampling = &protocol.SamplingTaskCapability{
-					CreateMessage: &struct{}{},
-				}
-			}
-			if c.opts.ElicitationHandler != nil {
-				caps.Tasks.Requests.Elicitation = &protocol.ElicitationTaskCapability{
-					Create: &struct{}{},
-				}
-			}
-		}
+	if len(c.extCaps) > 0 {
+		caps.Extensions = maps.Clone(c.extCaps)
 	}
 	return caps
 }
 
-// Connect starts an MCP session via the given transport
-// The returned session is initialized and ready to use
-//
-// Typically, the client is responsible for closing the connection when no longer needed
-// However, if the connection is closed by the server, calls or notifications will return errors wrapping ErrConnectionClosed
-func (c *Client) Connect(ctx context.Context, t transport.Transport, _ *ClientSessionOptions) (*ClientSession, error) {
-	conn, err := t.Connect(ctx)
+func paramsToMap(params any) (map[string]any, error) {
+	if params == nil {
+		return map[string]any{}, nil
+	}
+	raw, err := json.Marshal(params)
 	if err != nil {
-		return nil, fmt.Errorf("transport connect failed: %w", err)
+		return nil, err
 	}
-
-	cs := &ClientSession{
-		conn:             conn,
-		client:           c,
-		waitErr:          make(chan error, 1),
-		pending:          make(map[string]*pendingRequest),
-		incomingRequests: make(map[string]context.CancelFunc),
+	var pm map[string]any
+	if err := json.Unmarshal(raw, &pm); err != nil {
+		return nil, fmt.Errorf("client: params must marshal to a JSON object: %w", err)
 	}
-
-	c.mu.Lock()
-	c.sessions = append(c.sessions, cs)
-	c.mu.Unlock()
-
-	go func() {
-		err := cs.handleMessages(ctx)
-		cs.waitErr <- err
-		close(cs.waitErr)
-	}()
-
-	// Perform initialization handshake
-	initParams := &protocol.InitializeParams{
-		ProtocolVersion: protocol.MCPVersion,
-		ClientInfo: protocol.ClientInfo{
-			Name:    c.info.Name,
-			Version: c.info.Version,
-		},
-		Capabilities: *c.capabilities(),
+	if pm == nil {
+		pm = map[string]any{}
 	}
-
-	var initResult protocol.InitializeResult
-	if err := cs.sendRequest(ctx, protocol.MethodInitialize, initParams, &initResult); err != nil {
-		_ = cs.Close()
-		return nil, fmt.Errorf("initialize failed: %w", err)
-	}
-
-	if !protocol.IsVersionSupported(initResult.ProtocolVersion) {
-		_ = cs.Close()
-		return nil, fmt.Errorf("unsupported protocol version: %s (supported: %v)",
-			initResult.ProtocolVersion, protocol.GetSupportedVersions())
-	}
-
-	cs.state.InitializeResult = &initResult
-
-	if updater, ok := conn.(interface {
-		SessionUpdated(*protocol.InitializeResult)
-	}); ok {
-		updater.SessionUpdated(&initResult)
-	}
-
-	if err := cs.sendNotification(ctx, protocol.NotificationInitialized, &protocol.InitializedParams{}); err != nil {
-		_ = cs.Close()
-		return nil, fmt.Errorf("send initialized notification failed: %w", err)
-	}
-
-	if c.opts.KeepAlive > 0 {
-		cs.startKeepalive(c.opts.KeepAlive)
-	}
-
-	return cs, nil
+	return pm, nil
 }
 
-// AddRoot adds a root directory and notifies all sessions
-func (c *Client) AddRoot(root *protocol.Root) {
-	c.mu.Lock()
-	c.roots = append(c.roots, root)
-	sessions := make([]*ClientSession, len(c.sessions))
-	copy(sessions, c.sessions)
-	c.mu.Unlock()
-
-	// Notify all sessions that the roots list has changed
-	for _, cs := range sessions {
-		_ = cs.NotifyRootsListChanged(context.Background())
+func toJSONValue(v any) (any, error) {
+	raw, err := json.Marshal(v)
+	if err != nil {
+		return nil, err
 	}
-}
-
-// RemoveRoot removes a root directory and notifies all sessions
-func (c *Client) RemoveRoot(uri string) {
-	c.mu.Lock()
-	var changed bool
-	for i, root := range c.roots {
-		if root.URI == uri {
-			c.roots = append(c.roots[:i], c.roots[i+1:]...)
-			changed = true
-			break
-		}
+	var out any
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return nil, err
 	}
-	sessions := make([]*ClientSession, len(c.sessions))
-	copy(sessions, c.sessions)
-	c.mu.Unlock()
-
-	// Only notify if the roots actually changed
-	if changed {
-		for _, cs := range sessions {
-			_ = cs.NotifyRootsListChanged(context.Background())
-		}
-	}
-}
-
-// ListRoots lists all root directories
-func (c *Client) ListRoots() []*protocol.Root {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	roots := make([]*protocol.Root, len(c.roots))
-	copy(roots, c.roots)
-	return roots
-}
-
-// ClientSession is a logical connection to an MCP server
-// Can be used to send requests or notifications to the server
-// Sessions are created by calling Client.Connect
-//
-// Call ClientSession.Close to close the connection, or use ClientSession.Wait to wait for server termination
-type ClientSession struct {
-	// Ensure onClose is called at most once
-	calledOnClose atomic.Bool
-	onClose       func()
-
-	conn    transport.Connection
-	client  *Client
-	waitErr chan error
-
-	// keepalive
-	keepaliveCancel context.CancelFunc
-
-	// Session state
-	state clientSessionState
-
-	// Pending requests
-	mu               sync.Mutex
-	pending          map[string]*pendingRequest    // Requests sent by client
-	incomingRequests map[string]context.CancelFunc // Requests sent by server (for cancellation)
-	nextID           int64
-}
-
-type clientSessionState struct {
-	InitializeResult *protocol.InitializeResult
-}
-
-type pendingRequest struct {
-	method   string
-	response chan *protocol.JSONRPCMessage
-	err      chan error
-}
-
-// InitializeResult returns the initialization result
-func (cs *ClientSession) InitializeResult() *protocol.InitializeResult {
-	return cs.state.InitializeResult
-}
-
-func (cs *ClientSession) ID() string {
-	return cs.conn.SessionID()
-}
-
-func (cs *ClientSession) Close() error {
-	if cs.keepaliveCancel != nil {
-		cs.keepaliveCancel()
-	}
-
-	// Clean up all pending requests (before closing connection)
-	cs.mu.Lock()
-	pending := cs.pending
-	cs.pending = make(map[string]*pendingRequest)
-	incomingRequests := cs.incomingRequests
-	cs.incomingRequests = make(map[string]context.CancelFunc)
-	cs.mu.Unlock()
-
-	// Notify all client-initiated requests that connection is closed
-	for _, req := range pending {
-		select {
-		case req.err <- fmt.Errorf("connection closed"):
-		default:
-		}
-	}
-
-	// Cancel all server-initiated requests currently being processed
-	for _, cancel := range incomingRequests {
-		cancel()
-	}
-
-	err := cs.conn.Close()
-
-	if cs.onClose != nil && cs.calledOnClose.CompareAndSwap(false, true) {
-		cs.onClose()
-	}
-
-	cs.client.mu.Lock()
-	for i, s := range cs.client.sessions {
-		if s == cs {
-			cs.client.sessions = append(cs.client.sessions[:i], cs.client.sessions[i+1:]...)
-			break
-		}
-	}
-	cs.client.mu.Unlock()
-
-	return err
-}
-
-// Wait waits for the connection to be closed by the server. Typically, the client should be responsible for closing the connection
-func (cs *ClientSession) Wait() error {
-	return <-cs.waitErr
+	return out, nil
 }

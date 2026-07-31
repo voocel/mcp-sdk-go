@@ -1,3 +1,8 @@
+// Package server implements a stateless MCP server for protocol revision
+// 2026-07-28. A Server is a pure function over messages: transports feed it
+// one message at a time via Handle and receive the emitted stream of
+// notifications followed by exactly one response. There is no session object;
+// all per-request context travels in _meta.
 package server
 
 import (
@@ -5,144 +10,85 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
+	"maps"
 	"sync"
-	"time"
 
-	"github.com/google/uuid"
 	"github.com/voocel/mcp-sdk-go/protocol"
-	"github.com/voocel/mcp-sdk-go/transport"
 )
 
-// Server represents an MCP server instance that can serve one or more MCP sessions
-type Server struct {
-	impl *protocol.ServerInfo
-	opts ServerOptions
+type Options struct {
+	// Impl is stamped as serverInfo into every result's _meta unless
+	// OmitServerInfo is set.
+	Impl           protocol.Implementation
+	Instructions   string
+	OmitServerInfo bool
 
-	mu                    sync.Mutex
-	middlewares           []Middleware       // Tool-level middleware chain
-	receivingHandler      MethodHandler      // Pre-wrapped method-level handler
-	tools                 *featureSet[*serverTool]
-	resources             *featureSet[*serverResource]
-	resourceTemplates     *featureSet[*serverResourceTemplate]
-	prompts               *featureSet[*serverPrompt]
-	sessions              []*ServerSession
-	resourceSubscriptions map[string]map[*ServerSession]bool // uri -> session -> bool
-	tasks                 map[string]*serverTask             // taskId -> task (MCP 2025-11-25)
-	pendingNotifications  map[string]*time.Timer             // debounced notification timers
-}
-
-// serverTask represents a task stored in the server (MCP 2025-11-25)
-type serverTask struct {
-	task     *protocol.Task
-	result   any
-	rpcError *protocol.JSONRPCError
-	cancel   context.CancelFunc
-	done     chan struct{}
-	doneOnce sync.Once
-	sessionID string
-}
-
-type ServerOptions struct {
-	// Optional client instructions
-	Instructions string
-
-	// Initialized handler function
-	InitializedHandler func(context.Context, *ServerSession)
-
-	// Progress notification handler function
-	ProgressNotificationHandler func(context.Context, *ServerSession, *protocol.ProgressNotificationParams)
-
-	// Elicitation complete notification handler (MCP 2025-11-25)
-	ElicitationCompleteHandler func(context.Context, *ServerSession, *protocol.ElicitationCompleteNotificationParams)
-
-	// Completion handler function
-	CompletionHandler func(context.Context, *protocol.CompleteRequest) (*protocol.CompleteResult, error)
-
-	// Logging level setting handler function
-	LoggingSetLevelHandler func(context.Context, *ServerSession, protocol.LoggingLevel) error
-
-	// Resource subscribe/unsubscribe handler functions
-	SubscribeHandler   func(context.Context, *protocol.SubscribeParams) error
-	UnsubscribeHandler func(context.Context, *protocol.UnsubscribeParams) error
-
-	// KeepAlive defines the interval for periodic "ping" requests
-	// If the peer fails to respond to a keepalive ping, the session will be closed automatically
-	KeepAlive time.Duration
-
-	// Tasks capability options (MCP 2025-11-25)
-	TasksEnabled bool // Enable tasks support
-
-	// TaskGetHandler handles tasks/get requests (MCP 2025-11-25)
-	TaskGetHandler func(context.Context, *protocol.GetTaskParams) (*protocol.GetTaskResult, error)
-
-	// TaskListHandler handles tasks/list requests (MCP 2025-11-25)
-	TaskListHandler func(context.Context, *protocol.ListTasksParams) (*protocol.ListTasksResult, error)
-
-	// TaskCancelHandler handles tasks/cancel requests (MCP 2025-11-25)
-	TaskCancelHandler func(context.Context, *protocol.CancelTaskParams) (*protocol.CancelTaskResult, error)
-
-	// TaskResultHandler handles tasks/result requests (MCP 2025-11-25)
-	// Returns the original request's result type (e.g., *CallToolResult)
-	TaskResultHandler func(context.Context, *protocol.TaskResultParams) (any, error)
-
-	// PageSize is the maximum number of items returned per page in list methods.
-	// Zero means DefaultPageSize (1000).
+	// PageSize bounds list results. Defaults to DefaultPageSize.
 	PageSize int
+
+	// ListCache is the default cache control applied to cacheable results the
+	// handler left unset. The zero value ({0, private}) is the safest choice
+	// and therefore the default.
+	ListCache protocol.CacheControl
+
+	// StateKey enables the SignState/VerifyState HMAC helpers for MRTR
+	// requestState integrity.
+	StateKey []byte
+
+	// MaxConcurrency bounds concurrently executing requests. 0 means
+	// unlimited (appropriate for HTTP, where the listener governs).
+	MaxConcurrency int
+
+	// OnDiscover mutates the assembled DiscoverResult before it is sent
+	// (e.g. tenant-specific instructions or _meta annotations). It edits the
+	// presentation only: capabilities and method availability derive from
+	// registrations, so hiding a capability here does not gate its methods.
+	// Per-tenant access control belongs in a Middleware, which sees every
+	// request.
+	OnDiscover func(ctx context.Context, req *Request, d *protocol.DiscoverResult) error
+
+	// CompletionHandler enables the completions capability.
+	CompletionHandler func(ctx context.Context, req *Request, p *protocol.CompleteParams) (*protocol.CompleteResult, error)
 }
 
-type serverTool struct {
-	tool    *protocol.Tool
-	handler ToolHandler
+type Server struct {
+	opts Options
+
+	mu                sync.RWMutex
+	tools             *featureSet[*serverTool]
+	prompts           *featureSet[*serverPrompt]
+	resources         *featureSet[*serverResource]
+	resourceTemplates *featureSet[*serverResourceTemplate]
+	middleware        []Middleware
+	extensions        map[string]Extension
+	extSettings       map[string]json.RawMessage
+	extMethods        map[string]RawHandler
+	extNameParams     map[string]string
+
+	// Sticky capability declarations: set on first registration, never unset.
+	// Per spec a declared capability's list may become empty ("This set MAY be
+	// empty and MAY change over time") — removing the last tool must not turn
+	// tools/list into -32601 while a list_changed notification is in flight.
+	toolsDeclared     bool
+	promptsDeclared   bool
+	resourcesDeclared bool
+
+	hub     *hub
+	methods map[string]RawHandler
+	sem     chan struct{}
 }
 
-type serverResource struct {
-	resource *protocol.Resource
-	handler  ResourceHandler
-}
-
-type serverResourceTemplate struct {
-	template *protocol.ResourceTemplate
-	handler  ResourceHandler
-}
-
-type serverPrompt struct {
-	prompt  *protocol.Prompt
-	handler PromptHandler
-}
-
-type ResourceHandler func(ctx context.Context, req *ReadResourceRequest) (*protocol.ReadResourceResult, error)
-type PromptHandler func(ctx context.Context, req *GetPromptRequest) (*protocol.GetPromptResult, error)
-
-type ReadResourceRequest struct {
-	Session *ServerSession
-	Params  *protocol.ReadResourceParams
-}
-
-type GetPromptRequest struct {
-	Session *ServerSession
-	Params  *protocol.GetPromptParams
-}
-
-func NewServer(impl *protocol.ServerInfo, opts *ServerOptions) *Server {
+func New(opts *Options) *Server {
 	s := &Server{
-		impl: impl,
-		tools: newFeatureSet(func(st *serverTool) string {
-			return st.tool.Name
-		}),
-		resources: newFeatureSet(func(sr *serverResource) string {
-			return sr.resource.URI
-		}),
-		resourceTemplates: newFeatureSet(func(srt *serverResourceTemplate) string {
-			return srt.template.URITemplate
-		}),
-		prompts: newFeatureSet(func(sp *serverPrompt) string {
-			return sp.prompt.Name
-		}),
-		sessions:              make([]*ServerSession, 0),
-		resourceSubscriptions: make(map[string]map[*ServerSession]bool),
-		tasks:                 make(map[string]*serverTask),
-		pendingNotifications:  make(map[string]*time.Timer),
+		tools:             newFeatureSet(func(t *serverTool) string { return t.tool.Name }),
+		prompts:           newFeatureSet(func(p *serverPrompt) string { return p.prompt.Name }),
+		resources:         newFeatureSet(func(r *serverResource) string { return r.resource.URI }),
+		resourceTemplates: newFeatureSet(func(t *serverResourceTemplate) string { return t.template.URITemplate }),
+		extensions:        make(map[string]Extension),
+		extSettings:       make(map[string]json.RawMessage),
+		extMethods:        make(map[string]RawHandler),
+		extNameParams:     make(map[string]string),
+		hub:               newHub(),
 	}
 	if opts != nil {
 		s.opts = *opts
@@ -150,1335 +96,323 @@ func NewServer(impl *protocol.ServerInfo, opts *ServerOptions) *Server {
 	if s.opts.PageSize <= 0 {
 		s.opts.PageSize = DefaultPageSize
 	}
-	s.receivingHandler = s.dispatchRequest
+	if s.opts.ListCache.CacheScope == "" {
+		s.opts.ListCache.CacheScope = protocol.CacheScopePrivate
+	}
+	if s.opts.MaxConcurrency > 0 {
+		s.sem = make(chan struct{}, s.opts.MaxConcurrency)
+	}
+	s.methods = map[string]RawHandler{
+		protocol.MethodDiscover:               s.handleDiscover,
+		protocol.MethodToolsList:              s.handleListTools,
+		protocol.MethodToolsCall:              s.handleCallTool,
+		protocol.MethodPromptsList:            s.handleListPrompts,
+		protocol.MethodPromptsGet:             s.handleGetPrompt,
+		protocol.MethodResourcesList:          s.handleListResources,
+		protocol.MethodResourcesTemplatesList: s.handleListResourceTemplates,
+		protocol.MethodResourcesRead:          s.handleReadResource,
+		protocol.MethodCompletionComplete:     s.handleComplete,
+		protocol.MethodSubscriptionsListen:    s.handleListen,
+	}
 	return s
 }
 
-// notificationDelay is the debounce interval for change notifications.
-const notificationDelay = 10 * time.Millisecond
+// Extension plugs additional methods and subscription topics into the server
+// (e.g. the official tasks extension). The server itself knows nothing about
+// any specific extension.
+type Extension struct {
+	// ID is the extension identifier, e.g. "io.modelcontextprotocol/tasks".
+	ID string
+	// Settings is marshaled into capabilities.extensions[ID]. Use struct{}{}
+	// for "supported, no settings".
+	Settings any
+	// Methods maps additional RPC method names to handlers.
+	Methods map[string]RawHandler
+	// NameParams maps extension methods to the params key whose string value
+	// clients send as the Mcp-Name routing header over Streamable HTTP (the
+	// tasks draft maps its methods to "taskId"). The transport validates the
+	// header against the body via Server.MethodNameParam.
+	NameParams map[string]string
+	// Topics translates one extension field of a subscription filter (key,
+	// raw value) into hub topics. Returning ok=false leaves the field to
+	// other extensions; ok=true with no topics leaves it unhonored. A non-nil
+	// err rejects the whole listen request (e.g. a missing client capability).
+	Topics func(req *Request, key string, value json.RawMessage) (topics []string, ok bool, err error)
+}
 
-// changeAndNotify executes a change under lock and debounces notification sending.
-// Multiple changes within notificationDelay are coalesced into a single notification.
-func (s *Server) changeAndNotify(notification string, change func() bool) {
+// AddExtension registers an extension. It panics on ID or method collisions
+// and on unmarshalable Settings — registration errors are programmer errors
+// and must fail loudly, not degrade silently at discover time.
+func (s *Server) AddExtension(e Extension) {
+	if e.ID == "" {
+		panic("server: extension ID must not be empty")
+	}
+	settings := e.Settings
+	if settings == nil {
+		settings = struct{}{}
+	}
+	settingsRaw, err := json.Marshal(settings)
+	if err != nil {
+		panic(fmt.Sprintf("server: extension %s settings do not marshal: %v", e.ID, err))
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if !change() {
+	if _, dup := s.extensions[e.ID]; dup {
+		panic("server: duplicate extension " + e.ID)
+	}
+	for name := range e.Methods {
+		if _, dup := s.methods[name]; dup {
+			panic("server: extension method collides with core method " + name)
+		}
+		if _, dup := s.extMethods[name]; dup {
+			panic("server: duplicate extension method " + name)
+		}
+	}
+	s.extensions[e.ID] = e
+	s.extSettings[e.ID] = settingsRaw
+	maps.Copy(s.extMethods, e.Methods)
+	maps.Copy(s.extNameParams, e.NameParams)
+}
+
+// MethodNameParam reports the params key backing the Mcp-Name routing header
+// for an extension method, if the extension registered one. It is the seam
+// the Streamable HTTP transport uses to validate headers on extension
+// methods; core methods are built into the transport.
+func (s *Server) MethodNameParam(method string) (string, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	key, ok := s.extNameParams[method]
+	return key, ok
+}
+
+// Publish delivers a notification to all subscription streams listening on
+// topic. Intended for extensions; core notifications flow through the same
+// hub internally. Delivery itself is best-effort (an overflowing stream is
+// terminated visibly on its own side); the returned error reports encoding
+// failures, which mean the notification reached no subscriber at all.
+func (s *Server) Publish(topic, method string, params any) error {
+	return s.hub.publish(topic, method, params)
+}
+
+// Handle processes one message. For requests, emit is called zero or more
+// times with request-scoped notifications and then exactly once with the
+// final response (subscriptions/listen keeps emitting until ctx ends).
+// Cancelling ctx aborts the in-flight handler; transports translate their
+// native cancellation signal (HTTP stream close, stdio notifications/cancelled)
+// into ctx cancellation.
+func (s *Server) Handle(ctx context.Context, msg *protocol.Message, emit func(*protocol.Message) error) {
+	switch msg.Kind() {
+	case protocol.KindNotification:
+		// notifications/cancelled is transport-level; nothing reaches here.
+		return
+	case protocol.KindRequest:
+		s.handleRequest(ctx, msg, emit)
+	default:
+		_ = emit(protocol.NewErrorResponse(msg.ID,
+			protocol.Errorf(protocol.CodeInvalidRequest, "invalid JSON-RPC message")))
+	}
+}
+
+func (s *Server) handleRequest(ctx context.Context, msg *protocol.Message, emit func(*protocol.Message) error) {
+	req := &Request{
+		id:        msg.ID,
+		method:    msg.Method,
+		rawParams: msg.Params,
+		emit:      emit,
+		server:    s,
+	}
+	res, err := s.dispatch(ctx, req)
+	if err != nil {
+		_ = emit(protocol.NewErrorResponse(msg.ID, toProtocolError(err)))
 		return
 	}
-	if t := s.pendingNotifications[notification]; t == nil {
-		s.pendingNotifications[notification] = time.AfterFunc(notificationDelay, func() {
-			s.sendPendingNotification(notification)
-		})
-	} else {
-		t.Reset(notificationDelay)
-	}
-}
-
-// sendPendingNotification sends a debounced notification to all sessions.
-func (s *Server) sendPendingNotification(notification string) {
-	s.mu.Lock()
-	sessions := make([]*ServerSession, len(s.sessions))
-	copy(sessions, s.sessions)
-	s.pendingNotifications[notification] = nil
-	s.mu.Unlock()
-
-	for _, ss := range sessions {
-		if ss.conn != nil {
-			_ = ss.conn.SendNotification(context.Background(), notification, &struct{}{})
+	if er, ok := res.(*protocol.ExtensionResult); ok {
+		if er == nil || er.R == nil {
+			res = nil
+		} else {
+			res = er.R
 		}
 	}
-}
-
-// AddTool adds a tool to the server, or replaces a tool with the same name (low-level API).
-// The Tool parameter must not be modified after this call.
-//
-// The tool's input schema must be non-nil and have type "object". For tools that accept
-// no input or any input, set [Tool.InputSchema] to `{"type": "object"}` using your
-// preferred library or `json.RawMessage`.
-//
-// If [Tool.OutputSchema] exists, it must also have type "object".
-//
-// When the handler is invoked as part of a CallTool request, req.Params.Arguments
-// will be json.RawMessage.
-//
-// It is the caller's responsibility to deserialize arguments and validate them
-// against the input schema.
-//
-// It is the caller's responsibility to validate the result against the output
-// schema (if any).
-//
-// It is the caller's responsibility to set the Content, StructuredContent, and
-// IsError fields of the result.
-//
-// Most users should use the top-level function [AddTool], which handles all
-// these responsibilities.
-func (s *Server) AddTool(t *protocol.Tool, h ToolHandler) {
-	if t.InputSchema == nil {
-		panic(fmt.Errorf("AddTool %q: missing input schema", t.Name))
-	}
-
-	s.changeAndNotify(protocol.NotificationToolsListChanged, func() bool {
-		wrappedHandler := applyMiddleware(h, s.middlewares)
-		s.tools.add(&serverTool{tool: t, handler: wrappedHandler})
-		return true
-	})
-}
-
-func (s *Server) RemoveTool(name string) {
-	s.changeAndNotify(protocol.NotificationToolsListChanged, func() bool {
-		return s.tools.remove(name)
-	})
-}
-
-func (s *Server) AddResource(r *protocol.Resource, h ResourceHandler) {
-	sr := &serverResource{resource: r, handler: h}
-	s.changeAndNotify(protocol.NotificationResourcesListChanged, func() bool {
-		s.resources.add(sr)
-		return true
-	})
-}
-
-func (s *Server) RemoveResource(uri string) {
-	s.changeAndNotify(protocol.NotificationResourcesListChanged, func() bool {
-		return s.resources.remove(uri)
-	})
-}
-
-func (s *Server) AddResourceTemplate(t *protocol.ResourceTemplate, h ResourceHandler) {
-	srt := &serverResourceTemplate{template: t, handler: h}
-	s.changeAndNotify(protocol.NotificationResourcesListChanged, func() bool {
-		s.resourceTemplates.add(srt)
-		return true
-	})
-}
-
-func (s *Server) RemoveResourceTemplate(uriTemplate string) {
-	s.changeAndNotify(protocol.NotificationResourcesListChanged, func() bool {
-		return s.resourceTemplates.remove(uriTemplate)
-	})
-}
-
-func (s *Server) AddPrompt(p *protocol.Prompt, h PromptHandler) {
-	sp := &serverPrompt{prompt: p, handler: h}
-	s.changeAndNotify(protocol.NotificationPromptsListChanged, func() bool {
-		s.prompts.add(sp)
-		return true
-	})
-}
-
-func (s *Server) RemovePrompt(name string) {
-	s.changeAndNotify(protocol.NotificationPromptsListChanged, func() bool {
-		return s.prompts.remove(name)
-	})
-}
-
-// Run runs the server on the given transport.
-// This is a convenience method for handling a single session (or one session at a time).
-//
-// Run blocks until the client terminates the connection or the provided context is cancelled.
-// If the context is cancelled, Run will close the connection.
-func (s *Server) Run(ctx context.Context, t transport.Transport) error {
-	ss, err := s.Connect(ctx, t, nil)
-	if err != nil {
-		return err
-	}
-
-	ssClosed := make(chan error)
-	go func() {
-		ssClosed <- ss.Wait()
-	}()
-
-	select {
-	case <-ctx.Done():
-		ss.Close()
-		<-ssClosed // Wait for goroutine to finish
-		return ctx.Err()
-	case err := <-ssClosed:
-		return err
-	}
-}
-
-// Connect connects the MCP server via the given transport and starts processing messages.
-//
-// It returns a connection object that can be used to terminate the connection (using Close)
-// or wait for the client to terminate (using Wait).
-func (s *Server) Connect(ctx context.Context, t transport.Transport, opts *ServerSessionOptions) (*ServerSession, error) {
-	conn, err := t.Connect(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("transport connect failed: %w", err)
-	}
-
-	ss := &ServerSession{
-		server:          s,
-		conn:            newConnAdapter(conn),
-		waitErr:         make(chan error, 1),
-		pendingRequests: make(map[string]context.CancelFunc),
-	}
-
-	if opts != nil && opts.State != nil {
-		ss.state = *opts.State
-	}
-
-	if opts != nil && opts.onClose != nil {
-		ss.onClose = opts.onClose
-	}
-
-	s.mu.Lock()
-	s.sessions = append(s.sessions, ss)
-	s.mu.Unlock()
-
-	// Start message processing loop
-	go func() {
-		err := s.handleConnection(ctx, ss, ss.conn)
-		ss.waitErr <- err
-		close(ss.waitErr)
-	}()
-
-	return ss, nil
-}
-
-func jsonRPCErrorFrom(err error) *protocol.JSONRPCError {
-	if err == nil {
-		return nil
-	}
-
-	// Preserve MCP error codes when available.
-	var mcpErr *protocol.MCPError
-	if errors.As(err, &mcpErr) {
-		return &protocol.JSONRPCError{
-			Code:    mcpErr.Code,
-			Message: mcpErr.Message,
-			Data:    mcpErr.Data,
-		}
-	}
-
-	return &protocol.JSONRPCError{
-		Code:    protocol.InternalError,
-		Message: err.Error(),
-	}
-}
-
-func relatedTaskMeta(taskID string) map[string]any {
-	return map[string]any{
-		"io.modelcontextprotocol/related-task": map[string]any{
-			"taskId": taskID,
-		},
-	}
-}
-
-func (s *Server) scheduleTaskCleanup(taskID string, ttlMs int) {
-	if ttlMs <= 0 {
+	if res == nil {
+		_ = emit(protocol.NewErrorResponse(msg.ID, protocol.Errorf(protocol.CodeInternal, "handler returned no result")))
 		return
 	}
-	time.AfterFunc(time.Duration(ttlMs)*time.Millisecond, func() {
-		s.mu.Lock()
-		delete(s.tasks, taskID)
-		s.mu.Unlock()
-	})
-}
-
-func mergeMap(dst map[string]any, src map[string]any) map[string]any {
-	if dst == nil && src == nil {
-		return nil
-	}
-	if dst == nil {
-		dst = make(map[string]any, len(src))
-	}
-	for k, v := range src {
-		dst[k] = v
-	}
-	return dst
-}
-
-func isTerminalTaskStatus(status protocol.TaskStatus) bool {
-	switch status {
-	case protocol.TaskStatusCompleted, protocol.TaskStatusFailed, protocol.TaskStatusCancelled:
-		return true
-	default:
-		return false
-	}
-}
-
-// handleConnection handles the message loop for a connection
-func (s *Server) handleConnection(ctx context.Context, ss *ServerSession, conn Connection) error {
-	defer func() {
-		s.disconnect(ss)
-		conn.Close()
-	}()
-
-	// Get the underlying connAdapter for handling response messages
-	adapter, ok := conn.(*connAdapter)
-	if !ok {
-		return fmt.Errorf("invalid connection type")
-	}
-
-	for {
-		// Explicitly check context cancellation
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
-		}
-
-		msg, err := adapter.conn.Read(ctx)
-		if err != nil {
-			return err
-		}
-
-		// If it's a response message, route to connAdapter
-		if msg.Method == "" && msg.ID != nil {
-			adapter.handleResponse(msg)
-			continue
-		}
-
-		response := s.handleMessage(ctx, ss, msg)
-		if response != nil {
-			if err := adapter.conn.Write(ctx, response); err != nil {
-				return err
-			}
-		}
-	}
-}
-
-// handleMessage handles a single JSON-RPC message
-func (s *Server) handleMessage(ctx context.Context, ss *ServerSession, msg *protocol.JSONRPCMessage) *protocol.JSONRPCMessage {
-	if msg.ID != nil {
-		// Request - needs response
-		// Create cancellable context and track request
-		requestID := protocol.IDToString(msg.ID)
-		requestCtx, cancel := context.WithCancel(ctx)
-
-		ss.mu.Lock()
-		ss.pendingRequests[requestID] = cancel
-		ss.mu.Unlock()
-
-		// Ensure request is cleaned up after completion
-		defer func() {
-			ss.mu.Lock()
-			delete(ss.pendingRequests, requestID)
-			ss.mu.Unlock()
-			cancel()
-		}()
-
-		result, err := s.handleRequest(requestCtx, ss, msg.Method, msg.Params)
-		if err != nil {
-			return &protocol.JSONRPCMessage{
-				JSONRPC: "2.0",
-				ID:      msg.ID,
-				Error:   jsonRPCErrorFrom(err),
-			}
-		}
-
-		// Serialize result
-		resultBytes, err := json.Marshal(result)
-		if err != nil {
-			return &protocol.JSONRPCMessage{
-				JSONRPC: "2.0",
-				ID:      msg.ID,
-				Error: &protocol.JSONRPCError{
-					Code:    protocol.InternalError,
-					Message: fmt.Sprintf("failed to marshal result: %v", err),
-				},
-			}
-		}
-
-		return &protocol.JSONRPCMessage{
-			JSONRPC: "2.0",
-			ID:      msg.ID,
-			Result:  json.RawMessage(resultBytes),
-		}
-	} else {
-		// Notification - no response needed
-		_ = s.handleNotification(ctx, ss, msg.Method, msg.Params)
-		return nil
-	}
-}
-
-func (s *Server) disconnect(ss *ServerSession) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	for i, session := range s.sessions {
-		if session == ss {
-			s.sessions = append(s.sessions[:i], s.sessions[i+1:]...)
-			break
-		}
-	}
-
-	for _, subscribedSessions := range s.resourceSubscriptions {
-		delete(subscribedSessions, ss)
-	}
-}
-
-type ServerSessionOptions struct {
-	State   *ServerSessionState
-	onClose func()
-}
-
-// NotifyResourceUpdated notifies all sessions subscribed to the specified resource that it has been updated.
-// Only clients that have previously called resources/subscribe to subscribe to this URI will receive the notification.
-func (s *Server) NotifyResourceUpdated(uri string) {
-	s.mu.Lock()
-	subscribedSessions, exists := s.resourceSubscriptions[uri]
-	if !exists || len(subscribedSessions) == 0 {
-		s.mu.Unlock()
+	if e := s.finalize(req, res); e != nil {
+		_ = emit(protocol.NewErrorResponse(msg.ID, e))
 		return
 	}
-
-	// Copy session list to avoid holding lock for too long
-	sessions := make([]*ServerSession, 0, len(subscribedSessions))
-	for ss := range subscribedSessions {
-		sessions = append(sessions, ss)
+	out, merr := protocol.NewResponse(msg.ID, res)
+	if merr != nil {
+		_ = emit(protocol.NewErrorResponse(msg.ID, protocol.Errorf(protocol.CodeInternal, "failed to marshal result: %v", merr)))
+		return
 	}
-	s.mu.Unlock()
-
-	// Send notifications
-	params := &protocol.ResourceUpdatedNotificationParams{
-		URI: uri,
-	}
-	for _, ss := range sessions {
-		if ss.conn != nil {
-			_ = ss.conn.SendNotification(context.Background(), protocol.NotificationResourcesUpdated, params)
-		}
-	}
+	_ = emit(out)
 }
 
-// handleRequest handles requests from the client, through the pre-wrapped MethodMiddleware chain.
-func (s *Server) handleRequest(ctx context.Context, ss *ServerSession, method string, params json.RawMessage) (any, error) {
-	s.mu.Lock()
-	handler := s.receivingHandler
-	s.mu.Unlock()
-
-	return handler(ctx, method, params, ss)
-}
-
-// dispatchRequest is the core method dispatch logic.
-func (s *Server) dispatchRequest(ctx context.Context, method string, params json.RawMessage, ss *ServerSession) (any, error) {
-	switch method {
-	case protocol.MethodInitialize:
-		return s.handleInitialize(ctx, ss, params)
-	case protocol.MethodToolsList:
-		return s.handleListTools(ctx, ss, params)
-	case protocol.MethodToolsCall:
-		return s.handleCallTool(ctx, ss, params)
-	case protocol.MethodResourcesList:
-		return s.handleListResources(ctx, ss, params)
-	case protocol.MethodResourcesRead:
-		return s.handleReadResource(ctx, ss, params)
-	case protocol.MethodResourcesTemplatesList:
-		return s.handleListResourceTemplates(ctx, ss, params)
-	case protocol.MethodResourcesSubscribe:
-		return s.handleSubscribe(ctx, ss, params)
-	case protocol.MethodResourcesUnsubscribe:
-		return s.handleUnsubscribe(ctx, ss, params)
-	case protocol.MethodPromptsList:
-		return s.handleListPrompts(ctx, ss, params)
-	case protocol.MethodPromptsGet:
-		return s.handleGetPrompt(ctx, ss, params)
-	case protocol.MethodPing:
-		return &protocol.EmptyResult{}, nil
-	case protocol.MethodCompletionComplete:
-		return s.handleComplete(ctx, ss, params)
-	case protocol.MethodLoggingSetLevel:
-		return s.handleSetLoggingLevel(ctx, ss, params)
-	// Tasks methods (MCP 2025-11-25)
-	case protocol.MethodTasksGet:
-		if !s.opts.TasksEnabled {
-			return nil, protocol.NewMCPError(protocol.MethodNotFound, "Method not found", map[string]any{"method": method})
-		}
-		return s.handleTasksGet(ctx, ss, params)
-	case protocol.MethodTasksList:
-		if !s.opts.TasksEnabled {
-			return nil, protocol.NewMCPError(protocol.MethodNotFound, "Method not found", map[string]any{"method": method})
-		}
-		return s.handleTasksList(ctx, ss, params)
-	case protocol.MethodTasksCancel:
-		if !s.opts.TasksEnabled {
-			return nil, protocol.NewMCPError(protocol.MethodNotFound, "Method not found", map[string]any{"method": method})
-		}
-		return s.handleTasksCancel(ctx, ss, params)
-	case protocol.MethodTasksResult:
-		if !s.opts.TasksEnabled {
-			return nil, protocol.NewMCPError(protocol.MethodNotFound, "Method not found", map[string]any{"method": method})
-		}
-		return s.handleTasksResult(ctx, ss, params)
-	default:
-		return nil, protocol.NewMCPError(protocol.MethodNotFound, "Method not found", map[string]any{"method": method})
+func (s *Server) dispatch(ctx context.Context, req *Request) (protocol.Result, error) {
+	meta, perr := extractMeta(req.rawParams)
+	if perr != nil {
+		return nil, perr
 	}
-}
-
-// handleNotification handles notifications from the client
-func (s *Server) handleNotification(ctx context.Context, ss *ServerSession, method string, params json.RawMessage) error {
-	switch method {
-	case protocol.NotificationInitialized:
-		return s.handleInitialized(ctx, ss, params)
-	case protocol.NotificationCancelled:
-		return s.handleCancelled(ctx, ss, params)
-	case protocol.NotificationProgress:
-		return s.handleProgress(ctx, ss, params)
-	case protocol.NotificationElicitationComplete:
-		return s.handleElicitationComplete(ctx, ss, params)
-	case protocol.NotificationRootsListChanged:
-		return s.handleRootsListChanged(ctx, ss, params)
-	default:
-		return fmt.Errorf("unknown notification: %s", method)
-	}
-}
-
-// handleInitialize handles the initialize request
-func (s *Server) handleInitialize(ctx context.Context, ss *ServerSession, params json.RawMessage) (*protocol.InitializeResult, error) {
-	var req protocol.InitializeParams
-	if err := json.Unmarshal(params, &req); err != nil {
-		return nil, protocol.NewMCPError(protocol.InvalidParams, "Invalid params", map[string]any{"method": protocol.MethodInitialize})
-	}
-
-	// Determine the protocol version to use
-	// If client version is supported, use it; otherwise use server's latest version
-	negotiatedVersion := req.ProtocolVersion
-	if !protocol.IsVersionSupported(req.ProtocolVersion) {
-		// Log warning but don't reject - use server's latest version instead
-		log.Printf("[MCP] Warning: client requested unsupported protocol version: %s, using server version: %s",
-			req.ProtocolVersion, protocol.MCPVersion)
-		negotiatedVersion = protocol.MCPVersion
-	}
-
-	ss.updateState(func(state *ServerSessionState) {
-		state.InitializeParams = &req
-	})
-
-	capabilities := protocol.ServerCapabilities{}
-
-	s.mu.Lock()
-	hasTools := s.tools.len() > 0
-	hasResources := s.resources.len() > 0 || s.resourceTemplates.len() > 0
-	hasPrompts := s.prompts.len() > 0
-	subscribeSupported := s.opts.SubscribeHandler != nil && s.opts.UnsubscribeHandler != nil
-
-	if hasTools {
-		capabilities.Tools = &protocol.ToolsCapability{ListChanged: true}
-	}
-	if hasResources {
-		capabilities.Resources = &protocol.ResourcesCapability{
-			ListChanged: true,
-			Subscribe:   subscribeSupported,
-		}
-	}
-	if hasPrompts {
-		capabilities.Prompts = &protocol.PromptsCapability{ListChanged: true}
-	}
-	s.mu.Unlock()
-
-	capabilities.Logging = &protocol.LoggingCapability{}
-
-	if s.opts.CompletionHandler != nil {
-		capabilities.Completion = &protocol.CompletionCapability{}
-	}
-
-	// Add Tasks capability (MCP 2025-11-25)
-	if s.opts.TasksEnabled {
-		capabilities.Tasks = &protocol.TasksCapability{}
-		// Default implementations exist, so these are always available when TasksEnabled.
-		capabilities.Tasks.List = &struct{}{}
-		capabilities.Tasks.Cancel = &struct{}{}
-
-		// Server supports task augmentation for tools/call (per-tool allow/deny is negotiated via tool.execution.taskSupport).
-		capabilities.Tasks.Requests = &protocol.ServerTaskRequestsCapability{
-			Tools: &protocol.ToolsTaskCapability{
-				Call: &struct{}{},
-			},
-		}
-	}
-
-	return &protocol.InitializeResult{
-		ProtocolVersion: negotiatedVersion,
-		Capabilities:    capabilities,
-		ServerInfo:      *s.impl,
-		Instructions:    s.opts.Instructions,
-	}, nil
-}
-
-// handleInitialized handles the initialized notification
-func (s *Server) handleInitialized(ctx context.Context, ss *ServerSession, params json.RawMessage) error {
-	var req protocol.InitializedParams
-	if err := json.Unmarshal(params, &req); err != nil {
-		return fmt.Errorf("invalid initialized params: %w", err)
-	}
-
-	ss.updateState(func(state *ServerSessionState) {
-		state.InitializedParams = &req
-	})
-
-	// Start keepalive
-	if s.opts.KeepAlive > 0 {
-		ss.startKeepalive(s.opts.KeepAlive)
-	}
-
-	if s.opts.InitializedHandler != nil {
-		s.opts.InitializedHandler(ctx, ss)
-	}
-
-	return nil
-}
-
-// handleListTools handles the tools/list request
-func (s *Server) handleListTools(ctx context.Context, ss *ServerSession, params json.RawMessage) (*protocol.ListToolsResult, error) {
-	var req protocol.ListToolsParams
-	if len(params) > 0 {
-		if err := json.Unmarshal(params, &req); err != nil {
-			return nil, protocol.NewMCPError(protocol.InvalidParams, "Invalid params", nil)
-		}
-	}
-
-	s.mu.Lock()
-	items, nextCursor, err := paginateList(s.tools, s.opts.PageSize, req.Cursor)
-	s.mu.Unlock()
-	if err != nil {
-		return nil, protocol.NewMCPError(protocol.InvalidParams, "Invalid cursor", nil)
-	}
-
-	tools := make([]protocol.Tool, 0, len(items))
-	for _, st := range items {
-		tools = append(tools, *st.tool)
-	}
-
-	result := &protocol.ListToolsResult{Tools: tools}
-	if nextCursor != "" {
-		result.NextCursor = &nextCursor
-	}
-	return result, nil
-}
-
-// handleCallTool handles the tools/call request
-func (s *Server) handleCallTool(ctx context.Context, ss *ServerSession, params json.RawMessage) (any, error) {
-	var req protocol.CallToolParams
-	if err := json.Unmarshal(params, &req); err != nil {
-		return nil, protocol.NewMCPError(protocol.InvalidParams, "Invalid params", map[string]any{"method": protocol.MethodToolsCall})
-	}
-
-	s.mu.Lock()
-	st, exists := s.tools.get(req.Name)
-	s.mu.Unlock()
-
-	if !exists {
-		return nil, protocol.NewMCPError(protocol.InvalidParams, fmt.Sprintf("Unknown tool: %s", req.Name), nil)
-	}
-
-	var taskSupport protocol.TaskSupport
-	if st.tool.Execution != nil {
-		taskSupport = st.tool.Execution.TaskSupport
-	}
-
-	// Tool-level task negotiation (MCP 2025-11-25)
-	//
-	// Default behavior: task augmentation is forbidden unless explicitly enabled.
-	if req.Task != nil {
-		if !s.opts.TasksEnabled {
-			return nil, protocol.NewMCPError(protocol.MethodNotFound, "Method not found", map[string]any{"method": protocol.MethodToolsCall})
-		}
-		// If taskSupport is not present or forbidden, servers SHOULD return -32601.
-		if st.tool.Execution == nil || taskSupport == "" || taskSupport == protocol.TaskSupportForbidden {
-			return nil, protocol.NewMCPError(protocol.MethodNotFound, "Method not found", map[string]any{"method": protocol.MethodToolsCall})
-		}
-	} else {
-		// If taskSupport is required, servers MUST return -32601 if client does not attempt task augmentation.
-		if taskSupport == protocol.TaskSupportRequired {
-			return nil, protocol.NewMCPError(protocol.MethodNotFound, "Method not found", map[string]any{"method": protocol.MethodToolsCall})
-		}
-	}
-
-	// Task-augmented tools/call (MCP 2025-11-25)
-	if req.Task != nil {
-		now := time.Now().UTC().Format(time.RFC3339Nano)
-		taskID := uuid.NewString()
-		task := &protocol.Task{
-			TaskID:        taskID,
-			Status:        protocol.TaskStatusWorking,
-			CreatedAt:     now,
-			LastUpdatedAt: now,
-			TTL:           req.Task.TTL,
-		}
-
-		taskCtx, cancel := context.WithCancel(context.Background())
-		taskCtx = contextWithTaskID(taskCtx, taskID)
-		meta := relatedTaskMeta(taskID)
-
-		s.mu.Lock()
-		s.tasks[taskID] = &serverTask{
-			task:     task,
-			result:   nil,
-			rpcError: nil,
-			cancel:   cancel,
-			done:     make(chan struct{}),
-			sessionID: ss.ID(),
-		}
-		s.mu.Unlock()
-
-		s.NotifyTaskStatus(task)
-
-		toolReq := &CallToolRequest{
-			Session: ss,
-			Params:  &req,
-		}
-
-		go func() {
-			defer cancel()
-			result, err := st.handler(taskCtx, toolReq)
-
-			s.mu.Lock()
-			stored := s.tasks[taskID]
-			if stored == nil || stored.task == nil {
-				s.mu.Unlock()
-				return
-			}
-
-			// Once cancelled, task MUST remain cancelled even if execution continues.
-			if stored.task.Status == protocol.TaskStatusCancelled {
-				stored.doneOnce.Do(func() {
-					if stored.done != nil {
-						close(stored.done)
-					}
-				})
-				s.mu.Unlock()
-				return
-			}
-
-			if err != nil {
-				stored.rpcError = jsonRPCErrorFrom(err)
-				stored.result = nil
-				stored.task.Status = protocol.TaskStatusFailed
-				stored.task.StatusMessage = err.Error()
-				stored.task.LastUpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
-				stored.doneOnce.Do(func() {
-					if stored.done != nil {
-						close(stored.done)
-					}
-				})
-				taskCopy := *stored.task
-				ttl := stored.task.TTL
-				s.mu.Unlock()
-				s.NotifyTaskStatus(&taskCopy)
-				if ttl != nil {
-					s.scheduleTaskCleanup(taskID, *ttl)
-				}
-				return
-			}
-
-			// Per spec: tool result with isError=true should lead to failed task status.
-			if result != nil {
-				result.Meta = mergeMap(result.Meta, meta)
-			}
-			stored.result = result
-			stored.rpcError = nil
-			if result != nil && result.IsError {
-				stored.task.Status = protocol.TaskStatusFailed
-			} else {
-				stored.task.Status = protocol.TaskStatusCompleted
-			}
-			stored.task.StatusMessage = ""
-			stored.task.LastUpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
-			stored.doneOnce.Do(func() {
-				if stored.done != nil {
-					close(stored.done)
-				}
-			})
-			taskCopy := *stored.task
-			ttl := stored.task.TTL
-			s.mu.Unlock()
-
-			s.NotifyTaskStatus(&taskCopy)
-			if ttl != nil {
-				s.scheduleTaskCleanup(taskID, *ttl)
-			}
-		}()
-
-		return &protocol.CreateTaskResult{Meta: meta, Task: *task}, nil
-	}
-
-	toolReq := &CallToolRequest{
-		Session: ss,
-		Params:  &req,
-	}
-
-	return st.handler(ctx, toolReq)
-}
-
-// handleListResources handles the resources/list request
-func (s *Server) handleListResources(ctx context.Context, ss *ServerSession, params json.RawMessage) (*protocol.ListResourcesResult, error) {
-	var req protocol.ListResourcesParams
-	if len(params) > 0 {
-		if err := json.Unmarshal(params, &req); err != nil {
-			return nil, protocol.NewMCPError(protocol.InvalidParams, "Invalid params", nil)
-		}
-	}
-
-	s.mu.Lock()
-	items, nextCursor, err := paginateList(s.resources, s.opts.PageSize, req.Cursor)
-	s.mu.Unlock()
-	if err != nil {
-		return nil, protocol.NewMCPError(protocol.InvalidParams, "Invalid cursor", nil)
-	}
-
-	resources := make([]protocol.Resource, 0, len(items))
-	for _, sr := range items {
-		resources = append(resources, *sr.resource)
-	}
-
-	result := &protocol.ListResourcesResult{Resources: resources}
-	if nextCursor != "" {
-		result.NextCursor = &nextCursor
-	}
-	return result, nil
-}
-
-// handleListResourceTemplates handles the resources/templates/list request
-func (s *Server) handleListResourceTemplates(ctx context.Context, ss *ServerSession, params json.RawMessage) (*protocol.ListResourceTemplatesResult, error) {
-	var req protocol.ListResourceTemplatesParams
-	if len(params) > 0 {
-		if err := json.Unmarshal(params, &req); err != nil {
-			return nil, protocol.NewMCPError(protocol.InvalidParams, "Invalid params", nil)
-		}
-	}
-
-	s.mu.Lock()
-	items, nextCursor, err := paginateList(s.resourceTemplates, s.opts.PageSize, req.Cursor)
-	s.mu.Unlock()
-	if err != nil {
-		return nil, protocol.NewMCPError(protocol.InvalidParams, "Invalid cursor", nil)
-	}
-
-	templates := make([]protocol.ResourceTemplate, 0, len(items))
-	for _, srt := range items {
-		templates = append(templates, *srt.template)
-	}
-
-	result := &protocol.ListResourceTemplatesResult{ResourceTemplates: templates}
-	if nextCursor != "" {
-		result.NextCursor = &nextCursor
-	}
-	return result, nil
-}
-
-// handleReadResource handles the resources/read request
-func (s *Server) handleReadResource(ctx context.Context, ss *ServerSession, params json.RawMessage) (*protocol.ReadResourceResult, error) {
-	var req protocol.ReadResourceParams
-	if err := json.Unmarshal(params, &req); err != nil {
-		return nil, protocol.NewMCPError(protocol.InvalidParams, "Invalid params", map[string]any{"method": protocol.MethodResourcesRead})
-	}
-
-	s.mu.Lock()
-	sr, exists := s.resources.get(req.URI)
-	s.mu.Unlock()
-
-	if !exists {
-		return nil, protocol.NewMCPError(protocol.ResourceNotFound, "resource not found", map[string]any{"uri": req.URI})
-	}
-
-	resourceReq := &ReadResourceRequest{
-		Session: ss,
-		Params:  &req,
-	}
-
-	return sr.handler(ctx, resourceReq)
-}
-
-// handleSubscribe handles the resources/subscribe request
-func (s *Server) handleSubscribe(ctx context.Context, ss *ServerSession, params json.RawMessage) (*protocol.EmptyResult, error) {
-	if s.opts.SubscribeHandler == nil || s.opts.UnsubscribeHandler == nil {
-		return nil, protocol.NewMCPError(protocol.MethodNotFound, "Method not found", map[string]any{"method": protocol.MethodResourcesSubscribe})
-	}
-
-	var req protocol.SubscribeParams
-	if err := json.Unmarshal(params, &req); err != nil {
-		return nil, protocol.NewMCPError(protocol.InvalidParams, "Invalid params", map[string]any{"method": protocol.MethodResourcesSubscribe})
-	}
-
-	if err := s.opts.SubscribeHandler(ctx, &req); err != nil {
+	req.meta = meta
+	if err := meta.Validate(); err != nil {
 		return nil, err
 	}
-
-	s.mu.Lock()
-	if s.resourceSubscriptions[req.URI] == nil {
-		s.resourceSubscriptions[req.URI] = make(map[*ServerSession]bool)
-	}
-	s.resourceSubscriptions[req.URI][ss] = true
-	s.mu.Unlock()
-
-	return &protocol.EmptyResult{}, nil
-}
-
-// handleUnsubscribe handles the resources/unsubscribe request
-func (s *Server) handleUnsubscribe(ctx context.Context, ss *ServerSession, params json.RawMessage) (*protocol.EmptyResult, error) {
-	if s.opts.SubscribeHandler == nil || s.opts.UnsubscribeHandler == nil {
-		return nil, protocol.NewMCPError(protocol.MethodNotFound, "Method not found", map[string]any{"method": protocol.MethodResourcesUnsubscribe})
+	if meta.ProtocolVersion != protocol.Version {
+		return nil, protocol.UnsupportedVersionError(meta.ProtocolVersion, []string{protocol.Version})
 	}
 
-	var req protocol.UnsubscribeParams
-	if err := json.Unmarshal(params, &req); err != nil {
-		return nil, protocol.NewMCPError(protocol.InvalidParams, "Invalid params", map[string]any{"method": protocol.MethodResourcesUnsubscribe})
+	h := s.lookupMethod(req.method)
+	if h == nil || !s.methodAdvertised(req.method) {
+		return nil, protocol.MethodNotFoundError(req.method)
 	}
 
-	if err := s.opts.UnsubscribeHandler(ctx, &req); err != nil {
-		return nil, err
-	}
-
-	s.mu.Lock()
-	if s.resourceSubscriptions[req.URI] != nil {
-		delete(s.resourceSubscriptions[req.URI], ss)
-	}
-	s.mu.Unlock()
-
-	return &protocol.EmptyResult{}, nil
-}
-
-// handleListPrompts handles the prompts/list request
-func (s *Server) handleListPrompts(ctx context.Context, ss *ServerSession, params json.RawMessage) (*protocol.ListPromptsResult, error) {
-	var req protocol.ListPromptsParams
-	if len(params) > 0 {
-		if err := json.Unmarshal(params, &req); err != nil {
-			return nil, protocol.NewMCPError(protocol.InvalidParams, "Invalid params", nil)
-		}
-	}
-
-	s.mu.Lock()
-	items, nextCursor, err := paginateList(s.prompts, s.opts.PageSize, req.Cursor)
-	s.mu.Unlock()
-	if err != nil {
-		return nil, protocol.NewMCPError(protocol.InvalidParams, "Invalid cursor", nil)
-	}
-
-	prompts := make([]protocol.Prompt, 0, len(items))
-	for _, sp := range items {
-		prompts = append(prompts, *sp.prompt)
-	}
-
-	result := &protocol.ListPromptsResult{Prompts: prompts}
-	if nextCursor != "" {
-		result.NextCursor = &nextCursor
-	}
-	return result, nil
-}
-
-// handleGetPrompt handles the prompts/get request
-func (s *Server) handleGetPrompt(ctx context.Context, ss *ServerSession, params json.RawMessage) (*protocol.GetPromptResult, error) {
-	var req protocol.GetPromptParams
-	if err := json.Unmarshal(params, &req); err != nil {
-		return nil, protocol.NewMCPError(protocol.InvalidParams, "Invalid params", map[string]any{"method": protocol.MethodPromptsGet})
-	}
-
-	s.mu.Lock()
-	sp, exists := s.prompts.get(req.Name)
-	s.mu.Unlock()
-
-	if !exists {
-		return nil, protocol.NewMCPError(protocol.PromptNotFound, "prompt not found", map[string]any{"name": req.Name})
-	}
-
-	promptReq := &GetPromptRequest{
-		Session: ss,
-		Params:  &req,
-	}
-
-	return sp.handler(ctx, promptReq)
-}
-
-// handleComplete handles the completion/complete request
-func (s *Server) handleComplete(ctx context.Context, ss *ServerSession, params json.RawMessage) (*protocol.CompleteResult, error) {
-	if s.opts.CompletionHandler == nil {
-		return nil, protocol.NewMCPError(protocol.MethodNotFound, "Method not found", map[string]any{"method": protocol.MethodCompletionComplete})
-	}
-
-	var req protocol.CompleteRequest
-	if err := json.Unmarshal(params, &req); err != nil {
-		return nil, protocol.NewMCPError(protocol.InvalidParams, "Invalid params", map[string]any{"method": protocol.MethodCompletionComplete})
-	}
-
-	return s.opts.CompletionHandler(ctx, &req)
-}
-
-// handleCancelled handles the notifications/cancelled notification
-func (s *Server) handleCancelled(ctx context.Context, ss *ServerSession, params json.RawMessage) error {
-	var req protocol.CancelledNotificationParams
-	if err := json.Unmarshal(params, &req); err != nil {
-		return fmt.Errorf("invalid cancelled params: %w", err)
-	}
-
-	requestID := ""
-	switch v := req.RequestID.(type) {
-	case string:
-		requestID = v
-	case float64:
-		requestID = fmt.Sprintf("%.0f", v)
-	case json.Number:
-		requestID = v.String()
-	default:
-		return fmt.Errorf("invalid requestId type: %T", req.RequestID)
-	}
-
-	ss.mu.Lock()
-	cancel, exists := ss.pendingRequests[requestID]
-	ss.mu.Unlock()
-
-	if exists {
-		cancel()
-	}
-
-	// Return nil even if request doesn't exist, as the request may have already completed
-	return nil
-}
-
-// handleProgress handles the notifications/progress notification
-func (s *Server) handleProgress(ctx context.Context, ss *ServerSession, params json.RawMessage) error {
-	if s.opts.ProgressNotificationHandler == nil {
-		return nil
-	}
-
-	var req protocol.ProgressNotificationParams
-	if err := json.Unmarshal(params, &req); err != nil {
-		return fmt.Errorf("invalid progress params: %w", err)
-	}
-
-	s.opts.ProgressNotificationHandler(ctx, ss, &req)
-	return nil
-}
-
-// handleElicitationComplete handles notifications/elicitation/complete (MCP 2025-11-25)
-func (s *Server) handleElicitationComplete(ctx context.Context, ss *ServerSession, params json.RawMessage) error {
-	if s.opts.ElicitationCompleteHandler == nil {
-		return nil
-	}
-
-	var req protocol.ElicitationCompleteNotificationParams
-	if err := json.Unmarshal(params, &req); err != nil {
-		return fmt.Errorf("invalid elicitation complete params: %w", err)
-	}
-
-	s.opts.ElicitationCompleteHandler(ctx, ss, &req)
-	return nil
-}
-
-// handleRootsListChanged handles the notifications/roots/list_changed notification
-func (s *Server) handleRootsListChanged(ctx context.Context, ss *ServerSession, params json.RawMessage) error {
-	// Client notifies that the root list has changed, server can choose to re-query
-	return nil
-}
-
-// handleSetLoggingLevel handles the logging/setLevel request
-func (s *Server) handleSetLoggingLevel(ctx context.Context, ss *ServerSession, params json.RawMessage) (*protocol.EmptyResult, error) {
-	var req protocol.SetLoggingLevelParams
-	if err := json.Unmarshal(params, &req); err != nil {
-		return nil, protocol.NewMCPError(protocol.InvalidParams, "Invalid params", map[string]any{"method": protocol.MethodLoggingSetLevel})
-	}
-
-	ss.updateState(func(state *ServerSessionState) {
-		state.LogLevel = req.Level
-	})
-
-	if s.opts.LoggingSetLevelHandler != nil {
-		if err := s.opts.LoggingSetLevelHandler(ctx, ss, req.Level); err != nil {
-			return nil, err
-		}
-	}
-
-	return &protocol.EmptyResult{}, nil
-}
-
-// HandleMessage implements the SSE Handler interface (for backward compatibility)
-func (s *Server) HandleMessage(ctx context.Context, msg *protocol.JSONRPCMessage) (*protocol.JSONRPCMessage, error) {
-	// Create a temporary session (SSE uses the old single session mode)
-	ss := &ServerSession{
-		server:          s,
-		conn:            nil, // SSE does not use connection
-		pendingRequests: make(map[string]context.CancelFunc),
-	}
-
-	// Handle message
-	response := s.handleMessage(ctx, ss, msg)
-	return response, nil
-}
-
-// handleTasksGet handles the tasks/get request (MCP 2025-11-25)
-func (s *Server) handleTasksGet(ctx context.Context, ss *ServerSession, params json.RawMessage) (*protocol.GetTaskResult, error) {
-	var req protocol.GetTaskParams
-	if err := json.Unmarshal(params, &req); err != nil {
-		return nil, protocol.NewMCPError(protocol.InvalidParams, "Invalid params", map[string]any{"method": protocol.MethodTasksGet})
-	}
-
-	if s.opts.TaskGetHandler != nil {
-		return s.opts.TaskGetHandler(ctx, &req)
-	}
-
-	// Default implementation: look up task in internal storage
-	s.mu.Lock()
-	st, exists := s.tasks[req.TaskID]
-	s.mu.Unlock()
-
-	if !exists {
-		return nil, protocol.NewMCPError(protocol.InvalidParams, "task not found", nil)
-	}
-	if !ss.sameSession(st.sessionID) {
-		return nil, protocol.NewMCPError(protocol.InvalidParams, "task not found", nil)
-	}
-
-	return &protocol.GetTaskResult{
-		Task: *st.task,
-	}, nil
-}
-
-// handleTasksList handles the tasks/list request (MCP 2025-11-25)
-func (s *Server) handleTasksList(ctx context.Context, ss *ServerSession, params json.RawMessage) (*protocol.ListTasksResult, error) {
-	var req protocol.ListTasksParams
-	if err := json.Unmarshal(params, &req); err != nil {
-		return nil, protocol.NewMCPError(protocol.InvalidParams, "Invalid params", map[string]any{"method": protocol.MethodTasksList})
-	}
-
-	if s.opts.TaskListHandler != nil {
-		return s.opts.TaskListHandler(ctx, &req)
-	}
-
-	// Default implementation: return all tasks from internal storage
-	s.mu.Lock()
-	tasks := make([]protocol.Task, 0, len(s.tasks))
-	for _, st := range s.tasks {
-		if st == nil || st.task == nil {
-			continue
-		}
-		if !ss.sameSession(st.sessionID) {
-			continue
-		}
-		tasks = append(tasks, *st.task)
-	}
-	s.mu.Unlock()
-
-	return &protocol.ListTasksResult{
-		Tasks: tasks,
-	}, nil
-}
-
-// handleTasksCancel handles the tasks/cancel request (MCP 2025-11-25)
-func (s *Server) handleTasksCancel(ctx context.Context, ss *ServerSession, params json.RawMessage) (*protocol.CancelTaskResult, error) {
-	var req protocol.CancelTaskParams
-	if err := json.Unmarshal(params, &req); err != nil {
-		return nil, protocol.NewMCPError(protocol.InvalidParams, "Invalid params", map[string]any{"method": protocol.MethodTasksCancel})
-	}
-
-	if s.opts.TaskCancelHandler != nil {
-		return s.opts.TaskCancelHandler(ctx, &req)
-	}
-
-	s.mu.Lock()
-	st := s.tasks[req.TaskID]
-	if st == nil || st.task == nil {
-		s.mu.Unlock()
-		return nil, protocol.NewMCPError(protocol.InvalidParams, "task not found", nil)
-	}
-	if !ss.sameSession(st.sessionID) {
-		s.mu.Unlock()
-		return nil, protocol.NewMCPError(protocol.InvalidParams, "task not found", nil)
-	}
-	if isTerminalTaskStatus(st.task.Status) {
-		s.mu.Unlock()
-		return nil, protocol.NewMCPError(protocol.InvalidParams, fmt.Sprintf("Cannot cancel task: already in terminal status %q", st.task.Status), nil)
-	}
-
-	st.task.Status = protocol.TaskStatusCancelled
-	st.task.StatusMessage = req.Reason
-	st.task.LastUpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
-	st.result = nil
-	// tasks/result returns the original request's JSON-RPC error when a task is cancelled.
-	// MCP does not define a dedicated cancellation error code, so we use -32603 with a stable message.
-	data := map[string]any(nil)
-	if req.Reason != "" {
-		data = map[string]any{"reason": req.Reason}
-	}
-	st.rpcError = &protocol.JSONRPCError{
-		Code:    protocol.InternalError,
-		Message: "Request cancelled",
-		Data:    data,
-	}
-	st.doneOnce.Do(func() {
-		if st.done != nil {
-			close(st.done)
-		}
-	})
-	cancel := st.cancel
-	ttl := st.task.TTL
-	taskCopy := *st.task
-	s.mu.Unlock()
-
-	if cancel != nil {
-		cancel()
-	}
-	s.NotifyTaskStatus(&taskCopy)
-	if ttl != nil {
-		s.scheduleTaskCleanup(req.TaskID, *ttl)
-	}
-
-	return &protocol.CancelTaskResult{Task: taskCopy}, nil
-}
-
-// handleTasksResult handles the tasks/result request (MCP 2025-11-25)
-// Per spec, this returns the original request's result type directly
-func (s *Server) handleTasksResult(ctx context.Context, ss *ServerSession, params json.RawMessage) (any, error) {
-	var req protocol.TaskResultParams
-	if err := json.Unmarshal(params, &req); err != nil {
-		return nil, protocol.NewMCPError(protocol.InvalidParams, "Invalid params", map[string]any{"method": protocol.MethodTasksResult})
-	}
-
-	if s.opts.TaskResultHandler != nil {
-		return s.opts.TaskResultHandler(ctx, &req)
-	}
-
-	// Default implementation: return task result from internal storage
-	s.mu.Lock()
-	st := s.tasks[req.TaskID]
-	if st == nil || st.task == nil {
-		s.mu.Unlock()
-		return nil, protocol.NewMCPError(protocol.InvalidParams, "task not found", nil)
-	}
-	if !ss.sameSession(st.sessionID) {
-		s.mu.Unlock()
-		return nil, protocol.NewMCPError(protocol.InvalidParams, "task not found", nil)
-	}
-	status := st.task.Status
-	done := st.done
-	s.mu.Unlock()
-
-	// Must block until terminal status.
-	if !isTerminalTaskStatus(status) {
-		if done == nil {
-			return nil, protocol.NewMCPError(protocol.InternalError, "task result not available", nil)
-		}
+	if s.sem != nil {
 		select {
+		case s.sem <- struct{}{}:
+			defer func() { <-s.sem }()
 		case <-ctx.Done():
 			return nil, ctx.Err()
-		case <-done:
 		}
 	}
 
-	s.mu.Lock()
-	st = s.tasks[req.TaskID]
-	if st == nil || st.task == nil {
-		s.mu.Unlock()
-		return nil, protocol.NewMCPError(protocol.InvalidParams, "task not found", nil)
+	s.mu.RLock()
+	mw := s.middleware
+	s.mu.RUnlock()
+	for i := len(mw) - 1; i >= 0; i-- {
+		h = mw[i](h)
 	}
-	if !ss.sameSession(st.sessionID) {
-		s.mu.Unlock()
-		return nil, protocol.NewMCPError(protocol.InvalidParams, "task not found", nil)
+	return h(ctx, req)
+}
+
+// methodAdvertised reports whether the feature backing a core method is
+// currently advertised. Per the spec, a method gated behind a capability the
+// server does not advertise is treated as not found (-32601). The check reads
+// the same registrations discover derives capabilities from, so the two stay
+// consistent (OnDiscover edits presentation only; see Options.OnDiscover).
+func (s *Server) methodAdvertised(method string) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	switch method {
+	case protocol.MethodToolsList, protocol.MethodToolsCall:
+		return s.toolsDeclared
+	case protocol.MethodPromptsList, protocol.MethodPromptsGet:
+		return s.promptsDeclared
+	case protocol.MethodResourcesList, protocol.MethodResourcesTemplatesList, protocol.MethodResourcesRead:
+		return s.resourcesDeclared
 	}
-	taskID := st.task.TaskID
-	rpcErr := st.rpcError
-	result := st.result
-	s.mu.Unlock()
+	return true
+}
 
-	meta := relatedTaskMeta(taskID)
+func (s *Server) lookupMethod(method string) RawHandler {
+	if h, ok := s.methods[method]; ok {
+		return h
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.extMethods[method]
+}
 
-	// If the original request would have produced a JSON-RPC error, return it here.
-	if rpcErr != nil {
-		data := map[string]any{"_meta": meta}
-		if existing, ok := rpcErr.Data.(map[string]any); ok {
-			data = mergeMap(data, existing)
+// finalize applies the invariants every outgoing result must satisfy:
+// input_required validity and capability conformance, cache-control defaults,
+// and serverInfo stamping.
+func (s *Server) finalize(req *Request, res protocol.Result) *protocol.Error {
+	if ir, ok := res.(*protocol.InputRequired); ok {
+		if !methodSupportsMRTR(req.method) {
+			return protocol.Errorf(protocol.CodeInternal,
+				"server bug: %s must not return input_required", req.method)
 		}
-		return nil, protocol.NewMCPError(rpcErr.Code, rpcErr.Message, data)
+		if err := ir.Validate(); err != nil {
+			return protocol.Errorf(protocol.CodeInternal, "server bug: %v", err)
+		}
+		if err := s.checkInputCapabilities(req, ir); err != nil {
+			return err
+		}
 	}
-
-	// For tools/call, ensure the returned result carries related-task metadata.
-	if ctr, ok := result.(*protocol.CallToolResult); ok && ctr != nil {
-		ctr.Meta = mergeMap(ctr.Meta, meta)
-		return ctr, nil
-	}
-	if result == nil {
-		return nil, protocol.NewMCPError(protocol.InternalError, "task result missing", map[string]any{"_meta": meta})
-	}
-	return result, nil
-}
-
-// StoreTask stores a task in the server's internal storage (MCP 2025-11-25)
-func (s *Server) StoreTask(task *protocol.Task, result any) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	st := &serverTask{
-		task:     task,
-		result:   result,
-		rpcError: nil,
-		cancel:   nil,
-		done:     make(chan struct{}),
-	}
-	if task != nil && isTerminalTaskStatus(task.Status) {
-		st.doneOnce.Do(func() { close(st.done) })
-	}
-	s.tasks[task.TaskID] = st
-
-	if task != nil && task.TTL != nil && isTerminalTaskStatus(task.Status) {
-		s.scheduleTaskCleanup(task.TaskID, *task.TTL)
-	}
-}
-
-// UpdateTask updates a task in the server's internal storage (MCP 2025-11-25)
-func (s *Server) UpdateTask(taskID string, status protocol.TaskStatus, statusMessage string) error {
-	s.mu.Lock()
-
-	st, exists := s.tasks[taskID]
-	if !exists {
-		s.mu.Unlock()
-		return protocol.NewMCPError(protocol.InvalidParams, "task not found", nil)
-	}
-
-	st.task.Status = status
-	st.task.StatusMessage = statusMessage
-	st.task.LastUpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
-	shouldCleanup := false
-	ttl := (*int)(nil)
-	if isTerminalTaskStatus(status) {
-		st.doneOnce.Do(func() {
-			if st.done != nil {
-				close(st.done)
+	if c, ok := res.(protocol.Cacheable); ok {
+		cc := c.CacheControlRef()
+		if cc.TTLMs < 0 {
+			cc.TTLMs = 0
+		}
+		if cc.CacheScope == "" {
+			if cc.TTLMs == 0 {
+				cc.TTLMs = s.opts.ListCache.TTLMs
 			}
-		})
-		ttl = st.task.TTL
-		shouldCleanup = ttl != nil
-	}
-	s.mu.Unlock()
-	if shouldCleanup {
-		s.scheduleTaskCleanup(taskID, *ttl)
-		return nil
-	}
-	return nil
-}
-
-// SetTaskResult sets the result for a task (MCP 2025-11-25)
-func (s *Server) SetTaskResult(taskID string, result any) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	st, exists := s.tasks[taskID]
-	if !exists {
-		return protocol.NewMCPError(protocol.InvalidParams, "task not found", nil)
-	}
-
-	st.result = result
-	return nil
-}
-
-// RemoveTask removes a task from the server's internal storage (MCP 2025-11-25)
-func (s *Server) RemoveTask(taskID string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	delete(s.tasks, taskID)
-}
-
-// NotifyTaskStatus sends a task status notification to all sessions (MCP 2025-11-25)
-func (s *Server) NotifyTaskStatus(task *protocol.Task) {
-	params := &protocol.TaskStatusNotificationParams{
-		Task: *task,
-	}
-	s.mu.Lock()
-	sessions := make([]*ServerSession, len(s.sessions))
-	copy(sessions, s.sessions)
-	s.mu.Unlock()
-
-	for _, ss := range sessions {
-		if ss.conn != nil {
-			_ = ss.conn.SendNotification(context.Background(), protocol.NotificationTasksStatus, params)
+			cc.CacheScope = s.opts.ListCache.CacheScope
 		}
 	}
+	if mc, ok := res.(protocol.MetaCarrier); ok && !s.opts.OmitServerInfo {
+		m := mc.ResultMetaRef()
+		if m.ServerInfo == nil {
+			impl := s.opts.Impl
+			m.ServerInfo = &impl
+		}
+	}
+	return nil
+}
+
+func methodSupportsMRTR(method string) bool {
+	switch method {
+	case protocol.MethodToolsCall, protocol.MethodPromptsGet, protocol.MethodResourcesRead:
+		return true
+	}
+	return false
+}
+
+// checkInputCapabilities enforces the MRTR rule that a server must not send
+// input requests the client has not declared support for on this request.
+func (s *Server) checkInputCapabilities(req *Request, ir *protocol.InputRequired) *protocol.Error {
+	form, url := req.SupportsElicitation()
+	for key, in := range ir.Requests {
+		switch in.Method {
+		case protocol.MethodElicitationCreate:
+		case "sampling/createMessage", "roots/list":
+			// Legal MRTR payloads, deprecated by SEP-2577. This SDK does not
+			// model their client capabilities, so the handler owns that
+			// contract; the payload passes through untouched.
+			continue
+		default:
+			// The spec's whitelist is a MUST: inputRequests values must be
+			// one of ElicitRequest, CreateMessageRequest or ListRootsRequest.
+			return protocol.Errorf(protocol.CodeInternal,
+				"server bug: input request %q uses method %q, which is not a valid inputRequests method", key, in.Method)
+		}
+		p, err := in.Elicit()
+		if err != nil {
+			return protocol.Errorf(protocol.CodeInternal, "server bug: invalid input request %q: %v", key, err)
+		}
+		mode := p.EffectiveMode()
+		if (mode == protocol.ElicitModeForm && !form) || (mode == protocol.ElicitModeURL && !url) {
+			required := protocol.ClientCapabilities{Elicitation: &protocol.ElicitationCapability{}}
+			if mode == protocol.ElicitModeForm {
+				required.Elicitation.Form = &struct{}{}
+			} else {
+				required.Elicitation.URL = &struct{}{}
+			}
+			return protocol.MissingCapabilityError(required)
+		}
+	}
+	return nil
+}
+
+func (s *Server) handleComplete(ctx context.Context, req *Request) (protocol.Result, error) {
+	if s.opts.CompletionHandler == nil {
+		return nil, protocol.MethodNotFoundError(req.method)
+	}
+	var p protocol.CompleteParams
+	if err := unmarshalParams(req.rawParams, &p); err != nil {
+		return nil, err
+	}
+	return s.opts.CompletionHandler(ctx, req, &p)
+}
+
+func toProtocolError(err error) *protocol.Error {
+	var pe *protocol.Error
+	if errors.As(err, &pe) {
+		return pe
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return protocol.Errorf(protocol.CodeInternal, "request cancelled: %v", err)
+	}
+	return protocol.Errorf(protocol.CodeInternal, "%v", err)
 }

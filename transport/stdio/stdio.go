@@ -1,226 +1,191 @@
+// Package stdio implements the MCP stdio transport: newline-delimited JSON,
+// nothing non-MCP on stdout, notifications/cancelled for cancellation, prompt
+// exit on EOF. Serve is the server end; Command is the client end.
 package stdio
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"os"
 	"sync"
-	"sync/atomic"
 
 	"github.com/voocel/mcp-sdk-go/protocol"
-	"github.com/voocel/mcp-sdk-go/transport"
 )
 
-type StdioTransport struct {
-	// MaxMessageBytes limits the maximum size of a single message; 0 means unlimited.
-	MaxMessageBytes int
+// Handler is the structural seam of the server side (satisfied by
+// *server.Server).
+type Handler interface {
+	Handle(ctx context.Context, msg *protocol.Message, emit func(*protocol.Message) error)
 }
 
-func (t *StdioTransport) Connect(ctx context.Context) (transport.Connection, error) {
-	return newStdioConn(t.MaxMessageBytes), nil
+const (
+	defaultMaxMessageBytes = 16 << 20
+	defaultMaxConcurrency  = 64
+)
+
+type Options struct {
+	// Reader and Writer default to os.Stdin and os.Stdout. Injecting them
+	// makes the transport testable and reusable over sockets/pipes.
+	Reader io.Reader
+	Writer io.Writer
+	// MaxMessageBytes caps one line (default 16 MiB).
+	MaxMessageBytes int64
+	// MaxConcurrency caps concurrently dispatched requests (default 64).
+	MaxConcurrency int
 }
 
-type stdioConn struct {
-	maxMessageBytes int
-	mu              sync.Mutex
-	closed          atomic.Bool
-
-	done     chan struct{}
-	incoming chan *protocol.JSONRPCMessage
-	errs     chan error
-}
-
-func newStdioConn(maxMessageBytes int) *stdioConn {
-	c := &stdioConn{
-		maxMessageBytes: maxMessageBytes,
-		done:            make(chan struct{}),
-		incoming:        make(chan *protocol.JSONRPCMessage, 16),
-		errs:            make(chan error, 1),
+// Serve reads messages until EOF or ctx cancellation, dispatching each
+// request in its own goroutine so a slow tool never blocks cancellation or
+// other requests. It returns nil on clean EOF.
+func Serve(ctx context.Context, h Handler, opts *Options) error {
+	var o Options
+	if opts != nil {
+		o = *opts
+	}
+	if o.Reader == nil {
+		o.Reader = os.Stdin
+	}
+	if o.Writer == nil {
+		o.Writer = os.Stdout
+	}
+	if o.MaxMessageBytes <= 0 {
+		o.MaxMessageBytes = defaultMaxMessageBytes
+	}
+	if o.MaxConcurrency <= 0 {
+		o.MaxConcurrency = defaultMaxConcurrency
 	}
 
-	go c.readLoop()
-	return c
-}
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 
-func (c *stdioConn) Read(ctx context.Context) (*protocol.JSONRPCMessage, error) {
-	if c.closed.Load() {
-		return nil, transport.ErrConnectionClosed
-	}
-
-	select {
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	case <-c.done:
-		return nil, transport.ErrConnectionClosed
-	case err := <-c.errs:
-		return nil, err
-	case msg, ok := <-c.incoming:
-		if !ok {
-			return nil, transport.ErrConnectionClosed
+	var writeMu sync.Mutex
+	write := func(m *protocol.Message) error {
+		raw, err := json.Marshal(m)
+		if err != nil {
+			return err
 		}
-		return msg, nil
+		writeMu.Lock()
+		defer writeMu.Unlock()
+		_, err = o.Writer.Write(append(raw, '\n'))
+		return err
 	}
-}
 
-func (c *stdioConn) readLoop() {
-	defer func() {
-		close(c.incoming)
+	var (
+		inflightMu sync.Mutex
+		inflight   = make(map[protocol.RequestID]context.CancelFunc)
+	)
+	sem := make(chan struct{}, o.MaxConcurrency)
+	var wg sync.WaitGroup
+
+	lines := make(chan []byte)
+	readErr := make(chan error, 1)
+	go func() {
+		br := bufio.NewReaderSize(o.Reader, 64<<10)
+		for {
+			line, err := readLine(br, o.MaxMessageBytes)
+			if len(line) > 0 {
+				select {
+				case lines <- line:
+				case <-ctx.Done():
+					return
+				}
+			}
+			if err != nil {
+				readErr <- err
+				return
+			}
+		}
 	}()
 
-	if c.maxMessageBytes > 0 {
-		reader := bufio.NewReader(os.Stdin)
-		for {
-			select {
-			case <-c.done:
-				return
-			default:
-			}
-
-			raw, err := readRawMessage(reader, c.maxMessageBytes)
-			if err != nil {
-				select {
-				case c.errs <- err:
-				default:
-				}
-				return
-			}
-			if len(raw) == 0 {
-				select {
-				case c.errs <- fmt.Errorf("empty message"):
-				default:
-				}
-				return
-			}
-
-			var msg protocol.JSONRPCMessage
-			if err := json.Unmarshal(raw, &msg); err != nil {
-				select {
-				case c.errs <- fmt.Errorf("invalid JSON-RPC message: %w", err):
-				default:
-				}
-				return
-			}
-
-			select {
-			case c.incoming <- &msg:
-			case <-c.done:
-				return
-			}
-		}
-	}
-
-	decoder := json.NewDecoder(os.Stdin)
-
 	for {
 		select {
-		case <-c.done:
-			return
-		default:
-		}
-
-		var raw json.RawMessage
-		if err := decoder.Decode(&raw); err != nil {
-			select {
-			case c.errs <- err:
-			default:
+		case <-ctx.Done():
+			wg.Wait()
+			return ctx.Err()
+		case err := <-readErr:
+			cancel() // exit promptly on EOF: abort in-flight work
+			wg.Wait()
+			if err == io.EOF {
+				return nil
 			}
-			return
-		}
-		if len(raw) == 0 {
-			select {
-			case c.errs <- fmt.Errorf("empty message"):
-			default:
+			return err
+		case line := <-lines:
+			var msg protocol.Message
+			if err := json.Unmarshal(line, &msg); err != nil {
+				_ = write(protocol.NewErrorResponse(protocol.RequestID{},
+					protocol.Errorf(protocol.CodeParseError, "parse error: %v", err)))
+				continue
 			}
-			return
-		}
-
-		var msg protocol.JSONRPCMessage
-		if err := json.Unmarshal(raw, &msg); err != nil {
-			select {
-			case c.errs <- fmt.Errorf("invalid JSON-RPC message: %w", err):
+			switch msg.Kind() {
+			case protocol.KindNotification:
+				if msg.Method == protocol.NotificationCancelled {
+					var p protocol.CancelledParams
+					if json.Unmarshal(msg.Params, &p) == nil {
+						inflightMu.Lock()
+						if c := inflight[p.RequestID]; c != nil {
+							c()
+						}
+						inflightMu.Unlock()
+					}
+				}
+			case protocol.KindRequest:
+				rctx, rcancel := context.WithCancel(ctx)
+				inflightMu.Lock()
+				inflight[msg.ID] = rcancel
+				inflightMu.Unlock()
+				wg.Add(1)
+				m := msg
+				go func() {
+					defer wg.Done()
+					defer func() {
+						inflightMu.Lock()
+						delete(inflight, m.ID)
+						inflightMu.Unlock()
+						rcancel()
+					}()
+					// The concurrency slot is acquired here, not in the
+					// dispatch loop: a saturated server must keep reading so
+					// notifications/cancelled can still reach queued and
+					// running requests.
+					select {
+					case sem <- struct{}{}:
+					case <-rctx.Done():
+						return
+					}
+					defer func() { <-sem }()
+					h.Handle(rctx, &m, func(out *protocol.Message) error {
+						// After cancellation the server must not send further
+						// messages for this request.
+						if err := rctx.Err(); err != nil {
+							return err
+						}
+						return write(out)
+					})
+				}()
 			default:
+				// Clients must not send responses; ignore malformed traffic.
 			}
-			return
-		}
-
-		select {
-		case c.incoming <- &msg:
-		case <-c.done:
-			return
 		}
 	}
 }
 
-func (c *stdioConn) Write(ctx context.Context, msg *protocol.JSONRPCMessage) error {
-	if c.closed.Load() {
-		return transport.ErrConnectionClosed
-	}
-
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	data, err := json.Marshal(msg)
-	if err != nil {
-		return fmt.Errorf("failed to marshal message: %w", err)
-	}
-
-	if _, err := os.Stdout.Write(data); err != nil {
-		return fmt.Errorf("failed to write message: %w", err)
-	}
-
-	if _, err := os.Stdout.Write([]byte("\n")); err != nil {
-		return fmt.Errorf("failed to write newline: %w", err)
-	}
-
-	return nil
-}
-
-func readRawMessage(r *bufio.Reader, maxBytes int) (json.RawMessage, error) {
-	if maxBytes <= 0 {
-		return nil, fmt.Errorf("invalid max bytes: %d", maxBytes)
-	}
-
+// readLine reads one newline-delimited message with a size cap, tolerating a
+// trailing \r.
+func readLine(br *bufio.Reader, max int64) ([]byte, error) {
 	var buf []byte
 	for {
-		chunk, err := r.ReadSlice('\n')
-		if len(chunk) > 0 {
-			buf = append(buf, chunk...)
-			if len(buf) > maxBytes {
-				return nil, fmt.Errorf("message too large: limit %d bytes", maxBytes)
-			}
+		chunk, err := br.ReadSlice('\n')
+		buf = append(buf, chunk...)
+		if int64(len(buf)) > max {
+			return nil, fmt.Errorf("stdio: message exceeds %d bytes", max)
 		}
-
-		if err == nil {
-			return json.RawMessage(buf), nil
-		}
-
-		if errors.Is(err, bufio.ErrBufferFull) {
+		if err == bufio.ErrBufferFull {
 			continue
 		}
-
-		if errors.Is(err, io.EOF) {
-			if len(buf) == 0 {
-				return nil, io.EOF
-			}
-			return json.RawMessage(buf), nil
-		}
-
-		return nil, err
+		return bytes.TrimRight(buf, "\r\n"), err
 	}
-}
-
-func (c *stdioConn) Close() error {
-	if !c.closed.CompareAndSwap(false, true) {
-		return nil
-	}
-	close(c.done)
-	return nil
-}
-
-func (c *stdioConn) SessionID() string {
-	return ""
 }

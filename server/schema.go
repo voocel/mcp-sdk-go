@@ -8,128 +8,154 @@ import (
 
 	invopop "github.com/invopop/jsonschema"
 	"github.com/santhosh-tekuri/jsonschema/v6"
-	"github.com/voocel/mcp-sdk-go/utils"
+
+	"github.com/voocel/mcp-sdk-go/protocol"
 )
 
+// invopopSchema aliases the inference schema type used across the package.
+type invopopSchema = invopop.Schema
+
+// compiledSchema aliases the validation schema type used across the package.
+type compiledSchema = jsonschema.Schema
+
+// The single compiled-schema cache. Note that santhosh-tekuri/jsonschema v6
+// has no default URL loader, so network $ref values are never dereferenced —
+// exactly what the spec requires by default.
 var (
 	schemaValidatorCache = make(map[string]*jsonschema.Schema)
-	validatorCacheMutex  sync.RWMutex
+	validatorCacheMu     sync.RWMutex
 )
 
-// inferSchema Inferring JSON Schema from Type T
-func inferSchema[T any](customTypes ...map[reflect.Type]*invopop.Schema) (*invopop.Schema, error) {
+// inferSchema generates a JSON Schema for T via reflection. Property
+// descriptions come from `jsonschema` struct tags. As a special case, `any`
+// infers an empty object schema.
+func inferSchema[T any]() (*invopop.Schema, error) {
 	rt := reflect.TypeFor[T]()
-	var custom map[reflect.Type]*invopop.Schema
-	if len(customTypes) > 0 {
-		custom = customTypes[0]
+	if rt == reflect.TypeFor[any]() {
+		return &invopop.Schema{Type: "object"}, nil
 	}
-	return utils.InferSchemaFromType(rt, custom)
+	reflector := &invopop.Reflector{
+		AllowAdditionalProperties: true,
+		DoNotReference:            true,
+	}
+	schema := reflector.ReflectFromType(rt)
+	if schema == nil {
+		return nil, fmt.Errorf("failed to generate schema for type %v", rt)
+	}
+	return schema, nil
 }
 
-// compileSchema compiles JSON Schema and caches the result
+// schemaToMap converts an invopop schema to the wire representation.
+func schemaToMap(schema *invopop.Schema) (protocol.JSONSchema, error) {
+	schemaBytes, err := json.Marshal(schema)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal schema: %w", err)
+	}
+	var schemaMap protocol.JSONSchema
+	if err := json.Unmarshal(schemaBytes, &schemaMap); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal schema: %w", err)
+	}
+	return schemaMap, nil
+}
+
+// compileSchema compiles a JSON Schema for validation and caches the result.
 func compileSchema(schema *invopop.Schema) (*jsonschema.Schema, error) {
 	schemaBytes, err := json.Marshal(schema)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal schema: %w", err)
 	}
-	schemaKey := string(schemaBytes)
-
-	// Check cache
-	validatorCacheMutex.RLock()
-	compiledSchema, exists := schemaValidatorCache[schemaKey]
-	validatorCacheMutex.RUnlock()
-
-	if exists {
-		return compiledSchema, nil
-	}
-
-	// Compile schema
-	compiler := jsonschema.NewCompiler()
-
-	var schemaInterface interface{}
-	if err := json.Unmarshal(schemaBytes, &schemaInterface); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal schema: %w", err)
-	}
-
-	if err := compiler.AddResource("schema.json", schemaInterface); err != nil {
-		return nil, fmt.Errorf("failed to add schema resource: %w", err)
-	}
-
-	compiledSchema, err = compiler.Compile("schema.json")
-	if err != nil {
-		return nil, fmt.Errorf("failed to compile schema: %w", err)
-	}
-
-	// Cache compiled schema
-	validatorCacheMutex.Lock()
-	schemaValidatorCache[schemaKey] = compiledSchema
-	validatorCacheMutex.Unlock()
-
-	return compiledSchema, nil
+	return compileSchemaBytes(schemaBytes)
 }
 
-// applyDefaults applies default values to data
+// compileRawSchema compiles a wire-format schema, sharing the validator cache.
+// Unlike compileSchema it does not round-trip through the inference type, so
+// keywords unknown to it survive.
+func compileRawSchema(m protocol.JSONSchema) (*jsonschema.Schema, error) {
+	schemaBytes, err := json.Marshal(m)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal schema: %w", err)
+	}
+	return compileSchemaBytes(schemaBytes)
+}
+
+func compileSchemaBytes(schemaBytes []byte) (*jsonschema.Schema, error) {
+	schemaKey := string(schemaBytes)
+
+	validatorCacheMu.RLock()
+	compiled, exists := schemaValidatorCache[schemaKey]
+	validatorCacheMu.RUnlock()
+	if exists {
+		return compiled, nil
+	}
+
+	compiler := jsonschema.NewCompiler()
+	var schemaAny any
+	if err := json.Unmarshal(schemaBytes, &schemaAny); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal schema: %w", err)
+	}
+	if err := compiler.AddResource("schema.json", schemaAny); err != nil {
+		return nil, fmt.Errorf("failed to add schema resource: %w", err)
+	}
+	compiled, cerr := compiler.Compile("schema.json")
+	if cerr != nil {
+		return nil, fmt.Errorf("failed to compile schema: %w", cerr)
+	}
+
+	validatorCacheMu.Lock()
+	schemaValidatorCache[schemaKey] = compiled
+	validatorCacheMu.Unlock()
+	return compiled, nil
+}
+
+// applyDefaults fills missing fields that declare a default value.
 func applyDefaults(data map[string]any, schema *invopop.Schema) {
 	if schema.Properties == nil {
 		return
 	}
-
 	for pair := schema.Properties.Oldest(); pair != nil; pair = pair.Next() {
 		key := pair.Key
 		propSchema := pair.Value
-
-		// Apply default value if field doesn't exist and has a default
 		if _, exists := data[key]; !exists && propSchema.Default != nil {
 			data[key] = propSchema.Default
 		}
-
-		// Recursively handle nested objects
 		if val, ok := data[key].(map[string]any); ok && propSchema.Type == "object" {
 			applyDefaults(val, propSchema)
 		}
 	}
 }
 
-// applySchema applies defaults and validates data
+// applySchema applies defaults and validates data.
 func applySchema(data map[string]any, schema *invopop.Schema) error {
-	// Apply defaults
 	applyDefaults(data, schema)
-
-	// Compile and cache schema
-	compiledSchema, err := compileSchema(schema)
+	compiled, err := compileSchema(schema)
 	if err != nil {
 		return fmt.Errorf("failed to compile schema: %w", err)
 	}
-
-	// Perform full JSON Schema validation
-	if err := compiledSchema.Validate(data); err != nil {
+	if err := compiled.Validate(data); err != nil {
 		return fmt.Errorf("validation failed: %w", err)
 	}
-
 	return nil
 }
 
-// unmarshalAndValidate unmarshals map data and validates it as type T
+// unmarshalAndValidate validates map data against schema and unmarshals it
+// into T.
 func unmarshalAndValidate[T any](data map[string]any, schema *invopop.Schema) (T, error) {
 	var zero T
 	if err := applySchema(data, schema); err != nil {
 		return zero, err
 	}
-
 	dataBytes, err := json.Marshal(data)
 	if err != nil {
 		return zero, fmt.Errorf("failed to marshal data: %w", err)
 	}
-
 	var result T
 	if err := json.Unmarshal(dataBytes, &result); err != nil {
 		return zero, fmt.Errorf("failed to unmarshal to target type: %w", err)
 	}
-
 	return result, nil
 }
 
-func getZeroValue[T any]() interface{} {
+func getZeroValue[T any]() any {
 	var zero T
 	return zero
 }

@@ -1,58 +1,49 @@
 package protocol
 
+// The complete 2026-07-28 method set. sampling/createMessage and roots/list
+// exist on the wire only as MRTR InputRequest payload shapes and are not
+// modeled by this SDK (both features are deprecated).
 const (
-	MethodInitialize = "initialize"
-	MethodPing       = "ping"
-
-	MethodToolsList = "tools/list"
-	MethodToolsCall = "tools/call"
-
+	MethodDiscover               = "server/discover"
+	MethodToolsList              = "tools/list"
+	MethodToolsCall              = "tools/call"
+	MethodPromptsList            = "prompts/list"
+	MethodPromptsGet             = "prompts/get"
 	MethodResourcesList          = "resources/list"
-	MethodResourcesRead          = "resources/read"
 	MethodResourcesTemplatesList = "resources/templates/list"
-	MethodResourcesSubscribe     = "resources/subscribe"
-	MethodResourcesUnsubscribe   = "resources/unsubscribe"
+	MethodResourcesRead          = "resources/read"
+	MethodCompletionComplete     = "completion/complete"
+	MethodSubscriptionsListen    = "subscriptions/listen"
 
-	MethodPromptsList = "prompts/list"
-	MethodPromptsGet  = "prompts/get"
-
-	MethodCompletionComplete = "completion/complete"
-
-	MethodRootsList = "roots/list"
-
-	MethodSamplingCreateMessage = "sampling/createMessage"
-
+	// MethodElicitationCreate appears only inside MRTR inputRequests, never
+	// as a dispatched RPC.
 	MethodElicitationCreate = "elicitation/create"
 
-	MethodLoggingSetLevel = "logging/setLevel"
-
-	// Tasks methods (MCP 2025-11-25)
-	MethodTasksGet    = "tasks/get"
-	MethodTasksList   = "tasks/list"
-	MethodTasksCancel = "tasks/cancel"
-	MethodTasksResult = "tasks/result"
+	NotificationProgress                  = "notifications/progress"
+	NotificationCancelled                 = "notifications/cancelled"
+	NotificationSubscriptionsAcknowledged = "notifications/subscriptions/acknowledged"
+	NotificationToolsListChanged          = "notifications/tools/list_changed"
+	NotificationPromptsListChanged        = "notifications/prompts/list_changed"
+	NotificationResourcesListChanged      = "notifications/resources/list_changed"
+	NotificationResourcesUpdated          = "notifications/resources/updated"
 )
 
-const (
-	NotificationInitialized = "notifications/initialized"
+// ProgressParams is the payload of notifications/progress. Progress
+// notifications flow only on the response stream of the request that supplied
+// the progressToken, never on a subscriptions/listen stream.
+type ProgressParams struct {
+	Meta          NotificationMeta `json:"_meta,omitzero"`
+	ProgressToken ProgressToken    `json:"progressToken"`
+	Progress      float64          `json:"progress"`
+	Total         float64          `json:"total,omitempty"`
+	Message       string           `json:"message,omitempty"`
+}
 
-	NotificationToolsListChanged = "notifications/tools/list_changed"
-
-	NotificationResourcesListChanged = "notifications/resources/list_changed"
-	NotificationResourcesUpdated     = "notifications/resources/updated"
-
-	NotificationPromptsListChanged = "notifications/prompts/list_changed"
-
-	NotificationRootsListChanged = "notifications/roots/list_changed"
-
-	NotificationProgress  = "notifications/progress"
-	NotificationCancelled = "notifications/cancelled"
-
-	NotificationLoggingMessage = "notifications/message"
-
-	// Elicitation notifications (MCP 2025-11-25)
-	NotificationElicitationComplete = "notifications/elicitation/complete"
-
-	// Tasks notifications (MCP 2025-11-25)
-	NotificationTasksStatus = "notifications/tasks/status"
-)
+// CancelledParams is the payload of notifications/cancelled. On stdio the
+// client sends it to cancel an in-flight request; servers send it only to tear
+// down a subscriptions/listen stream.
+type CancelledParams struct {
+	Meta      NotificationMeta `json:"_meta,omitzero"`
+	RequestID RequestID        `json:"requestId"`
+	Reason    string           `json:"reason,omitempty"`
+}

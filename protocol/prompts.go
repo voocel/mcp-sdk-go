@@ -2,19 +2,20 @@ package protocol
 
 import "encoding/json"
 
-type PromptArgument struct {
-	Name        string `json:"name"`
-	Description string `json:"description,omitempty"`
-	Required    bool   `json:"required,omitempty"`
+type Prompt struct {
+	Name        string                     `json:"name"`
+	Title       string                     `json:"title,omitempty"`
+	Description string                     `json:"description,omitempty"`
+	Arguments   []PromptArgument           `json:"arguments,omitempty"`
+	Icons       []Icon                     `json:"icons,omitempty"`
+	Meta        map[string]json.RawMessage `json:"_meta,omitempty"`
 }
 
-type Prompt struct {
-	Name        string           `json:"name"`
-	Title       string           `json:"title,omitempty"`       // MCP 2025-06-18: Human-friendly title
-	Description string           `json:"description,omitempty"`
-	Arguments   []PromptArgument `json:"arguments,omitempty"`
-	Icons       []Icon           `json:"icons,omitempty"`       // MCP 2025-11-25: Icons for UI display
-	Meta        map[string]any   `json:"_meta,omitempty"`       // MCP 2025-06-18: Extended metadata
+type PromptArgument struct {
+	Name        string `json:"name"`
+	Title       string `json:"title,omitempty"`
+	Description string `json:"description,omitempty"`
+	Required    bool   `json:"required,omitempty"`
 }
 
 type PromptMessage struct {
@@ -22,89 +23,59 @@ type PromptMessage struct {
 	Content Content `json:"content"`
 }
 
-func (pm *PromptMessage) UnmarshalJSON(data []byte) error {
-	var temp struct {
+func NewPromptMessage(role Role, content Content) PromptMessage {
+	return PromptMessage{Role: role, Content: content}
+}
+
+func (m *PromptMessage) UnmarshalJSON(b []byte) error {
+	var raw struct {
 		Role    Role            `json:"role"`
 		Content json.RawMessage `json:"content"`
 	}
-
-	if err := json.Unmarshal(data, &temp); err != nil {
+	if err := json.Unmarshal(b, &raw); err != nil {
 		return err
 	}
-
-	pm.Role = temp.Role
-
-	content, err := UnmarshalContent(temp.Content)
+	content, err := UnmarshalContent(raw.Content)
 	if err != nil {
 		return err
 	}
-	pm.Content = content
-
+	m.Role = raw.Role
+	m.Content = content
 	return nil
 }
 
-// ListPromptsRequest prompts/list request and response
-type ListPromptsRequest struct {
-	Cursor string `json:"cursor,omitempty"`
-}
-
-// ListPromptsParams parameter type for listing prompt templates
 type ListPromptsParams struct {
-	Cursor string `json:"cursor,omitempty"`
+	Meta   RequestMeta `json:"_meta"`
+	Cursor string      `json:"cursor,omitempty"`
 }
 
 type ListPromptsResult struct {
-	Prompts []Prompt `json:"prompts"`
-	PaginatedResult
+	WithMeta
+	CacheControl
+	Prompts    []*Prompt `json:"prompts"`
+	NextCursor string    `json:"nextCursor,omitempty"`
 }
 
-// GetPromptRequest prompts/get request and response
-type GetPromptRequest struct {
-	Name      string            `json:"name"`
-	Arguments map[string]string `json:"arguments,omitempty"`
-}
+func (*ListPromptsResult) ResultType() string { return ResultTypeComplete }
 
-// GetPromptParams parameter type for getting prompt templates
 type GetPromptParams struct {
+	Meta      RequestMeta       `json:"_meta"`
 	Name      string            `json:"name"`
 	Arguments map[string]string `json:"arguments,omitempty"`
+	// InputResponses and RequestState are set only on an MRTR retry.
+	InputResponses InputResponses `json:"inputResponses,omitempty"`
+	RequestState   string         `json:"requestState,omitempty"`
 }
 
 type GetPromptResult struct {
+	WithMeta
 	Description string          `json:"description,omitempty"`
 	Messages    []PromptMessage `json:"messages"`
-	Meta        map[string]any  `json:"_meta,omitempty"`
 }
 
-// PromptsListChangedNotification prompt template change notification
-type PromptsListChangedNotification struct{}
-
-func NewPrompt(name, description string, arguments ...PromptArgument) Prompt {
-	return Prompt{
-		Name:        name,
-		Description: description,
-		Arguments:   arguments,
-	}
-}
-
-func NewPromptArgument(name, description string, required bool) PromptArgument {
-	return PromptArgument{
-		Name:        name,
-		Description: description,
-		Required:    required,
-	}
-}
-
-func NewPromptMessage(role Role, content Content) PromptMessage {
-	return PromptMessage{
-		Role:    role,
-		Content: content,
-	}
-}
+func (*GetPromptResult) ResultType() string { return ResultTypeComplete }
+func (*GetPromptResult) promptResponse()    {}
 
 func NewGetPromptResult(description string, messages ...PromptMessage) *GetPromptResult {
-	return &GetPromptResult{
-		Description: description,
-		Messages:    messages,
-	}
+	return &GetPromptResult{Description: description, Messages: messages}
 }
