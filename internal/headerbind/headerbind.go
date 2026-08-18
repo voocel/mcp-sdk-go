@@ -60,6 +60,17 @@ func Extract(schema map[string]any) ([]Binding, error) {
 	return out, nil
 }
 
+// nameKeyedKeywords are the schema keywords whose children are keyed by
+// author-chosen names: under them, "x-mcp-header" is a property name rather
+// than an annotation.
+var nameKeyedKeywords = map[string]bool{
+	"properties":        true,
+	"patternProperties": true,
+	"dependentSchemas":  true,
+	"$defs":             true,
+	"definitions":       true,
+}
+
 // countAnnotations counts AnnotationKey occurrences anywhere in the schema
 // tree, so Extract can detect annotations its properties-only walk missed.
 func countAnnotations(v any) int {
@@ -68,7 +79,17 @@ func countAnnotations(v any) int {
 	case map[string]any:
 		for k, sub := range t {
 			if k == AnnotationKey {
+				// The value is a header name, not a subschema.
 				n++
+				continue
+			}
+			if nameKeyedKeywords[k] {
+				if named, ok := sub.(map[string]any); ok {
+					for _, child := range named {
+						n += countAnnotations(child)
+					}
+					continue
+				}
 			}
 			n += countAnnotations(sub)
 		}

@@ -134,6 +134,64 @@ func TestFormat(t *testing.T) {
 	}
 }
 
+// A parameter whose *name* is "x-mcp-header" carries no annotation.
+func TestPropertyNamedLikeTheAnnotation(t *testing.T) {
+	for _, schema := range []map[string]any{
+		objSchema(map[string]any{
+			"x-mcp-header": map[string]any{"type": "string"},
+		}),
+		objSchema(map[string]any{
+			"outer": objSchema(map[string]any{
+				"x-mcp-header": map[string]any{"type": "string"},
+			}),
+		}),
+	} {
+		bindings, err := Extract(schema)
+		if err != nil {
+			t.Fatalf("Extract = %v, want nil (no annotation present)", err)
+		}
+		if len(bindings) != 0 {
+			t.Fatalf("bindings = %+v, want none", bindings)
+		}
+	}
+}
+
+// The unreachable-annotation check must still fire for annotations the
+// properties walk genuinely cannot reach.
+func TestUnreachableAnnotationsStillRejected(t *testing.T) {
+	for name, schema := range map[string]map[string]any{
+		"under items": objSchema(map[string]any{
+			"arr": map[string]any{
+				"type": "array",
+				"items": objSchema(map[string]any{
+					"deep": map[string]any{"type": "string", "x-mcp-header": "Deep"},
+				}),
+			},
+		}),
+		"under anyOf": objSchema(map[string]any{
+			"choice": map[string]any{
+				"anyOf": []any{
+					objSchema(map[string]any{
+						"deep": map[string]any{"type": "string", "x-mcp-header": "Deep"},
+					}),
+				},
+			},
+		}),
+		"under $defs": {
+			"type": "object",
+			"$defs": map[string]any{
+				"shared": objSchema(map[string]any{
+					"deep": map[string]any{"type": "string", "x-mcp-header": "Deep"},
+				}),
+			},
+		},
+	} {
+		if _, err := Extract(schema); err == nil {
+			t.Errorf("%s: Extract = nil, want an unreachable-annotation error", name)
+		}
+	}
+}
+
 func TestLookup(t *testing.T) {
 	args := map[string]any{
 		"region": "us",

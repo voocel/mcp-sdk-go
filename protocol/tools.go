@@ -43,8 +43,10 @@ type ListToolsParams struct {
 type ListToolsResult struct {
 	WithMeta
 	CacheControl
-	Tools      []*Tool `json:"tools"`
-	NextCursor string  `json:"nextCursor,omitempty"`
+	Tools []*Tool `json:"tools"`
+	// NextCursor is a pointer because a cursor is opaque: an empty string is a
+	// valid cursor, so only its absence ends pagination.
+	NextCursor *string `json:"nextCursor,omitempty"`
 }
 
 func (*ListToolsResult) ResultType() string { return ResultTypeComplete }

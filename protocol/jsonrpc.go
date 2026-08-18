@@ -175,10 +175,9 @@ func MarshalResult(r Result) ([]byte, error) {
 }
 
 // PeekResultType reads the resultType discriminator from a raw result body.
-// An absent resultType maps to "complete" — the spec's backward-compat rule
-// for results from servers on earlier protocol revisions. Servers
-// implementing 2026-07-28 MUST include the field, and the client rejects
-// responses without it; this helper stays lenient for raw consumers.
+// An absent resultType maps to "complete": servers implementing 2026-07-28
+// MUST include the field, but the spec makes treating its absence as
+// "complete" a client MUST, for results from earlier protocol revisions.
 func PeekResultType(raw json.RawMessage) (string, error) {
 	var probe struct {
 		ResultType *string `json:"resultType"`

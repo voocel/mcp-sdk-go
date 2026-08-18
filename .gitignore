@@ -27,4 +27,7 @@ go.work.sum
 .idea
 .vscode
 
+# Working notes, not the ext/tasks package
+/tasks/
+
 .gomodcache

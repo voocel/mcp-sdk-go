@@ -13,8 +13,7 @@ import (
 // resourceTemplates. Iteration order is sorted by uid, which also satisfies
 // the spec's deterministic-ordering recommendation for list results.
 // sortedKeys is maintained incrementally by add/remove so that reads are pure:
-// the list handlers iterate under the server's read lock, and a lazily-sorted
-// key slice would let two concurrent lists race writing it.
+// the list handlers iterate under the server's read lock only.
 type featureSet[T any] struct {
 	uniqueID   func(T) string
 	features   map[string]T
@@ -120,14 +119,15 @@ func decodeCursor(cursor string) (*pageToken, error) {
 
 // paginateList performs cursor-based pagination on a featureSet.
 // Empty cursor starts from the beginning. pageSize <= 0 returns all items.
-func paginateList[T any](fs *featureSet[T], pageSize int, cursor string) (items []T, nextCursor string, err error) {
+// A nil nextCursor means the result set is exhausted.
+func paginateList[T any](fs *featureSet[T], pageSize int, cursor string) (items []T, nextCursor *string, err error) {
 	var seq iter.Seq[T]
 	if cursor == "" {
 		seq = fs.all()
 	} else {
 		pt, err := decodeCursor(cursor)
 		if err != nil {
-			return nil, "", err
+			return nil, nil, err
 		}
 		seq = fs.above(pt.LastUID)
 	}
@@ -136,7 +136,7 @@ func paginateList[T any](fs *featureSet[T], pageSize int, cursor string) (items 
 		for f := range seq {
 			items = append(items, f)
 		}
-		return items, "", nil
+		return items, nil, nil
 	}
 
 	var count int
@@ -149,9 +149,12 @@ func paginateList[T any](fs *featureSet[T], pageSize int, cursor string) (items 
 	}
 
 	if count <= pageSize {
-		return items, "", nil
+		return items, nil, nil
 	}
 
-	nextCursor, err = encodeCursor(fs.uniqueID(items[len(items)-1]))
-	return items, nextCursor, err
+	next, err := encodeCursor(fs.uniqueID(items[len(items)-1]))
+	if err != nil {
+		return items, nil, err
+	}
+	return items, &next, nil
 }

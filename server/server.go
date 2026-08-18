@@ -259,9 +259,8 @@ func (s *Server) dispatch(ctx context.Context, req *Request) (protocol.Result, e
 		return nil, err
 	}
 	// server/discover is exempt from the version match: the spec defines it as
-	// the up-front version selection and backward-compatibility probe, so a
-	// caller on another revision must get SupportedVersions back rather than
-	// the error that would tell it nothing about what this server speaks.
+	// the version-selection and backward-compatibility probe, so a caller on
+	// another revision must still learn what this server speaks.
 	if meta.ProtocolVersion != protocol.Version && req.method != protocol.MethodDiscover {
 		return nil, protocol.UnsupportedVersionError(meta.ProtocolVersion, []string{protocol.Version})
 	}
@@ -271,7 +270,9 @@ func (s *Server) dispatch(ctx context.Context, req *Request) (protocol.Result, e
 		return nil, protocol.MethodNotFoundError(req.method)
 	}
 
-	if s.sem != nil {
+	// subscriptions/listen holds its slot for the lifetime of the stream, so
+	// counting it would let idle subscribers starve every other request.
+	if s.sem != nil && req.method != protocol.MethodSubscriptionsListen {
 		select {
 		case s.sem <- struct{}{}:
 			defer func() { <-s.sem }()

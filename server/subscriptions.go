@@ -126,13 +126,15 @@ func (s *Server) handleListen(ctx context.Context, req *Request) (protocol.Resul
 	for {
 		select {
 		case <-ctx.Done():
-			// Graceful teardown: the empty complete result closes the stream.
+			// Torn down from the outside, so no cancelled notification (see
+			// emitCancelled); the empty result closes the stream.
 			res := &protocol.ListenResult{}
 			res.Meta.SubscriptionID = req.id
 			return res, nil
 		case <-sub.over:
 			// A notification was lost; ending the stream with an error is the
 			// only honest outcome — the client re-listens and re-syncs.
+			emitCancelled(req, "subscription overflowed")
 			return nil, protocol.Errorf(protocol.CodeInternal,
 				"subscription overflowed: notifications were dropped; re-listen and re-sync")
 		case ev := <-sub.ch:
@@ -140,6 +142,7 @@ func (s *Server) handleListen(ctx context.Context, req *Request) (protocol.Resul
 			if err != nil {
 				// An event we cannot encode is a dropped notification; like
 				// overflow, it must end the stream visibly, not vanish.
+				emitCancelled(req, "notification could not be encoded")
 				return nil, protocol.Errorf(protocol.CodeInternal,
 					"failed to encode subscription notification %s: %v", ev.method, err)
 			}
@@ -149,6 +152,20 @@ func (s *Server) handleListen(ctx context.Context, req *Request) (protocol.Resul
 				return res, nil
 			}
 		}
+	}
+}
+
+// emitCancelled announces server-initiated teardown. The spec requires this
+// notification when the server ends a subscription and forbids it otherwise,
+// so it never fires when the client or transport closed the stream instead.
+func emitCancelled(req *Request, reason string) {
+	msg, err := protocol.NewNotification(protocol.NotificationCancelled, protocol.CancelledParams{
+		Meta:      protocol.NotificationMeta{SubscriptionID: req.id},
+		RequestID: req.id,
+		Reason:    reason,
+	})
+	if err == nil {
+		_ = req.emit(msg)
 	}
 }
 

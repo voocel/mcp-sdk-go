@@ -157,9 +157,8 @@ func (c *Client) do(ctx context.Context, method string, params any) (json.RawMes
 			c.dispatchNotification(m)
 		case protocol.KindResponse:
 			if m.ID == id {
-				// An absent resultType is not rejected here: the spec makes
-				// treating it as "complete" a client MUST, and
-				// protocol.PeekResultType applies that rule for every caller.
+				// An absent resultType is not rejected: PeekResultType maps
+				// it to "complete", as the spec requires.
 				return m.Result, nil
 			}
 		case protocol.KindError:

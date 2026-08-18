@@ -52,7 +52,7 @@ type ListResourcesResult struct {
 	WithMeta
 	CacheControl
 	Resources  []*Resource `json:"resources"`
-	NextCursor string      `json:"nextCursor,omitempty"`
+	NextCursor *string     `json:"nextCursor,omitempty"`
 }
 
 func (*ListResourcesResult) ResultType() string { return ResultTypeComplete }
@@ -66,7 +66,7 @@ type ListResourceTemplatesResult struct {
 	WithMeta
 	CacheControl
 	ResourceTemplates []*ResourceTemplate `json:"resourceTemplates"`
-	NextCursor        string              `json:"nextCursor,omitempty"`
+	NextCursor        *string             `json:"nextCursor,omitempty"`
 }
 
 func (*ListResourceTemplatesResult) ResultType() string { return ResultTypeComplete }

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -293,6 +294,37 @@ func TestClientExcludesInvalidTools(t *testing.T) {
 	}
 	if len(list.Tools) != 1 || list.Tools[0].Name != "good" {
 		t.Fatalf("tools: %+v", list.Tools)
+	}
+}
+
+// emptyCursorHandler serves two pages, the second reachable only through an
+// empty-string nextCursor — a valid opaque cursor the client must follow.
+type emptyCursorHandler struct{ calls atomic.Int32 }
+
+func (h *emptyCursorHandler) Handle(ctx context.Context, msg *protocol.Message, emit func(*protocol.Message) error) {
+	res := &protocol.ListToolsResult{}
+	if h.calls.Add(1) == 1 {
+		empty := ""
+		res.Tools = []*protocol.Tool{{Name: "first", InputSchema: protocol.JSONSchema{"type": "object"}}}
+		res.NextCursor = &empty
+	} else {
+		res.Tools = []*protocol.Tool{{Name: "second", InputSchema: protocol.JSONSchema{"type": "object"}}}
+	}
+	out, _ := protocol.NewResponse(msg.ID, res)
+	_ = emit(out)
+}
+
+func TestPaginationFollowsEmptyCursor(t *testing.T) {
+	c := client.New(mem.New(&emptyCursorHandler{}), nil)
+	var names []string
+	for tool, err := range c.Tools(context.Background()) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		names = append(names, tool.Name)
+	}
+	if strings.Join(names, ",") != "first,second" {
+		t.Fatalf("tools = %v, want both pages", names)
 	}
 }
 

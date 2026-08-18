@@ -53,7 +53,7 @@ type ListPromptsResult struct {
 	WithMeta
 	CacheControl
 	Prompts    []*Prompt `json:"prompts"`
-	NextCursor string    `json:"nextCursor,omitempty"`
+	NextCursor *string   `json:"nextCursor,omitempty"`
 }
 
 func (*ListPromptsResult) ResultType() string { return ResultTypeComplete }

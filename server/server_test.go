@@ -125,9 +125,7 @@ func TestMetaValidation(t *testing.T) {
 }
 
 func TestDiscoverAnswersAcrossVersions(t *testing.T) {
-	// server/discover is the spec's up-front version selection and
-	// backward-compatibility probe: a caller on another revision must still
-	// learn which versions this server speaks.
+	// A caller on another revision must still learn what this server speaks.
 	s := newTestServer(t)
 	final, _ := do(t, s, protocol.MethodDiscover, map[string]any{
 		"_meta": map[string]any{
@@ -142,8 +140,7 @@ func TestDiscoverAnswersAcrossVersions(t *testing.T) {
 }
 
 // TestConcurrentLists guards the featureSet invariant that reads are pure:
-// list handlers iterate under a read lock, so a lazily-built sort order would
-// let two concurrent lists race writing it. Most valuable under -race.
+// list handlers iterate under a read lock only. Most valuable under -race.
 func TestConcurrentLists(t *testing.T) {
 	s := newTestServer(t)
 	for _, name := range []string{"alpha", "beta", "gamma", "delta"} {
@@ -420,10 +417,10 @@ func TestPagination(t *testing.T) {
 		for _, tool := range res.Tools {
 			names = append(names, tool.Name)
 		}
-		if res.NextCursor == "" {
+		if res.NextCursor == nil {
 			break
 		}
-		cursor = res.NextCursor
+		cursor = *res.NextCursor
 	}
 	if strings.Join(names, "") != "abcde" {
 		t.Fatalf("paged names = %v", names)
@@ -637,11 +634,28 @@ func TestListenOverflowTerminates(t *testing.T) {
 	close(release)
 
 	deadline := time.After(5 * time.Second)
+	var sawCancelled bool
 	for {
 		select {
 		case m := <-msgs:
 			switch m.Kind() {
+			case protocol.KindNotification:
+				if m.Method != protocol.NotificationCancelled {
+					continue
+				}
+				sawCancelled = true
+				var p protocol.CancelledParams
+				if err := json.Unmarshal(m.Params, &p); err != nil {
+					t.Fatal(err)
+				}
+				if p.RequestID != protocol.IntID(9) {
+					t.Fatalf("cancelled requestId = %v, want the listen request id", p.RequestID)
+				}
 			case protocol.KindError:
+				// Server-initiated teardown must announce itself first.
+				if !sawCancelled {
+					t.Fatal("subscription torn down without notifications/cancelled")
+				}
 				if m.Error.Code != protocol.CodeInternal || !strings.Contains(m.Error.Message, "overflow") {
 					t.Fatalf("error = %+v", m.Error)
 				}

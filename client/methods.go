@@ -32,7 +32,7 @@ func (c *Client) ListTools(ctx context.Context, cursor string) (*protocol.ListTo
 // Tools iterates all tools across pages.
 func (c *Client) Tools(ctx context.Context) iter.Seq2[*protocol.Tool, error] {
 	return paged(ctx, c.ListTools,
-		func(r *protocol.ListToolsResult) ([]*protocol.Tool, string) { return r.Tools, r.NextCursor })
+		func(r *protocol.ListToolsResult) ([]*protocol.Tool, *string) { return r.Tools, r.NextCursor })
 }
 
 func (c *Client) ListPrompts(ctx context.Context, cursor string) (*protocol.ListPromptsResult, error) {
@@ -46,7 +46,7 @@ func (c *Client) ListPrompts(ctx context.Context, cursor string) (*protocol.List
 // Prompts iterates all prompts across pages.
 func (c *Client) Prompts(ctx context.Context) iter.Seq2[*protocol.Prompt, error] {
 	return paged(ctx, c.ListPrompts,
-		func(r *protocol.ListPromptsResult) ([]*protocol.Prompt, string) { return r.Prompts, r.NextCursor })
+		func(r *protocol.ListPromptsResult) ([]*protocol.Prompt, *string) { return r.Prompts, r.NextCursor })
 }
 
 func (c *Client) ListResources(ctx context.Context, cursor string) (*protocol.ListResourcesResult, error) {
@@ -60,7 +60,9 @@ func (c *Client) ListResources(ctx context.Context, cursor string) (*protocol.Li
 // Resources iterates all resources across pages.
 func (c *Client) Resources(ctx context.Context) iter.Seq2[*protocol.Resource, error] {
 	return paged(ctx, c.ListResources,
-		func(r *protocol.ListResourcesResult) ([]*protocol.Resource, string) { return r.Resources, r.NextCursor })
+		func(r *protocol.ListResourcesResult) ([]*protocol.Resource, *string) {
+			return r.Resources, r.NextCursor
+		})
 }
 
 func (c *Client) ListResourceTemplates(ctx context.Context, cursor string) (*protocol.ListResourceTemplatesResult, error) {
@@ -113,9 +115,10 @@ func (c *Client) ReadResource(ctx context.Context, p *protocol.ReadResourceParam
 	return &res, nil
 }
 
-// paged adapts a page-fetching method into an iterator.
+// paged adapts a page-fetching method into an iterator. Only an absent cursor
+// ends the walk (see protocol.ListToolsResult.NextCursor).
 func paged[R any, T any](ctx context.Context, fetch func(context.Context, string) (*R, error),
-	split func(*R) ([]T, string)) iter.Seq2[T, error] {
+	split func(*R) ([]T, *string)) iter.Seq2[T, error] {
 	return func(yield func(T, error) bool) {
 		cursor := ""
 		for {
@@ -131,10 +134,10 @@ func paged[R any, T any](ctx context.Context, fetch func(context.Context, string
 					return
 				}
 			}
-			if next == "" {
+			if next == nil {
 				return
 			}
-			cursor = next
+			cursor = *next
 		}
 	}
 }

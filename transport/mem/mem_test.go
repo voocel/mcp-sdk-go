@@ -142,20 +142,18 @@ func TestCloseCancelsHandler(t *testing.T) {
 	}
 }
 
-// TestEmitAfterCancellationFails ensures a handler racing against a closed
-// stream learns about it through emit rather than blocking forever.
+// TestEmitAfterCancellationFails ensures a handler that outlives its stream
+// learns about it through emit rather than blocking forever. The sends must
+// outnumber the channel buffer: until it fills, emit's select can still take
+// the send branch.
 func TestEmitAfterCancellationFails(t *testing.T) {
 	emitErr := make(chan error, 1)
-	release := make(chan struct{})
 	tr := mem.New(handlerFunc(func(_ context.Context, msg *protocol.Message, emit func(*protocol.Message) error) {
-		<-release
 		out, err := protocol.NewResponse(msg.ID, &protocol.EmptyResult{})
 		if err != nil {
 			emitErr <- err
 			return
 		}
-		// The channel buffer absorbs the first sends; keep going until the
-		// cancelled context makes emit fail.
 		for range 64 {
 			if err := emit(out); err != nil {
 				emitErr <- err
@@ -173,7 +171,6 @@ func TestEmitAfterCancellationFails(t *testing.T) {
 	if err := stream.Close(); err != nil {
 		t.Fatal(err)
 	}
-	close(release)
 
 	select {
 	case err := <-emitErr:
