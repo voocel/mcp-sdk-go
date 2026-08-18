@@ -16,7 +16,7 @@
 
 ## Introduction
 
-A clean-slate Go SDK for **MCP 2026-07-28**, the stateless revision of the Model Context Protocol. This SDK targets 2026-07-28 exclusively — no `initialize` handshake, no sessions, no legacy version negotiation — which keeps the API small, explicit and honest about what travels on the wire.
+A clean-slate Go SDK for **MCP 2026-07-28**, the stateless revision of the Model Context Protocol. This SDK targets 2026-07-28 exclusively — no `initialize` handshake, no sessions, no legacy transports — which keeps the API small, explicit and honest about what travels on the wire.
 
 It also ships the first Go implementation of the official **tasks extension** (`io.modelcontextprotocol/tasks`): durable, pollable, cancellable long-running tool calls with an `input_required` rendezvous.
 
@@ -162,13 +162,15 @@ Clients that do not declare the capability get the tool executed synchronously (
 | [basic](./examples/basic) | Tool + resource + prompt over STDIO |
 | [calculator](./examples/calculator) | Typed tools with schema inference and validation |
 | [file-server](./examples/file-server) | File resources with path traversal protection |
-| [streamhttp-demo](./examples/streamhttp-demo) | HTTP server + client: SSE progress, subscriptions |
+| [streamhttp](./examples/streamhttp) | HTTP server + client: SSE progress, subscriptions |
 | [elicitation](./examples/elicitation) | The full MRTR loop in one process |
 | [tasks](./examples/tasks) | Task lifecycle with `input_required` rendezvous |
 
 ## Scope
 
-This SDK implements MCP 2026-07-28 and nothing else. Features the revision removed or deprecated are intentionally absent: `initialize`/sessions, protocol version negotiation, Roots, Sampling, Logging, `resources/subscribe`, ping, SSE resumability (`Last-Event-ID`). Unknown `InputRequest` methods (e.g. deprecated `roots/list` from older servers) round-trip untouched and surface to the caller instead of being silently dropped.
+This SDK implements MCP 2026-07-28 and nothing else. Features the revision removed or deprecated are intentionally absent: `initialize`/sessions, Roots, Sampling, Logging, `resources/subscribe`, ping, SSE resumability (`Last-Event-ID`).
+
+Two concessions to other revisions remain, because the spec makes both mandatory: `server/discover` answers callers on any protocol version so they can read `supportedVersions` from it, and the client treats a result that omits `resultType` as `complete`. Unknown `InputRequest` methods (e.g. deprecated `roots/list` from older servers) round-trip untouched and surface to the caller instead of being silently dropped.
 
 ## License
 

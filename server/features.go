@@ -6,15 +6,15 @@ import (
 	"encoding/gob"
 	"fmt"
 	"iter"
-	"maps"
 	"slices"
 )
 
 // featureSet is a generic collection for managing tools/resources/prompts/
 // resourceTemplates. Iteration order is sorted by uid, which also satisfies
 // the spec's deterministic-ordering recommendation for list results.
-// sortedKeys is lazily computed: set to nil after add/remove, re-sorted on
-// first access.
+// sortedKeys is maintained incrementally by add/remove so that reads are pure:
+// the list handlers iterate under the server's read lock, and a lazily-sorted
+// key slice would let two concurrent lists race writing it.
 type featureSet[T any] struct {
 	uniqueID   func(T) string
 	features   map[string]T
@@ -31,9 +31,13 @@ func newFeatureSet[T any](uniqueIDFunc func(T) string) *featureSet[T] {
 // add adds or replaces features.
 func (s *featureSet[T]) add(fs ...T) {
 	for _, f := range fs {
-		s.features[s.uniqueID(f)] = f
+		uid := s.uniqueID(f)
+		if _, replaced := s.features[uid]; !replaced {
+			i, _ := slices.BinarySearch(s.sortedKeys, uid)
+			s.sortedKeys = slices.Insert(s.sortedKeys, i, uid)
+		}
+		s.features[uid] = f
 	}
-	s.sortedKeys = nil
 }
 
 // remove removes features by uid, returns true if any were removed.
@@ -43,10 +47,10 @@ func (s *featureSet[T]) remove(uids ...string) bool {
 		if _, ok := s.features[uid]; ok {
 			changed = true
 			delete(s.features, uid)
+			if i, found := slices.BinarySearch(s.sortedKeys, uid); found {
+				s.sortedKeys = slices.Delete(s.sortedKeys, i, i+1)
+			}
 		}
-	}
-	if changed {
-		s.sortedKeys = nil
 	}
 	return changed
 }
@@ -59,7 +63,6 @@ func (s *featureSet[T]) get(uid string) (T, bool) {
 
 // all returns an iterator over all features sorted by uid.
 func (s *featureSet[T]) all() iter.Seq[T] {
-	s.sortKeys()
 	return func(yield func(T) bool) {
 		s.yieldFrom(0, yield)
 	}
@@ -68,7 +71,6 @@ func (s *featureSet[T]) all() iter.Seq[T] {
 // above returns an iterator over features with uid greater than the given
 // value (for cursor pagination).
 func (s *featureSet[T]) above(uid string) iter.Seq[T] {
-	s.sortKeys()
 	index, found := slices.BinarySearch(s.sortedKeys, uid)
 	if found {
 		index++
@@ -76,13 +78,6 @@ func (s *featureSet[T]) above(uid string) iter.Seq[T] {
 	return func(yield func(T) bool) {
 		s.yieldFrom(index, yield)
 	}
-}
-
-func (s *featureSet[T]) sortKeys() {
-	if s.sortedKeys != nil {
-		return
-	}
-	s.sortedKeys = slices.Sorted(maps.Keys(s.features))
 }
 
 func (s *featureSet[T]) yieldFrom(index int, yield func(T) bool) {

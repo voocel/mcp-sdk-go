@@ -258,7 +258,11 @@ func (s *Server) dispatch(ctx context.Context, req *Request) (protocol.Result, e
 	if err := meta.Validate(); err != nil {
 		return nil, err
 	}
-	if meta.ProtocolVersion != protocol.Version {
+	// server/discover is exempt from the version match: the spec defines it as
+	// the up-front version selection and backward-compatibility probe, so a
+	// caller on another revision must get SupportedVersions back rather than
+	// the error that would tell it nothing about what this server speaks.
+	if meta.ProtocolVersion != protocol.Version && req.method != protocol.MethodDiscover {
 		return nil, protocol.UnsupportedVersionError(meta.ProtocolVersion, []string{protocol.Version})
 	}
 

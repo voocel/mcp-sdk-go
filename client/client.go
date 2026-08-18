@@ -157,12 +157,9 @@ func (c *Client) do(ctx context.Context, method string, params any) (json.RawMes
 			c.dispatchNotification(m)
 		case protocol.KindResponse:
 			if m.ID == id {
-				// Servers implementing 2026-07-28 MUST include resultType; the
-				// absent-means-complete leniency exists only for servers on
-				// earlier revisions, which this client does not speak to.
-				if !hasResultType(m.Result) {
-					return nil, fmt.Errorf("client: result for %s lacks resultType (required of %s servers)", method, protocol.Version)
-				}
+				// An absent resultType is not rejected here: the spec makes
+				// treating it as "complete" a client MUST, and
+				// protocol.PeekResultType applies that rule for every caller.
 				return m.Result, nil
 			}
 		case protocol.KindError:
@@ -171,13 +168,6 @@ func (c *Client) do(ctx context.Context, method string, params any) (json.RawMes
 			}
 		}
 	}
-}
-
-func hasResultType(raw json.RawMessage) bool {
-	var probe struct {
-		ResultType *string `json:"resultType"`
-	}
-	return json.Unmarshal(raw, &probe) == nil && probe.ResultType != nil
 }
 
 func (c *Client) dispatchNotification(m *protocol.Message) {

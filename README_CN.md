@@ -16,7 +16,7 @@
 
 ## 简介
 
-面向 **MCP 2026-07-28**（协议的无状态修订版）从零构建的 Go SDK。本 SDK 只实现 2026-07-28 —— 没有 `initialize` 握手、没有会话、没有旧版本协商 —— API 因此小而明确，与线上传输的内容一一对应。
+面向 **MCP 2026-07-28**（协议的无状态修订版）从零构建的 Go SDK。本 SDK 只实现 2026-07-28 —— 没有 `initialize` 握手、没有会话、没有过时传输 —— API 因此小而明确，与线上传输的内容一一对应。
 
 同时提供官方 **tasks 扩展**（`io.modelcontextprotocol/tasks`）的首个 Go 实现：可持久化、可轮询、可取消的长时工具调用，含 `input_required` 输入会合机制。
 
@@ -162,13 +162,15 @@ if task, ok := tasks.AsTask(err); ok {
 | [basic](./examples/basic) | STDIO 上的工具 + 资源 + 提示词 |
 | [calculator](./examples/calculator) | 类型化工具的 schema 推导与校验 |
 | [file-server](./examples/file-server) | 带路径穿越防护的文件资源 |
-| [streamhttp-demo](./examples/streamhttp-demo) | HTTP 服务端 + 客户端：SSE 进度、订阅 |
+| [streamhttp](./examples/streamhttp) | HTTP 服务端 + 客户端：SSE 进度、订阅 |
 | [elicitation](./examples/elicitation) | 单进程内完整 MRTR 循环 |
 | [tasks](./examples/tasks) | 任务全生命周期与 `input_required` 会合 |
 
 ## 范围说明
 
-本 SDK 只实现 MCP 2026-07-28。该修订版移除或废弃的特性刻意不做：`initialize`/会话、协议版本协商、Roots、Sampling、Logging、`resources/subscribe`、ping、SSE 断流恢复（`Last-Event-ID`）。未知的 `InputRequest` 方法（如旧服务端的 `roots/list`）原样透传并交由调用方处理，不会被静默丢弃。
+本 SDK 只实现 MCP 2026-07-28。该修订版移除或废弃的特性刻意不做：`initialize`/会话、Roots、Sampling、Logging、`resources/subscribe`、ping、SSE 断流恢复（`Last-Event-ID`）。
+
+对其他修订版保留两处让步，因为规范把它们都定为 MUST：`server/discover` 对任何协议版本的调用方都作答，使其能从中读到 `supportedVersions`；客户端把缺少 `resultType` 的结果视为 `complete`。未知的 `InputRequest` 方法（如旧服务端的 `roots/list`）原样透传并交由调用方处理，不会被静默丢弃。
 
 ## 许可证
 

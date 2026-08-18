@@ -3,7 +3,9 @@ package server_test
 import (
 	"context"
 	"encoding/json"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -120,6 +122,68 @@ func TestMetaValidation(t *testing.T) {
 	if !ok || data.Requested != "1900-01-01" || data.Supported[0] != protocol.Version {
 		t.Fatalf("version error data: %+v", data)
 	}
+}
+
+func TestDiscoverAnswersAcrossVersions(t *testing.T) {
+	// server/discover is the spec's up-front version selection and
+	// backward-compatibility probe: a caller on another revision must still
+	// learn which versions this server speaks.
+	s := newTestServer(t)
+	final, _ := do(t, s, protocol.MethodDiscover, map[string]any{
+		"_meta": map[string]any{
+			"io.modelcontextprotocol/protocolVersion":    "2025-11-25",
+			"io.modelcontextprotocol/clientCapabilities": map[string]any{},
+		},
+	})
+	res := decodeResult[protocol.DiscoverResult](t, final)
+	if len(res.SupportedVersions) != 1 || res.SupportedVersions[0] != protocol.Version {
+		t.Fatalf("supportedVersions = %v", res.SupportedVersions)
+	}
+}
+
+// TestConcurrentLists guards the featureSet invariant that reads are pure:
+// list handlers iterate under a read lock, so a lazily-built sort order would
+// let two concurrent lists race writing it. Most valuable under -race.
+func TestConcurrentLists(t *testing.T) {
+	s := newTestServer(t)
+	for _, name := range []string{"alpha", "beta", "gamma", "delta"} {
+		s.AddTool(&protocol.Tool{Name: name},
+			func(ctx context.Context, req *server.CallRequest) (protocol.ToolResponse, error) {
+				return protocol.NewToolResultText("ok"), nil
+			})
+	}
+	var wg sync.WaitGroup
+	for range 8 {
+		wg.Go(func() {
+			for range 25 {
+				msg, err := protocol.NewRequest(protocol.StringID("concurrent"),
+					protocol.MethodToolsList, protocol.ListToolsParams{Meta: newMeta()})
+				if err != nil {
+					t.Error(err)
+					return
+				}
+				var last *protocol.Message
+				s.Handle(context.Background(), msg, func(m *protocol.Message) error {
+					last = m
+					return nil
+				})
+				var res protocol.ListToolsResult
+				if err := json.Unmarshal(last.Result, &res); err != nil {
+					t.Error(err)
+					return
+				}
+				names := make([]string, len(res.Tools))
+				for i, tool := range res.Tools {
+					names[i] = tool.Name
+				}
+				if len(names) != 5 || !slices.IsSorted(names) {
+					t.Errorf("tools = %v, want 5 sorted names", names)
+					return
+				}
+			}
+		})
+	}
+	wg.Wait()
 }
 
 func TestUnknownMethod(t *testing.T) {

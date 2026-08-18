@@ -308,13 +308,16 @@ func (legacyResultHandler) Handle(ctx context.Context, msg *protocol.Message, em
 	})
 }
 
-func TestClientRejectsMissingResultType(t *testing.T) {
-	// 2026-07-28 servers MUST include resultType; the absent-means-complete
-	// rule only covers earlier revisions, which this client does not speak.
+func TestClientTreatsMissingResultTypeAsComplete(t *testing.T) {
+	// Spec (2026-07-28, key changes #8): clients MUST treat results from
+	// earlier-protocol servers that omit resultType as "complete".
 	c := client.New(mem.New(legacyResultHandler{}), nil)
-	_, err := c.CallTool(context.Background(), &protocol.CallToolParams{Name: "x"})
-	if err == nil || !strings.Contains(err.Error(), "resultType") {
-		t.Fatalf("err = %v, want a resultType rejection", err)
+	res, err := c.CallTool(context.Background(), &protocol.CallToolParams{Name: "x"})
+	if err != nil {
+		t.Fatalf("missing resultType must be accepted as complete: %v", err)
+	}
+	if len(res.Content) != 0 {
+		t.Fatalf("content = %+v", res.Content)
 	}
 }
 
