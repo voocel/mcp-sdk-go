@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"maps"
 	"sync"
+	"time"
 
 	"github.com/voocel/mcp-sdk-go/protocol"
 )
@@ -34,6 +35,9 @@ type Options struct {
 	// StateKey enables the SignState/VerifyState HMAC helpers for MRTR
 	// requestState integrity.
 	StateKey []byte
+	// StateTTL is how long a signed requestState stays valid. Defaults to 10
+	// minutes.
+	StateTTL time.Duration
 
 	// MaxConcurrency bounds concurrently executing requests. 0 means
 	// unlimited (appropriate for HTTP, where the listener governs).
@@ -105,6 +109,9 @@ func New(opts *Options) *Server {
 	if s.opts.PageSize <= 0 {
 		s.opts.PageSize = DefaultPageSize
 	}
+	if s.opts.StateTTL <= 0 {
+		s.opts.StateTTL = 10 * time.Minute
+	}
 	if s.opts.ListCache.CacheScope == "" {
 		s.opts.ListCache.CacheScope = protocol.CacheScopePrivate
 	}
@@ -143,10 +150,11 @@ type Extension struct {
 	// header against the body via Server.MethodNameParam.
 	NameParams map[string]string
 	// Topics translates one extension field of a subscription filter (key,
-	// raw value) into hub topics. Returning ok=false leaves the field to
-	// other extensions; ok=true with no topics leaves it unhonored. A non-nil
-	// err rejects the whole listen request (e.g. a missing client capability).
-	Topics func(ctx context.Context, req *Request, key string, value json.RawMessage) (topics []string, ok bool, err error)
+	// raw value) into hub topics, and returns the value to acknowledge as
+	// honored (the whole value or a subset of it). A nil honored value leaves
+	// the field unhonored; a non-nil err rejects the whole listen request
+	// (e.g. a missing client capability).
+	Topics func(ctx context.Context, req *Request, key string, value json.RawMessage) (honored json.RawMessage, topics []string, err error)
 }
 
 // AddExtension registers an extension. It panics on ID or method collisions
@@ -382,18 +390,14 @@ func methodSupportsMRTR(method string) bool {
 func (s *Server) checkInputCapabilities(req *Request, ir *protocol.InputRequired) *protocol.Error {
 	form, url := req.SupportsElicitation()
 	for key, in := range ir.Requests {
-		switch in.Method {
-		case protocol.MethodElicitationCreate:
-		case "sampling/createMessage", "roots/list":
-			// Legal MRTR payloads, deprecated by SEP-2577. This SDK does not
-			// model their client capabilities, so the handler owns that
-			// contract; the payload passes through untouched.
-			continue
-		default:
-			// The spec's whitelist is a MUST: inputRequests values must be
-			// one of ElicitRequest, CreateMessageRequest or ListRootsRequest.
+		// Only elicitation can be sent: sampling and roots (the spec's other
+		// inputRequests methods) are deprecated and not modeled, so the SDK
+		// cannot check that the client declared them, and sending an
+		// undeclared one is a MUST NOT.
+		if in.Method != protocol.MethodElicitationCreate {
 			return protocol.Errorf(protocol.CodeInternal,
-				"server bug: input request %q uses method %q, which is not a valid inputRequests method", key, in.Method)
+				"server bug: input request %q uses method %q; only %s can be sent",
+				key, in.Method, protocol.MethodElicitationCreate)
 		}
 		p, err := in.Elicit()
 		if err != nil {

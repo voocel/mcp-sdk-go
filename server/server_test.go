@@ -341,6 +341,22 @@ func TestMRTR(t *testing.T) {
 	}
 }
 
+func TestMRTRRejectsUnsupportedInputRequestMethods(t *testing.T) {
+	// Sampling and roots are legal on the wire but not modeled: the SDK cannot
+	// verify the client declared them, so sending one is a loud server bug.
+	s := newTestServer(t)
+	server.AddTool(s, &protocol.Tool{Name: "sample"},
+		func(ctx context.Context, req *server.CallRequest, in any) (protocol.ToolResponse, any, error) {
+			return protocol.RequireInput(protocol.InputRequests{
+				"s": {Method: "sampling/createMessage", Params: json.RawMessage(`{}`)},
+			}, ""), nil, nil
+		})
+	final, _ := do(t, s, protocol.MethodToolsCall, protocol.CallToolParams{Meta: metaWithElicitation(), Name: "sample"})
+	if final.Error == nil || final.Error.Code != protocol.CodeInternal || !strings.Contains(final.Error.Message, "sampling/createMessage") {
+		t.Fatalf("sampling input request: %+v", final.Error)
+	}
+}
+
 func TestResources(t *testing.T) {
 	s := newTestServer(t)
 	s.AddResource(&protocol.Resource{URI: "info://x", Name: "x"},
@@ -748,6 +764,33 @@ func TestShutdownEndsListenGracefully(t *testing.T) {
 	}
 }
 
+func TestListenDoesNotHoldConcurrencySlot(t *testing.T) {
+	// An idle subscription must not starve every other request.
+	s := server.New(&server.Options{MaxConcurrency: 1})
+	server.AddTool(s, &protocol.Tool{Name: "t"},
+		func(ctx context.Context, req *server.CallRequest, in any) (protocol.ToolResponse, any, error) {
+			return protocol.NewToolResultText("ok"), nil, nil
+		})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	msgs := make(chan *protocol.Message, 4)
+	msg := listenMsg(t, 1)
+	go s.Handle(ctx, msg, func(m *protocol.Message) error { msgs <- m; return nil })
+	recvMsg(t, msgs) // acknowledgment: the stream is open
+
+	done := make(chan *protocol.Message, 1)
+	go func() {
+		final, _ := do(t, s, protocol.MethodToolsList, protocol.ListToolsParams{Meta: newMeta()})
+		done <- final
+	}()
+	select {
+	case final := <-done:
+		decodeResult[protocol.ListToolsResult](t, final)
+	case <-time.After(2 * time.Second):
+		t.Fatal("tools/list starved behind an open subscription stream")
+	}
+}
+
 func TestShutdownHonorsContext(t *testing.T) {
 	s := newTestServer(t)
 	release := make(chan struct{})
@@ -884,17 +927,40 @@ func TestRecoveryMiddleware(t *testing.T) {
 }
 
 func TestStateSigning(t *testing.T) {
-	s := server.New(&server.Options{StateKey: []byte("k")})
-	state, err := s.SignState([]byte(`{"step":1}`))
+	s := server.New(&server.Options{StateKey: []byte("k"), StateTTL: 300 * time.Millisecond})
+	// A Request only exists inside a handler; capture one per tool.
+	reqs := map[string]*server.Request{}
+	for _, name := range []string{"a", "b"} {
+		s.AddTool(&protocol.Tool{Name: name}, func(ctx context.Context, req *server.CallRequest) (protocol.ToolResponse, error) {
+			reqs[name] = req.Request
+			return protocol.NewToolResultText("ok"), nil
+		})
+		do(t, s, protocol.MethodToolsCall, protocol.CallToolParams{Meta: newMeta(), Name: name})
+	}
+
+	state, err := s.SignState(reqs["a"], []byte(`{"step":1}`), "alice")
 	if err != nil {
 		t.Fatal(err)
 	}
-	payload, err := s.VerifyState(state)
+	payload, err := s.VerifyState(reqs["a"], state, "alice")
 	if err != nil || string(payload) != `{"step":1}` {
 		t.Fatalf("verify: %s, %v", payload, err)
 	}
-	if _, err := s.VerifyState(state + "x"); err == nil {
-		t.Fatal("tampered state accepted")
+
+	for name, verify := range map[string]func() error{
+		"tampered":        func() error { _, err := s.VerifyState(reqs["a"], state+"x", "alice"); return err },
+		"other request":   func() error { _, err := s.VerifyState(reqs["b"], state, "alice"); return err },
+		"other principal": func() error { _, err := s.VerifyState(reqs["a"], state, "bob"); return err },
+		"no principal":    func() error { _, err := s.VerifyState(reqs["a"], state); return err },
+	} {
+		if verify() == nil {
+			t.Fatalf("%s state accepted", name)
+		}
+	}
+
+	time.Sleep(400 * time.Millisecond)
+	if _, err := s.VerifyState(reqs["a"], state, "alice"); err == nil || !strings.Contains(err.Error(), "expired") {
+		t.Fatalf("expired state: %v", err)
 	}
 }
 

@@ -28,7 +28,16 @@ func writeSSE(w io.Writer, evt event) error {
 		}
 		b.WriteString("\n")
 	}
-	if _, err := w.Write(b.Bytes()); err != nil {
+	return writeFlush(w, b.Bytes())
+}
+
+// writeSSEComment writes a keep-alive comment line, which receivers ignore.
+func writeSSEComment(w io.Writer) error {
+	return writeFlush(w, []byte(":\n\n"))
+}
+
+func writeFlush(w io.Writer, p []byte) error {
+	if _, err := w.Write(p); err != nil {
 		return err
 	}
 	if f, ok := w.(http.Flusher); ok {

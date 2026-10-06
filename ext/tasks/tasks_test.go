@@ -785,6 +785,29 @@ func TestTaskNotifications(t *testing.T) {
 	}
 }
 
+func TestShutdownCancelsRunningTasks(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	f := newFixture(t, nil)
+	c := newClient(t, f, true)
+	task := callAsTask(t, ctx, c, "slow", nil) // blocks until released or cancelled
+
+	if err := f.tasks.Shutdown(ctx); err != nil {
+		t.Fatal(err)
+	}
+	// Shutdown returns only after the task settled, so its state is final.
+	d, err := tasks.Get(ctx, c, task.TaskID)
+	if err != nil || d.Status != tasks.StatusCancelled {
+		t.Fatalf("after Shutdown: %+v, %v; want cancelled", d, err)
+	}
+
+	// Tasks started afterwards are refused, not left working forever.
+	res, err := c.CallTool(ctx, &protocol.CallToolParams{Name: "slow"})
+	if _, isTask := tasks.AsTask(err); isTask || (err == nil && !res.IsError) {
+		t.Fatalf("task started after Shutdown: res = %+v, err = %v", res, err)
+	}
+}
+
 type ownerKey struct{}
 
 func TestTaskOwnerIsolation(t *testing.T) {
@@ -828,6 +851,9 @@ func TestTaskOwnerIsolation(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer sub.Close()
+	if ids, honored := sub.Ack().Extra[tasks.FilterTaskIDs]; honored {
+		t.Fatalf("ack honored a task the owner cannot follow: %s", ids)
+	}
 	close(f.release)
 	waitStatus(t, alice, c, task.TaskID, tasks.StatusCompleted)
 	select {

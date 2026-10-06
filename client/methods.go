@@ -3,6 +3,7 @@ package client
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"iter"
 
 	"github.com/voocel/mcp-sdk-go/protocol"
@@ -83,8 +84,25 @@ func (c *Client) Complete(ctx context.Context, p *protocol.CompleteParams) (*pro
 }
 
 // CallTool invokes a tool, transparently running the MRTR fulfillment loop
-// (see Options.Elicitor / NoAutoInput).
+// (see Options.Elicitor / NoAutoInput). If the server rejects the call with a
+// HeaderMismatch, the cached x-mcp-header bindings are missing or stale (a
+// tool never listed, or a changed schema): they are refreshed via tools/list
+// and the call is retried once, as the spec advises.
 func (c *Client) CallTool(ctx context.Context, p *protocol.CallToolParams) (*protocol.CallToolResult, error) {
+	res, err := c.callTool(ctx, p)
+	var perr *protocol.Error
+	if errors.As(err, &perr) && perr.Code == protocol.CodeHeaderMismatch {
+		for _, lerr := range c.Tools(ctx) {
+			if lerr != nil {
+				return nil, err // the refresh failed; the original error is the one to report
+			}
+		}
+		return c.callTool(ctx, p)
+	}
+	return res, err
+}
+
+func (c *Client) callTool(ctx context.Context, p *protocol.CallToolParams) (*protocol.CallToolResult, error) {
 	var res protocol.CallToolResult
 	if err := c.mrtrCall(ctx, protocol.MethodToolsCall, p, mrtrFields{
 		responses: func(r protocol.InputResponses, s string) { p.InputResponses = r; p.RequestState = s },

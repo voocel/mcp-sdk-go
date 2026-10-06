@@ -1,10 +1,8 @@
 package server
 
 import (
-	"bytes"
 	"encoding/base64"
-	"encoding/gob"
-	"fmt"
+	"errors"
 	"iter"
 	"slices"
 )
@@ -90,31 +88,21 @@ func (s *featureSet[T]) yieldFrom(index int, yield func(T) bool) {
 // DefaultPageSize is the default page size for list pagination.
 const DefaultPageSize = 1000
 
-// pageToken is the internal representation of a pagination cursor.
-type pageToken struct {
-	LastUID string
+// A cursor is the uid of the last item of the previous page, base64-encoded to
+// stay opaque to clients. Positioning by uid rather than offset keeps pages
+// stable while features are added or removed between requests.
+func encodeCursor(uid string) string {
+	return base64.URLEncoding.EncodeToString([]byte(uid))
 }
 
-// encodeCursor encodes a uid into an opaque pagination cursor string.
-func encodeCursor(uid string) (string, error) {
-	var buf bytes.Buffer
-	if err := gob.NewEncoder(&buf).Encode(pageToken{LastUID: uid}); err != nil {
-		return "", fmt.Errorf("failed to encode page token: %w", err)
+// decodeCursor returns the uid a cursor points after. Features have non-empty
+// uids, so an empty one is a cursor this server never issued.
+func decodeCursor(cursor string) (string, error) {
+	uid, err := base64.URLEncoding.DecodeString(cursor)
+	if err != nil || len(uid) == 0 {
+		return "", errors.New("invalid cursor")
 	}
-	return base64.URLEncoding.EncodeToString(buf.Bytes()), nil
-}
-
-// decodeCursor decodes an opaque pagination cursor string into a pageToken.
-func decodeCursor(cursor string) (*pageToken, error) {
-	data, err := base64.URLEncoding.DecodeString(cursor)
-	if err != nil {
-		return nil, fmt.Errorf("failed to decode cursor: %w", err)
-	}
-	var token pageToken
-	if err := gob.NewDecoder(bytes.NewReader(data)).Decode(&token); err != nil {
-		return nil, fmt.Errorf("failed to decode page token: %w", err)
-	}
-	return &token, nil
+	return string(uid), nil
 }
 
 // paginateList performs cursor-based pagination on a featureSet.
@@ -126,11 +114,11 @@ func paginateList[T any](fs *featureSet[T], pageSize int, cursor *string) (items
 	if cursor == nil {
 		seq = fs.all()
 	} else {
-		pt, err := decodeCursor(*cursor)
+		uid, err := decodeCursor(*cursor)
 		if err != nil {
 			return nil, nil, err
 		}
-		seq = fs.above(pt.LastUID)
+		seq = fs.above(uid)
 	}
 
 	if pageSize <= 0 {
@@ -153,9 +141,6 @@ func paginateList[T any](fs *featureSet[T], pageSize int, cursor *string) (items
 		return items, nil, nil
 	}
 
-	next, err := encodeCursor(fs.uniqueID(items[len(items)-1]))
-	if err != nil {
-		return items, nil, err
-	}
+	next := encodeCursor(fs.uniqueID(items[len(items)-1]))
 	return items, &next, nil
 }

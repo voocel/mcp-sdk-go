@@ -268,20 +268,18 @@ func (s *Server) honorFilter(ctx context.Context, req *Request, f *protocol.Subs
 	}
 	for key, value := range f.Extra {
 		for _, e := range exts {
-			ts, ok, err := e.Topics(ctx, req, key, value)
+			h, ts, err := e.Topics(ctx, req, key, value)
 			if err != nil {
 				return protocol.SubscriptionFilter{}, nil, err
 			}
-			if !ok {
+			if h == nil {
 				continue
 			}
-			if len(ts) > 0 {
-				if honored.Extra == nil {
-					honored.Extra = make(map[string]json.RawMessage)
-				}
-				honored.Extra[key] = value
-				topics = append(topics, ts...)
+			if honored.Extra == nil {
+				honored.Extra = make(map[string]json.RawMessage)
 			}
+			honored.Extra[key] = h
+			topics = append(topics, ts...)
 			break
 		}
 	}

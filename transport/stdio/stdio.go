@@ -22,10 +22,7 @@ type Handler interface {
 	Handle(ctx context.Context, msg *protocol.Message, emit func(*protocol.Message) error)
 }
 
-const (
-	defaultMaxMessageBytes = 16 << 20
-	defaultMaxConcurrency  = 64
-)
+const defaultMaxMessageBytes = 16 << 20
 
 type Options struct {
 	// Reader and Writer default to os.Stdin and os.Stdout. Injecting them
@@ -34,13 +31,14 @@ type Options struct {
 	Writer io.Writer
 	// MaxMessageBytes caps one line (default 16 MiB).
 	MaxMessageBytes int64
-	// MaxConcurrency caps concurrently dispatched requests (default 64).
-	MaxConcurrency int
 }
 
 // Serve reads messages until EOF or ctx cancellation, dispatching each
 // request in its own goroutine so a slow tool never blocks cancellation or
-// other requests. It returns nil on clean EOF.
+// other requests. It returns nil on clean EOF. Concurrency is bounded by the
+// server (server.Options.MaxConcurrency), which also exempts long-lived
+// subscription streams from the bound. To end those gracefully, call the
+// server's Shutdown before cancelling ctx.
 func Serve(ctx context.Context, h Handler, opts *Options) error {
 	var o Options
 	if opts != nil {
@@ -54,9 +52,6 @@ func Serve(ctx context.Context, h Handler, opts *Options) error {
 	}
 	if o.MaxMessageBytes <= 0 {
 		o.MaxMessageBytes = defaultMaxMessageBytes
-	}
-	if o.MaxConcurrency <= 0 {
-		o.MaxConcurrency = defaultMaxConcurrency
 	}
 
 	ctx, cancel := context.WithCancel(ctx)
@@ -78,7 +73,6 @@ func Serve(ctx context.Context, h Handler, opts *Options) error {
 		inflightMu sync.Mutex
 		inflight   = make(map[protocol.RequestID]context.CancelFunc)
 	)
-	sem := make(chan struct{}, o.MaxConcurrency)
 	var wg sync.WaitGroup
 
 	lines := make(chan []byte)
@@ -147,16 +141,9 @@ func Serve(ctx context.Context, h Handler, opts *Options) error {
 						inflightMu.Unlock()
 						rcancel()
 					}()
-					// The concurrency slot is acquired here, not in the
-					// dispatch loop: a saturated server must keep reading so
-					// notifications/cancelled can still reach queued and
-					// running requests.
-					select {
-					case sem <- struct{}{}:
-					case <-rctx.Done():
-						return
-					}
-					defer func() { <-sem }()
+					// Dispatch never waits on the handler, so a saturated
+					// server keeps reading and notifications/cancelled still
+					// reach queued and running requests.
 					h.Handle(rctx, &m, func(out *protocol.Message) error {
 						// After cancellation the server must not send further
 						// messages for this request.

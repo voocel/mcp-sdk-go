@@ -1,6 +1,7 @@
 package streamhttp_test
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -594,6 +595,29 @@ func TestClientEndToEnd(t *testing.T) {
 	_ = sub.Close()
 }
 
+func TestClientRefreshesBindingsOnHeaderMismatch(t *testing.T) {
+	srv, _ := newBackend()
+	ts := httptest.NewServer(streamhttp.NewHandler(srv, nil))
+	defer ts.Close()
+	c := client.New(streamhttp.New(ts.URL, nil), &client.Options{
+		Info: &protocol.Implementation{Name: "t", Version: "1"},
+	})
+	defer c.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	// The client never listed tools, so it knows no x-mcp-header bindings and
+	// omits Mcp-Param-Region; the server answers HeaderMismatch and the client
+	// must recover by refreshing the bindings and retrying.
+	res, err := c.CallTool(ctx, &protocol.CallToolParams{Name: "hdr", Arguments: map[string]any{"region": "us"}})
+	if err != nil {
+		t.Fatalf("CallTool without prior ListTools: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("result: %+v", res)
+	}
+}
+
 func TestServerShutdownEndsListenStreams(t *testing.T) {
 	srv, _ := newBackend()
 	ts := httptest.NewServer(streamhttp.NewHandler(srv, nil))
@@ -626,6 +650,38 @@ func TestServerShutdownEndsListenStreams(t *testing.T) {
 	if sub.Err() != nil {
 		t.Fatalf("Err after graceful server shutdown: %v", sub.Err())
 	}
+}
+
+func TestListenStreamGetsKeepAlive(t *testing.T) {
+	srv, _ := newBackend()
+	ts := httptest.NewServer(streamhttp.NewHandler(srv, &streamhttp.Options{KeepAlive: 20 * time.Millisecond}))
+	defer ts.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	body := rpcBody(1, "subscriptions/listen", `"notifications":{"toolsListChanged":true}`)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, ts.URL, strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	for k, v := range stdHeaders("subscriptions/listen") {
+		req.Header.Set(k, v)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	// An idle subscription stream must emit SSE comment lines on its own.
+	sc := bufio.NewScanner(resp.Body)
+	for sc.Scan() {
+		if sc.Text() == ":" {
+			return
+		}
+	}
+	t.Fatalf("no keep-alive comment on the idle stream: %v", sc.Err())
 }
 
 func TestClientRetriesTransientStatus(t *testing.T) {

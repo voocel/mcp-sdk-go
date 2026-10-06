@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"log/slog"
 	"maps"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -38,15 +40,45 @@ type Tasks struct {
 	store Store
 	opts  Options
 
-	mu      sync.Mutex      // guards live
-	stateMu sync.Mutex      // serializes setTask's read-modify-write against the Store
-	live    map[string]*run // in-flight runs: cancel + input rendezvous
+	mu     sync.Mutex      // guards live and closed
+	live   map[string]*run // in-flight runs: cancel + input rendezvous
+	closed bool            // set by Shutdown: no new runs
+
+	// stripes serialize setTask's read-modify-write against the Store, for any
+	// Store implementation, per task (by ID hash) rather than globally.
+	stripes [64]sync.Mutex
 }
 
 type run struct {
 	cancel context.CancelFunc
 	input  chan protocol.InputResponses
-	done   chan struct{} // closed when the runner finished; unblocks updates
+	done   chan struct{} // closed once the runner finished and persisted its final state
+}
+
+var errShutDown = errors.New("tasks: shut down")
+
+// Shutdown cancels every running task and waits until each has settled as
+// cancelled, or ctx ends; tasks started afterwards are refused. Handlers run
+// in this process: without Shutdown, exiting leaves the Store records of
+// still-running tasks at working. Call it before the server's Shutdown, so
+// subscribers still receive the final states.
+func (t *Tasks) Shutdown(ctx context.Context) error {
+	t.mu.Lock()
+	t.closed = true
+	runs := slices.Collect(maps.Values(t.live))
+	t.mu.Unlock()
+
+	for _, r := range runs {
+		r.cancel()
+	}
+	for _, r := range runs {
+		select {
+		case <-r.done:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	return nil
 }
 
 // Install registers the tasks extension methods, capability and subscription
@@ -76,26 +108,32 @@ func Install(s *server.Server, store Store, opts *Options) *Tasks {
 			MethodUpdate: "taskId",
 			MethodCancel: "taskId",
 		},
-		Topics: func(ctx context.Context, req *server.Request, key string, value json.RawMessage) ([]string, bool, error) {
+		Topics: func(ctx context.Context, req *server.Request, key string, value json.RawMessage) (json.RawMessage, []string, error) {
 			if key != FilterTaskIDs {
-				return nil, false, nil
+				return nil, nil, nil
 			}
 			// The draft requires MissingRequiredClientCapability for
 			// non-declaring clients requesting task notifications.
 			if err := requireCapability(req); err != nil {
-				return nil, true, err
+				return nil, nil, err
 			}
-			var ids []string
-			if json.Unmarshal(value, &ids) != nil {
-				return nil, true, nil
+			var requested []string
+			if json.Unmarshal(value, &requested) != nil {
+				return nil, nil, nil
 			}
-			var topics []string
-			for _, id := range ids {
+			// Acknowledge only the tasks this owner may follow.
+			var ids, topics []string
+			for _, id := range requested {
 				if t.owns(ctx, req, id) {
+					ids = append(ids, id)
 					topics = append(topics, taskTopic(id))
 				}
 			}
-			return topics, true, nil
+			if len(ids) == 0 {
+				return nil, nil, nil
+			}
+			honored, err := json.Marshal(ids)
+			return honored, topics, err
 		},
 	})
 	return t
@@ -299,6 +337,14 @@ func (t *Tasks) start(ownerTag string, exec func(context.Context, *Context) (*pr
 	runCtx, cancel := context.WithCancel(context.Background())
 	r := &run{cancel: cancel, input: make(chan protocol.InputResponses, 1), done: make(chan struct{})}
 	t.mu.Lock()
+	if t.closed {
+		// Shutdown began after the record was written; nobody knows this ID
+		// yet, so drop the task instead of leaving it working forever.
+		t.mu.Unlock()
+		cancel()
+		_ = t.store.Delete(context.Background(), id)
+		return nil, errShutDown
+	}
 	t.live[id] = r
 	t.mu.Unlock()
 
@@ -313,10 +359,10 @@ func (t *Tasks) start(ownerTag string, exec func(context.Context, *Context) (*pr
 }
 
 func (t *Tasks) finish(id string, r *run, runCtx context.Context, res *protocol.CallToolResult, err error) {
+	defer close(r.done)
 	t.mu.Lock()
 	delete(t.live, id)
 	t.mu.Unlock()
-	close(r.done)
 
 	serr := t.setTask(id, func(d *DetailedTask) {
 		d.InputRequests = nil
@@ -359,12 +405,15 @@ func complete(d *DetailedTask, res *protocol.CallToolResult) {
 
 // setTask applies mutate to the stored snapshot, bumps lastUpdatedAt, persists
 // and publishes a notifications/tasks. The read-modify-write runs under
-// t.stateMu so concurrent transitions (runner finish vs. orphan cancel) cannot
-// overwrite each other, for any Store implementation. Terminal tasks are
-// immutable; mutations against them (or evicted tasks) are dropped.
+// the task's stripe lock so concurrent transitions (runner finish vs. orphan
+// cancel) cannot overwrite each other, for any Store implementation. Terminal
+// tasks are immutable; mutations against them (or evicted tasks) are dropped.
 func (t *Tasks) setTask(id string, mutate func(*DetailedTask)) error {
-	t.stateMu.Lock()
-	defer t.stateMu.Unlock()
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(id))
+	stripe := &t.stripes[h.Sum32()%uint32(len(t.stripes))]
+	stripe.Lock()
+	defer stripe.Unlock()
 	d, err := t.store.Get(context.Background(), id)
 	if err != nil {
 		return err

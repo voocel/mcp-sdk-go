@@ -82,7 +82,6 @@ func startServe(t *testing.T, srv *server.Server, opts *stdio.Options) *harness 
 	o := stdio.Options{Reader: inR, Writer: outW}
 	if opts != nil {
 		o.MaxMessageBytes = opts.MaxMessageBytes
-		o.MaxConcurrency = opts.MaxConcurrency
 	}
 	h := &harness{in: inW, msgs: make(chan *protocol.Message, 16), done: make(chan error, 1)}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -262,15 +261,17 @@ func TestServeCancelled(t *testing.T) {
 
 func TestServeCancelWhileSaturated(t *testing.T) {
 	started := make(chan struct{})
-	srv := testServer(func(ctx context.Context, req *server.CallRequest) (protocol.ToolResponse, error) {
-		if _, ok := req.Params.Arguments["block"]; ok {
-			close(started)
-			<-ctx.Done()
-			return nil, ctx.Err()
-		}
-		return protocol.NewToolResultText("ok"), nil
-	})
-	h := startServe(t, srv, &stdio.Options{MaxConcurrency: 1})
+	srv := server.New(&server.Options{Impl: protocol.Implementation{Name: "S", Version: "1"}, MaxConcurrency: 1})
+	srv.AddTool(&protocol.Tool{Name: "t", InputSchema: protocol.JSONSchema{"type": "object"}},
+		func(ctx context.Context, req *server.CallRequest) (protocol.ToolResponse, error) {
+			if _, ok := req.Params.Arguments["block"]; ok {
+				close(started)
+				<-ctx.Done()
+				return nil, ctx.Err()
+			}
+			return protocol.NewToolResultText("ok"), nil
+		})
+	h := startServe(t, srv, nil)
 
 	// Saturate the single slot, queue a second request behind it.
 	h.send(t, callLine(1, "t", `{"block":true}`))

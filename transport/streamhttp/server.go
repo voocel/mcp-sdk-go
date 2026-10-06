@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/voocel/mcp-sdk-go/internal/headerbind"
 	"github.com/voocel/mcp-sdk-go/protocol"
@@ -35,7 +36,10 @@ type Backend interface {
 	MethodNameParam(method string) (key string, ok bool)
 }
 
-const defaultMaxBodyBytes = 8 << 20
+const (
+	defaultMaxBodyBytes = 8 << 20
+	defaultKeepAlive    = 30 * time.Second
+)
 
 type Options struct {
 	// AllowedOrigins lists additional allowed Origin values (exact match,
@@ -47,6 +51,10 @@ type Options struct {
 	InsecureAllowAnyOrigin bool
 	// MaxBodyBytes caps the request body (default 8 MiB).
 	MaxBodyBytes int64
+	// KeepAlive is how often an idle SSE stream gets a comment line, so
+	// intermediaries and client idle timeouts do not cut long-lived streams
+	// such as subscriptions/listen. Default 30s; negative disables.
+	KeepAlive time.Duration
 }
 
 type Handler struct {
@@ -61,6 +69,9 @@ func NewHandler(backend Backend, opts *Options) *Handler {
 	}
 	if h.opts.MaxBodyBytes <= 0 {
 		h.opts.MaxBodyBytes = defaultMaxBodyBytes
+	}
+	if h.opts.KeepAlive == 0 {
+		h.opts.KeepAlive = defaultKeepAlive
 	}
 	return h
 }
@@ -116,7 +127,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// A Mcp-Session-Id from a legacy client is ignored, never echoed.
 	rsp := &responder{w: w}
+	stopKeepAlive := rsp.keepAlive(h.opts.KeepAlive)
 	h.backend.Handle(r.Context(), &msg, rsp.emit)
+	stopKeepAlive() // before returning: the ResponseWriter is invalid afterwards
 	rsp.finish()
 }
 
@@ -306,6 +319,33 @@ func (rp *responder) emit(m *protocol.Message) error {
 		return writeSSE(rp.w, event{Data: raw})
 	}
 	return fmt.Errorf("streamhttp: message after final JSON response")
+}
+
+// keepAlive writes a comment line every interval while the response is an SSE
+// stream. The returned stop waits for the writer to exit.
+func (rp *responder) keepAlive(interval time.Duration) (stop func()) {
+	if interval < 0 {
+		return func() {}
+	}
+	quit, done := make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(done)
+		tick := time.NewTicker(interval)
+		defer tick.Stop()
+		for {
+			select {
+			case <-quit:
+				return
+			case <-tick.C:
+				rp.mu.Lock()
+				if rp.sse {
+					_ = writeSSEComment(rp.w)
+				}
+				rp.mu.Unlock()
+			}
+		}
+	}()
+	return func() { close(quit); <-done }
 }
 
 func (rp *responder) finish() {
