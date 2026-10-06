@@ -222,12 +222,14 @@ func TestToolListAndCall(t *testing.T) {
 		t.Fatal("content mirror missing")
 	}
 
-	// Invalid arguments are rejected before the handler runs.
+	// Arguments violating the input schema are a tool execution error (the
+	// model can read it and retry), not a protocol error.
 	final, _ = do(t, s, protocol.MethodToolsCall, protocol.CallToolParams{
 		Meta: newMeta(), Name: "greet", Arguments: map[string]any{"name": 42},
 	})
-	if final.Error == nil || final.Error.Code != protocol.CodeInvalidParams {
-		t.Fatalf("invalid args: %+v", final.Error)
+	res = decodeResult[protocol.CallToolResult](t, final)
+	if !res.IsError || !strings.Contains(textOf(t, res), "invalid arguments") {
+		t.Fatalf("invalid args: %+v", res)
 	}
 
 	// Unknown tool.
@@ -410,7 +412,7 @@ func TestPagination(t *testing.T) {
 			})
 	}
 	var names []string
-	cursor := ""
+	var cursor *string
 	for range 10 {
 		final, _ := do(t, s, protocol.MethodToolsList, protocol.ListToolsParams{Meta: newMeta(), Cursor: cursor})
 		res := decodeResult[protocol.ListToolsResult](t, final)
@@ -420,15 +422,18 @@ func TestPagination(t *testing.T) {
 		if res.NextCursor == nil {
 			break
 		}
-		cursor = *res.NextCursor
+		cursor = res.NextCursor
 	}
 	if strings.Join(names, "") != "abcde" {
 		t.Fatalf("paged names = %v", names)
 	}
 
-	final, _ := do(t, s, protocol.MethodToolsList, protocol.ListToolsParams{Meta: newMeta(), Cursor: "garbage!!"})
-	if final.Error == nil || final.Error.Code != protocol.CodeInvalidParams {
-		t.Fatalf("invalid cursor: %+v", final.Error)
+	// An empty string is a cursor like any other; this server never issued it.
+	for _, bad := range []string{"garbage!!", ""} {
+		final, _ := do(t, s, protocol.MethodToolsList, protocol.ListToolsParams{Meta: newMeta(), Cursor: &bad})
+		if final.Error == nil || final.Error.Code != protocol.CodeInvalidParams {
+			t.Fatalf("invalid cursor %q: %+v", bad, final.Error)
+		}
 	}
 }
 
@@ -817,6 +822,38 @@ func TestOutputSchemaEnforced(t *testing.T) {
 	if final := call(); final.Error != nil {
 		t.Fatalf("isError result must be exempt: %+v", final.Error)
 	}
+}
+
+func textOf(t *testing.T, res *protocol.CallToolResult) string {
+	t.Helper()
+	if len(res.Content) == 0 {
+		t.Fatal("result has no content")
+	}
+	tc, ok := res.Content[0].(protocol.TextContent)
+	if !ok {
+		t.Fatalf("content[0] is %T, want text", res.Content[0])
+	}
+	return tc.Text
+}
+
+func TestUncompilableInputSchemaPanicsAtRegistration(t *testing.T) {
+	// A schema that cannot compile (here an external $ref, which is never
+	// dereferenced) is the server author's bug: it must surface when the tool is
+	// registered, not as a bogus "invalid arguments" on the first call.
+	defer func() {
+		if recover() == nil {
+			t.Fatal("AddTool accepted an input schema with an unresolvable $ref")
+		}
+	}()
+	server.AddTool(newTestServer(t), &protocol.Tool{
+		Name: "bad",
+		InputSchema: protocol.JSONSchema{
+			"type":       "object",
+			"properties": map[string]any{"a": map[string]any{"$ref": "https://example.com/a.json"}},
+		},
+	}, func(ctx context.Context, req *server.CallRequest, in map[string]any) (protocol.ToolResponse, any, error) {
+		return nil, nil, nil
+	})
 }
 
 func recvMsg(t *testing.T, ch chan *protocol.Message) *protocol.Message {

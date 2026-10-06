@@ -46,7 +46,7 @@ func (m *PromptMessage) UnmarshalJSON(b []byte) error {
 
 type ListPromptsParams struct {
 	Meta   RequestMeta `json:"_meta"`
-	Cursor string      `json:"cursor,omitempty"`
+	Cursor *string     `json:"cursor,omitempty"`
 }
 
 type ListPromptsResult struct {

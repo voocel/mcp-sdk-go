@@ -118,14 +118,15 @@ func decodeCursor(cursor string) (*pageToken, error) {
 }
 
 // paginateList performs cursor-based pagination on a featureSet.
-// Empty cursor starts from the beginning. pageSize <= 0 returns all items.
+// A nil cursor starts from the beginning (an empty string is a cursor like any
+// other, and never one this server issued). pageSize <= 0 returns all items.
 // A nil nextCursor means the result set is exhausted.
-func paginateList[T any](fs *featureSet[T], pageSize int, cursor string) (items []T, nextCursor *string, err error) {
+func paginateList[T any](fs *featureSet[T], pageSize int, cursor *string) (items []T, nextCursor *string, err error) {
 	var seq iter.Seq[T]
-	if cursor == "" {
+	if cursor == nil {
 		seq = fs.all()
 	} else {
-		pt, err := decodeCursor(cursor)
+		pt, err := decodeCursor(*cursor)
 		if err != nil {
 			return nil, nil, err
 		}

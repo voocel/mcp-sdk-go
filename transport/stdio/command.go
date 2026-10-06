@@ -17,6 +17,9 @@ import (
 
 const defaultTerminateDuration = 5 * time.Second
 
+// errSubscriptionOverflow ends a subscription stream whose consumer fell behind.
+var errSubscriptionOverflow = errors.New("stdio: subscription overflowed: notifications were dropped; re-listen and re-sync")
+
 type CommandOptions struct {
 	// TerminateDuration is how long each shutdown stage (stdin close,
 	// interrupt) waits before escalating, ending with a hard kill.
@@ -167,13 +170,24 @@ func (c *Command) route(line []byte) {
 		}
 		c.mu.Unlock()
 	case protocol.KindNotification:
+		var overflowed *cmdStream
 		c.mu.Lock()
 		if st := c.byID[subscriptionIDOf(msg.Params)]; st != nil {
-			st.deliver(&msg, false)
+			// A subscription notification is a change the caller must not miss
+			// (the server's hub ends an overflowing stream for the same reason):
+			// a consumer that cannot keep up gets an error, and re-listens.
+			if !st.deliver(&msg, false) {
+				st.err = errSubscriptionOverflow
+				c.dropLocked(st)
+				overflowed = st
+			}
 		} else if st := c.byToken[progressTokenOfNotification(msg.Params)]; st != nil {
-			st.deliver(&msg, false)
+			st.deliver(&msg, false) // progress is superseded by the next report
 		}
 		c.mu.Unlock()
+		if overflowed != nil {
+			go c.sendCancel(overflowed.id) // stop the server-side stream too
+		}
 	}
 }
 
@@ -183,10 +197,15 @@ func (c *Command) unregister(st *cmdStream, sendCancel bool) {
 	c.dropLocked(st)
 	c.mu.Unlock()
 	if active && sendCancel {
-		if note, err := protocol.NewNotification(protocol.NotificationCancelled,
-			protocol.CancelledParams{RequestID: st.id}); err == nil {
-			_ = c.write(note)
-		}
+		c.sendCancel(st.id)
+	}
+}
+
+// sendCancel asks the server to stop the request with the given ID.
+func (c *Command) sendCancel(id protocol.RequestID) {
+	if note, err := protocol.NewNotification(protocol.NotificationCancelled,
+		protocol.CancelledParams{RequestID: id}); err == nil {
+		_ = c.write(note)
 	}
 }
 
@@ -253,18 +272,20 @@ type cmdStream struct {
 }
 
 // deliver is called only from the read loop, with c.mu held, so it must never
-// block. One buffer slot is reserved for the final message; notifications
-// beyond the rest are dropped (they are hints — progress superseded,
-// list_changed idempotent). The single-producer len check is race-free: the
-// consumer only ever shrinks the buffer.
-func (st *cmdStream) deliver(m *protocol.Message, final bool) {
+// block. One buffer slot is reserved for the final message; a notification
+// that does not fit in the rest is not delivered (false) and the caller
+// decides whether that matters. The single-producer len check is race-free:
+// the consumer only ever shrinks the buffer.
+func (st *cmdStream) deliver(m *protocol.Message, final bool) bool {
 	if final {
 		st.ch <- m // the reserved slot guarantees room
-		return
+		return true
 	}
 	if len(st.ch) < cap(st.ch)-1 {
 		st.ch <- m
+		return true
 	}
+	return false
 }
 
 func (st *cmdStream) Recv() (*protocol.Message, error) {

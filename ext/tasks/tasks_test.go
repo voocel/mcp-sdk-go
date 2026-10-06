@@ -568,28 +568,38 @@ func TestOrphanCancelStoreFailure(t *testing.T) {
 	ctx := context.Background()
 	st := &failingStore{MemStore: tasks.NewMemStore()}
 	srv := server.New(&server.Options{Impl: protocol.Implementation{Name: "s", Version: "1"}})
-	tasks.Install(srv, st, nil)
-
-	// Seed an orphaned working task: present in the store, no live runner.
-	now := time.Now().UTC().Format(time.RFC3339Nano)
-	if err := st.Put(ctx, &tasks.DetailedTask{
-		Task: tasks.Task{TaskID: "orph", Status: tasks.StatusWorking, CreatedAt: now, LastUpdatedAt: now},
-	}); err != nil {
-		t.Fatal(err)
-	}
+	tk := tasks.Install(srv, st, nil)
+	tasks.AddTool(tk, &protocol.Tool{Name: "job"},
+		func(ctx context.Context, tc *tasks.Context, _ struct{}) (*protocol.CallToolResult, error) {
+			return protocol.NewToolResultText("done"), nil
+		})
 
 	opts := &client.Options{Info: &protocol.Implementation{Name: "C", Version: "1"}}
 	tasks.EnableClient(opts)
 	c := client.New(mem.New(srv), opts)
 	defer c.Close()
 
+	// Seed an orphaned working task: run a real task to completion, then rewind
+	// its stored record to working. It is in the store with no live runner.
+	task := callAsTask(t, ctx, c, "job", nil)
+	waitStatus(t, ctx, c, task.TaskID, tasks.StatusCompleted)
+	seed, err := st.Get(ctx, task.TaskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seed.Status, seed.Result, seed.TTLMs = tasks.StatusWorking, nil, nil
+	if err := st.Put(ctx, seed); err != nil {
+		t.Fatal(err)
+	}
+	orphan := task.TaskID
+
 	// A persistence failure must surface: acknowledging an unpersisted cancel
 	// would lie to the client.
 	st.failPut.Store(true)
-	if err := tasks.Cancel(ctx, c, "orph"); err == nil {
+	if err := tasks.Cancel(ctx, c, orphan); err == nil {
 		t.Fatal("cancel with a failing store must error")
 	}
-	d, err := tasks.Get(ctx, c, "orph")
+	d, err := tasks.Get(ctx, c, orphan)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -599,10 +609,10 @@ func TestOrphanCancelStoreFailure(t *testing.T) {
 
 	// Once the store recovers, the orphan settles as cancelled.
 	st.failPut.Store(false)
-	if err := tasks.Cancel(ctx, c, "orph"); err != nil {
+	if err := tasks.Cancel(ctx, c, orphan); err != nil {
 		t.Fatal(err)
 	}
-	d, err = tasks.Get(ctx, c, "orph")
+	d, err = tasks.Get(ctx, c, orphan)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -772,6 +782,58 @@ func TestTaskNotifications(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("timeout waiting for notifications/tasks")
+	}
+}
+
+type ownerKey struct{}
+
+func TestTaskOwnerIsolation(t *testing.T) {
+	base, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	alice := context.WithValue(base, ownerKey{}, "alice")
+	bob := context.WithValue(base, ownerKey{}, "bob")
+	f := newFixture(t, &tasks.Options{Owner: func(ctx context.Context, _ *server.Request) string {
+		owner, _ := ctx.Value(ownerKey{}).(string)
+		return owner
+	}})
+	c := newClient(t, f, true)
+
+	task := callAsTask(t, alice, c, "slow", nil)
+	if _, err := tasks.Get(alice, c, task.TaskID); err != nil {
+		t.Fatalf("owner Get: %v", err)
+	}
+
+	// Another owner holding the exact ID gets what an unknown task gets, for
+	// every task method.
+	_, unknown := tasks.Get(bob, c, "no-such-task")
+	for name, err := range map[string]error{
+		"get":    func() error { _, err := tasks.Get(bob, c, task.TaskID); return err }(),
+		"update": tasks.Update(bob, c, task.TaskID, protocol.InputResponses{}),
+		"cancel": tasks.Cancel(bob, c, task.TaskID),
+	} {
+		var pe *protocol.Error
+		if !errors.As(err, &pe) || pe.Code != protocol.CodeInvalidParams || err.Error() != unknown.Error() {
+			t.Fatalf("%s as another owner = %v, want the unknown-task error %v", name, err, unknown)
+		}
+	}
+	if d, _ := tasks.Get(alice, c, task.TaskID); d.Status != tasks.StatusWorking {
+		t.Fatalf("another owner's cancel took effect: %+v", d)
+	}
+
+	// Nor can they follow it: its notification never reaches their stream.
+	sub, err := c.Listen(bob, protocol.SubscriptionFilter{
+		Extra: map[string]json.RawMessage{tasks.FilterTaskIDs: mustJSON(t, []string{task.TaskID})},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sub.Close()
+	close(f.release)
+	waitStatus(t, alice, c, task.TaskID, tasks.StatusCompleted)
+	select {
+	case ev := <-sub.Events():
+		t.Fatalf("another owner received %+v", ev)
+	case <-time.After(200 * time.Millisecond):
 	}
 }
 

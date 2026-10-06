@@ -104,7 +104,7 @@ func (s *Server) handleListen(ctx context.Context, req *Request) (protocol.Resul
 		return nil, err
 	}
 
-	honored, topics, err := s.honorFilter(req, &p.Notifications)
+	honored, topics, err := s.honorFilter(ctx, req, &p.Notifications)
 	if err != nil {
 		return nil, err
 	}
@@ -231,7 +231,7 @@ func emitCancelled(req *Request, reason string) {
 // reads the same registrations capabilities derive from (OnDiscover edits
 // presentation only). An extension may reject the whole request via its
 // Topics hook (e.g. a missing client capability).
-func (s *Server) honorFilter(req *Request, f *protocol.SubscriptionFilter) (protocol.SubscriptionFilter, []string, error) {
+func (s *Server) honorFilter(ctx context.Context, req *Request, f *protocol.SubscriptionFilter) (protocol.SubscriptionFilter, []string, error) {
 	s.mu.RLock()
 	hasTools := s.toolsDeclared
 	hasPrompts := s.promptsDeclared
@@ -268,7 +268,7 @@ func (s *Server) honorFilter(req *Request, f *protocol.SubscriptionFilter) (prot
 	}
 	for key, value := range f.Extra {
 		for _, e := range exts {
-			ts, ok, err := e.Topics(req, key, value)
+			ts, ok, err := e.Topics(ctx, req, key, value)
 			if err != nil {
 				return protocol.SubscriptionFilter{}, nil, err
 			}

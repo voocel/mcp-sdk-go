@@ -195,6 +195,12 @@ func wrapToolHandler[In, Out any](tool *protocol.Tool, handler ToolHandlerFor[In
 	if err != nil {
 		return nil, nil, fmt.Errorf("input schema: %w", err)
 	}
+	// Compiled here, not per call: a schema that cannot compile (e.g. an
+	// unresolvable $ref) is a registration error, never the caller's fault.
+	inputValidator, err := compileRawSchema(toolCopy.InputSchema)
+	if err != nil {
+		return nil, nil, fmt.Errorf("input schema: %w", err)
+	}
 	outputSchema, err := setupOutputSchema[Out](&toolCopy)
 	if err != nil {
 		return nil, nil, fmt.Errorf("output schema: %w", err)
@@ -214,10 +220,12 @@ func wrapToolHandler[In, Out any](tool *protocol.Tool, handler ToolHandlerFor[In
 		if args == nil {
 			args = make(map[string]any)
 		}
-		input, err := unmarshalAndValidate[In](args, inputSchema)
+		input, err := unmarshalAndValidate[In](args, inputSchema, inputValidator)
 		if err != nil {
-			return nil, protocol.Errorf(protocol.CodeInvalidParams,
-				"invalid arguments for tool %q: %v", toolCopy.Name, err)
+			// Input validation failures are tool execution errors: the model
+			// can read them and retry with corrected arguments.
+			return protocol.NewToolResultError(
+				fmt.Sprintf("invalid arguments for tool %q: %v", toolCopy.Name, err)), nil
 		}
 
 		res, output, err := handler(ctx, req, input)

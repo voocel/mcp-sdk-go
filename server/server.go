@@ -146,7 +146,7 @@ type Extension struct {
 	// raw value) into hub topics. Returning ok=false leaves the field to
 	// other extensions; ok=true with no topics leaves it unhonored. A non-nil
 	// err rejects the whole listen request (e.g. a missing client capability).
-	Topics func(req *Request, key string, value json.RawMessage) (topics []string, ok bool, err error)
+	Topics func(ctx context.Context, req *Request, key string, value json.RawMessage) (topics []string, ok bool, err error)
 }
 
 // AddExtension registers an extension. It panics on ID or method collisions

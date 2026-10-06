@@ -17,10 +17,11 @@ func (c *Client) Discover(ctx context.Context) (*protocol.DiscoverResult, error)
 	return &res, nil
 }
 
-// ListTools fetches one page of tools. Tools with invalid x-mcp-header
+// ListTools fetches one page of tools; pass nil for the first page and the
+// previous result's NextCursor for the next. Tools with invalid x-mcp-header
 // bindings are excluded per spec; their bindings are cached for header
 // generation on later CallTool requests.
-func (c *Client) ListTools(ctx context.Context, cursor string) (*protocol.ListToolsResult, error) {
+func (c *Client) ListTools(ctx context.Context, cursor *string) (*protocol.ListToolsResult, error) {
 	var res protocol.ListToolsResult
 	if err := c.Call(ctx, protocol.MethodToolsList, protocol.ListToolsParams{Cursor: cursor}, &res); err != nil {
 		return nil, err
@@ -35,7 +36,7 @@ func (c *Client) Tools(ctx context.Context) iter.Seq2[*protocol.Tool, error] {
 		func(r *protocol.ListToolsResult) ([]*protocol.Tool, *string) { return r.Tools, r.NextCursor })
 }
 
-func (c *Client) ListPrompts(ctx context.Context, cursor string) (*protocol.ListPromptsResult, error) {
+func (c *Client) ListPrompts(ctx context.Context, cursor *string) (*protocol.ListPromptsResult, error) {
 	var res protocol.ListPromptsResult
 	if err := c.Call(ctx, protocol.MethodPromptsList, protocol.ListPromptsParams{Cursor: cursor}, &res); err != nil {
 		return nil, err
@@ -49,7 +50,7 @@ func (c *Client) Prompts(ctx context.Context) iter.Seq2[*protocol.Prompt, error]
 		func(r *protocol.ListPromptsResult) ([]*protocol.Prompt, *string) { return r.Prompts, r.NextCursor })
 }
 
-func (c *Client) ListResources(ctx context.Context, cursor string) (*protocol.ListResourcesResult, error) {
+func (c *Client) ListResources(ctx context.Context, cursor *string) (*protocol.ListResourcesResult, error) {
 	var res protocol.ListResourcesResult
 	if err := c.Call(ctx, protocol.MethodResourcesList, protocol.ListResourcesParams{Cursor: cursor}, &res); err != nil {
 		return nil, err
@@ -65,7 +66,7 @@ func (c *Client) Resources(ctx context.Context) iter.Seq2[*protocol.Resource, er
 		})
 }
 
-func (c *Client) ListResourceTemplates(ctx context.Context, cursor string) (*protocol.ListResourceTemplatesResult, error) {
+func (c *Client) ListResourceTemplates(ctx context.Context, cursor *string) (*protocol.ListResourceTemplatesResult, error) {
 	var res protocol.ListResourceTemplatesResult
 	if err := c.Call(ctx, protocol.MethodResourcesTemplatesList, protocol.ListResourceTemplatesParams{Cursor: cursor}, &res); err != nil {
 		return nil, err
@@ -117,10 +118,10 @@ func (c *Client) ReadResource(ctx context.Context, p *protocol.ReadResourceParam
 
 // paged adapts a page-fetching method into an iterator. Only an absent cursor
 // ends the walk (see protocol.ListToolsResult.NextCursor).
-func paged[R any, T any](ctx context.Context, fetch func(context.Context, string) (*R, error),
+func paged[R any, T any](ctx context.Context, fetch func(context.Context, *string) (*R, error),
 	split func(*R) ([]T, *string)) iter.Seq2[T, error] {
 	return func(yield func(T, error) bool) {
-		cursor := ""
+		var cursor *string
 		for {
 			res, err := fetch(ctx, cursor)
 			if err != nil {
@@ -137,7 +138,7 @@ func paged[R any, T any](ctx context.Context, fetch func(context.Context, string
 			if next == nil {
 				return
 			}
-			cursor = *next
+			cursor = next
 		}
 	}
 }

@@ -63,7 +63,7 @@ func TestEndToEnd(t *testing.T) {
 		t.Fatalf("serverInfo: %+v", disc.Meta)
 	}
 
-	list, err := c.ListTools(ctx, "")
+	list, err := c.ListTools(ctx, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -321,7 +321,7 @@ func (invalidToolHandler) Handle(ctx context.Context, msg *protocol.Message, emi
 
 func TestClientExcludesInvalidTools(t *testing.T) {
 	c := client.New(mem.New(invalidToolHandler{}), nil)
-	list, err := c.ListTools(context.Background(), "")
+	list, err := c.ListTools(context.Background(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -331,12 +331,22 @@ func TestClientExcludesInvalidTools(t *testing.T) {
 }
 
 // emptyCursorHandler serves two pages, the second reachable only through an
-// empty-string nextCursor — a valid opaque cursor the client must follow.
+// empty-string nextCursor — a valid opaque cursor the client must send back.
+// It pages by the request's cursor (not by call count), so a client that drops
+// the empty cursor is served page one again and fails the call budget.
 type emptyCursorHandler struct{ calls atomic.Int32 }
 
 func (h *emptyCursorHandler) Handle(ctx context.Context, msg *protocol.Message, emit func(*protocol.Message) error) {
+	if h.calls.Add(1) > 3 {
+		_ = emit(protocol.NewErrorResponse(msg.ID, protocol.Errorf(protocol.CodeInternal, "client keeps refetching page one")))
+		return
+	}
+	var p struct {
+		Cursor *string `json:"cursor"`
+	}
+	_ = json.Unmarshal(msg.Params, &p)
 	res := &protocol.ListToolsResult{}
-	if h.calls.Add(1) == 1 {
+	if p.Cursor == nil {
 		empty := ""
 		res.Tools = []*protocol.Tool{{Name: "first", InputSchema: protocol.JSONSchema{"type": "object"}}}
 		res.NextCursor = &empty
@@ -383,6 +393,25 @@ func TestClientTreatsMissingResultTypeAsComplete(t *testing.T) {
 	}
 	if len(res.Content) != 0 {
 		t.Fatalf("content = %+v", res.Content)
+	}
+}
+
+// inputRequiredHandler answers every request with an input_required result.
+type inputRequiredHandler struct{}
+
+func (inputRequiredHandler) Handle(ctx context.Context, msg *protocol.Message, emit func(*protocol.Message) error) {
+	out, _ := protocol.NewResponse(msg.ID, protocol.RequireInput(nil, "state"))
+	_ = emit(out)
+}
+
+func TestListRejectsNonCompleteResult(t *testing.T) {
+	// input_required is legal only for tools/call, prompts/get and
+	// resources/read; anywhere else it is invalid, not an empty list.
+	c := client.New(mem.New(inputRequiredHandler{}), nil)
+	_, err := c.ListTools(context.Background(), nil)
+	var ute *client.UnexpectedResultTypeError
+	if !errors.As(err, &ute) || ute.ResultType != protocol.ResultTypeInputRequired {
+		t.Fatalf("ListTools = %v, want *UnexpectedResultTypeError(input_required)", err)
 	}
 }
 

@@ -105,11 +105,20 @@ func (c *Client) Close() error { return c.t.Close() }
 
 // Call issues a raw request and decodes its result — the escape hatch for
 // extension methods (it satisfies the tasks extension's Caller interface).
-// Error responses surface as *protocol.Error.
+// Error responses surface as *protocol.Error; a result that is not
+// resultType "complete" surfaces as *UnexpectedResultTypeError, since only the
+// MRTR methods (CallTool, GetPrompt, ReadResource) may answer otherwise.
 func (c *Client) Call(ctx context.Context, method string, params, result any) error {
 	raw, err := c.do(ctx, method, params)
 	if err != nil {
 		return err
+	}
+	rt, err := protocol.PeekResultType(raw)
+	if err != nil {
+		return err
+	}
+	if rt != protocol.ResultTypeComplete {
+		return &UnexpectedResultTypeError{ResultType: rt, Raw: raw}
 	}
 	if result != nil {
 		return json.Unmarshal(raw, result)

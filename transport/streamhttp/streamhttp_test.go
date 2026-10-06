@@ -533,7 +533,7 @@ func TestClientEndToEnd(t *testing.T) {
 	})
 	defer c.Close()
 
-	lst, err := c.ListTools(ctx, "")
+	lst, err := c.ListTools(ctx, nil)
 	if err != nil {
 		t.Fatalf("ListTools: %v", err)
 	}

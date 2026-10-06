@@ -357,7 +357,7 @@ func TestCommandRoundTrip(t *testing.T) {
 		}
 	}()
 
-	lst, err := c.ListTools(ctx, "")
+	lst, err := c.ListTools(ctx, nil)
 	if err != nil {
 		t.Fatalf("ListTools: %v", err)
 	}
@@ -406,5 +406,38 @@ func TestCommandRoundTrip(t *testing.T) {
 	closed = true
 	if err := c.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
+	}
+}
+
+func TestCommandSubscriptionOverflowEndsStream(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	cmd := exec.Command(os.Args[0])
+	cmd.Env = append(os.Environ(), helperEnv+"=1")
+	tr, err := stdio.NewCommand(cmd, &stdio.CommandOptions{Stderr: io.Discard})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := client.New(tr, &client.Options{Info: &protocol.Implementation{Name: "test-client", Version: "1"}})
+	defer c.Close()
+
+	sub, err := c.Listen(ctx, protocol.SubscriptionFilter{ResourceSubscriptions: []string{"test://res"}})
+	if err != nil {
+		t.Fatalf("Listen: %v", err)
+	}
+	// Flood the subscription while nobody reads its events: far more than the
+	// stream and subscription buffers hold.
+	for range 200 {
+		if _, err := c.CallTool(ctx, &protocol.CallToolParams{Name: "touch"}); err != nil {
+			t.Fatalf("CallTool touch: %v", err)
+		}
+	}
+
+	// Notifications must not vanish silently: the stream ends with an error.
+	for range sub.Events() {
+	}
+	if err := sub.Err(); err == nil || !strings.Contains(err.Error(), "overflow") {
+		t.Fatalf("Err after overflow = %v, want a subscription overflow error", err)
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
+	"strings"
 	"sync"
 	"time"
 
@@ -23,6 +24,11 @@ type Options struct {
 	// declare the tasks capability on the request, instead of falling back to
 	// synchronous execution.
 	Reject bool
+	// Owner identifies who may access a task, typically the authenticated
+	// principal read from ctx. Task IDs embed a tag of their owner, so a request
+	// from anyone else sees the task as not found. Nil puts every caller in one
+	// namespace, where the task ID alone (128 random bits) is a bearer token.
+	Owner func(ctx context.Context, req *server.Request) string
 }
 
 // Tasks is the installed extension; AddTool registers task-capable tools
@@ -70,7 +76,7 @@ func Install(s *server.Server, store Store, opts *Options) *Tasks {
 			MethodUpdate: "taskId",
 			MethodCancel: "taskId",
 		},
-		Topics: func(req *server.Request, key string, value json.RawMessage) ([]string, bool, error) {
+		Topics: func(ctx context.Context, req *server.Request, key string, value json.RawMessage) ([]string, bool, error) {
 			if key != FilterTaskIDs {
 				return nil, false, nil
 			}
@@ -80,12 +86,14 @@ func Install(s *server.Server, store Store, opts *Options) *Tasks {
 				return nil, true, err
 			}
 			var ids []string
-			if json.Unmarshal(value, &ids) != nil || len(ids) == 0 {
+			if json.Unmarshal(value, &ids) != nil {
 				return nil, true, nil
 			}
-			topics := make([]string, len(ids))
-			for i, id := range ids {
-				topics[i] = taskTopic(id)
+			var topics []string
+			for _, id := range ids {
+				if t.owns(ctx, req, id) {
+					topics = append(topics, taskTopic(id))
+				}
 			}
 			return topics, true, nil
 		},
@@ -145,7 +153,7 @@ func AddTool[In any](t *Tasks, tool *protocol.Tool, handler HandlerFor[In]) {
 			res, err := handler(ctx, &Context{}, in)
 			return res, nil, err
 		}
-		task, err := t.start(func(runCtx context.Context, tc *Context) (*protocol.CallToolResult, error) {
+		task, err := t.start(t.ownerTag(ctx, req.Request), func(runCtx context.Context, tc *Context) (*protocol.CallToolResult, error) {
 			res, err := handler(runCtx, tc, in)
 			if err != nil {
 				return res, err
@@ -236,11 +244,39 @@ func (c *Context) RequireInput(ctx context.Context, requests protocol.InputReque
 	return answers, nil
 }
 
+// ownerTag is the ID prefix of the tasks the request's owner may access.
+func (t *Tasks) ownerTag(ctx context.Context, req *server.Request) string {
+	var owner string
+	if t.opts.Owner != nil {
+		owner = t.opts.Owner(ctx, req)
+	}
+	return ownerTagOf(owner)
+}
+
+// owns reports whether the request's owner may access the task.
+func (t *Tasks) owns(ctx context.Context, req *server.Request, id string) bool {
+	return strings.HasPrefix(id, t.ownerTag(ctx, req))
+}
+
+// task loads the task a request addresses. One the owner may not access is
+// indistinguishable from one that does not exist.
+func (t *Tasks) task(ctx context.Context, req *server.Request, id string) (*DetailedTask, error) {
+	notFound := protocol.Errorf(protocol.CodeInvalidParams, "Failed to retrieve task: Task not found")
+	if !t.owns(ctx, req, id) {
+		return nil, notFound
+	}
+	d, err := t.store.Get(ctx, id)
+	if errors.Is(err, ErrNotFound) {
+		return nil, notFound
+	}
+	return d, err
+}
+
 // start durably creates the task, then launches the handler on its own
 // context. The spec forbids returning a CreateTaskResult before the task is
 // durable.
-func (t *Tasks) start(exec func(context.Context, *Context) (*protocol.CallToolResult, error)) (*Task, error) {
-	id, err := newTaskID()
+func (t *Tasks) start(ownerTag string, exec func(context.Context, *Context) (*protocol.CallToolResult, error)) (*Task, error) {
+	id, err := newTaskID(ownerTag)
 	if err != nil {
 		return nil, err
 	}
@@ -367,10 +403,7 @@ func (t *Tasks) handleGet(ctx context.Context, req *server.Request) (protocol.Re
 	if err := json.Unmarshal(req.RawParams(), &p); err != nil || p.TaskID == "" {
 		return nil, protocol.Errorf(protocol.CodeInvalidParams, "invalid tasks/get params")
 	}
-	d, err := t.store.Get(ctx, p.TaskID)
-	if errors.Is(err, ErrNotFound) {
-		return nil, protocol.Errorf(protocol.CodeInvalidParams, "Failed to retrieve task: Task not found")
-	}
+	d, err := t.task(ctx, req, p.TaskID)
 	if err != nil {
 		return nil, err
 	}
@@ -385,10 +418,7 @@ func (t *Tasks) handleUpdate(ctx context.Context, req *server.Request) (protocol
 	if err := json.Unmarshal(req.RawParams(), &p); err != nil || p.TaskID == "" {
 		return nil, protocol.Errorf(protocol.CodeInvalidParams, "invalid tasks/update params")
 	}
-	d, err := t.store.Get(ctx, p.TaskID)
-	if errors.Is(err, ErrNotFound) {
-		return nil, protocol.Errorf(protocol.CodeInvalidParams, "Failed to retrieve task: Task not found")
-	}
+	d, err := t.task(ctx, req, p.TaskID)
 	if err != nil {
 		return nil, err
 	}
@@ -421,10 +451,7 @@ func (t *Tasks) handleCancel(ctx context.Context, req *server.Request) (protocol
 	if err := json.Unmarshal(req.RawParams(), &p); err != nil || p.TaskID == "" {
 		return nil, protocol.Errorf(protocol.CodeInvalidParams, "invalid tasks/cancel params")
 	}
-	d, err := t.store.Get(ctx, p.TaskID)
-	if errors.Is(err, ErrNotFound) {
-		return nil, protocol.Errorf(protocol.CodeInvalidParams, "Failed to retrieve task: Task not found")
-	}
+	d, err := t.task(ctx, req, p.TaskID)
 	if err != nil {
 		return nil, err
 	}

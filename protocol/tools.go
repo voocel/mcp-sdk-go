@@ -37,7 +37,7 @@ type ToolAnnotations struct {
 
 type ListToolsParams struct {
 	Meta   RequestMeta `json:"_meta"`
-	Cursor string      `json:"cursor,omitempty"`
+	Cursor *string     `json:"cursor,omitempty"`
 }
 
 type ListToolsResult struct {

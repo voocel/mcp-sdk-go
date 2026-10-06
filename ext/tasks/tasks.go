@@ -9,6 +9,7 @@ package tasks
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 
@@ -116,12 +117,20 @@ type CancelParams struct {
 // Capability is the value to declare under client Options.Extensions[ID].
 type Capability struct{}
 
-func newTaskID() (string, error) {
+// ownerTagOf namespaces task IDs by owner: an ID is the owner's tag followed by
+// 128 random bits. Authorization is a prefix comparison against the caller's
+// own tag, so the secrecy of an ID is never what separates owners.
+func ownerTagOf(owner string) string {
+	sum := sha256.Sum256([]byte(owner))
+	return hex.EncodeToString(sum[:8])
+}
+
+func newTaskID(ownerTag string) (string, error) {
 	b := make([]byte, 16)
 	if _, err := rand.Read(b); err != nil {
 		return "", err
 	}
-	return hex.EncodeToString(b), nil
+	return ownerTag + hex.EncodeToString(b), nil
 }
 
 func taskTopic(id string) string { return "task:" + id }

@@ -58,18 +58,9 @@ func schemaToMap(schema *invopop.Schema) (protocol.JSONSchema, error) {
 	return schemaMap, nil
 }
 
-// compileSchema compiles a JSON Schema for validation and caches the result.
-func compileSchema(schema *invopop.Schema) (*jsonschema.Schema, error) {
-	schemaBytes, err := json.Marshal(schema)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal schema: %w", err)
-	}
-	return compileSchemaBytes(schemaBytes)
-}
-
 // compileRawSchema compiles a wire-format schema, sharing the validator cache.
-// Unlike compileSchema it does not round-trip through the inference type, so
-// keywords unknown to it survive.
+// It never round-trips through the inference type, so keywords unknown to that
+// type survive.
 func compileRawSchema(m protocol.JSONSchema) (*jsonschema.Schema, error) {
 	schemaBytes, err := json.Marshal(m)
 	if err != nil {
@@ -124,25 +115,13 @@ func applyDefaults(data map[string]any, schema *invopop.Schema) {
 	}
 }
 
-// applySchema applies defaults and validates data.
-func applySchema(data map[string]any, schema *invopop.Schema) error {
-	applyDefaults(data, schema)
-	compiled, err := compileSchema(schema)
-	if err != nil {
-		return fmt.Errorf("failed to compile schema: %w", err)
-	}
-	if err := compiled.Validate(data); err != nil {
-		return fmt.Errorf("validation failed: %w", err)
-	}
-	return nil
-}
-
-// unmarshalAndValidate validates map data against schema and unmarshals it
-// into T.
-func unmarshalAndValidate[T any](data map[string]any, schema *invopop.Schema) (T, error) {
+// unmarshalAndValidate fills data's declared defaults, validates it against
+// the schema compiled at registration, and unmarshals it into T.
+func unmarshalAndValidate[T any](data map[string]any, defaults *invopop.Schema, compiled *compiledSchema) (T, error) {
 	var zero T
-	if err := applySchema(data, schema); err != nil {
-		return zero, err
+	applyDefaults(data, defaults)
+	if err := compiled.Validate(data); err != nil {
+		return zero, fmt.Errorf("validation failed: %w", err)
 	}
 	dataBytes, err := json.Marshal(data)
 	if err != nil {

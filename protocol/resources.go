@@ -45,7 +45,7 @@ func NewBlobResourceContents(uri, mimeType, blob string) ResourceContents {
 
 type ListResourcesParams struct {
 	Meta   RequestMeta `json:"_meta"`
-	Cursor string      `json:"cursor,omitempty"`
+	Cursor *string     `json:"cursor,omitempty"`
 }
 
 type ListResourcesResult struct {
@@ -59,7 +59,7 @@ func (*ListResourcesResult) ResultType() string { return ResultTypeComplete }
 
 type ListResourceTemplatesParams struct {
 	Meta   RequestMeta `json:"_meta"`
-	Cursor string      `json:"cursor,omitempty"`
+	Cursor *string     `json:"cursor,omitempty"`
 }
 
 type ListResourceTemplatesResult struct {
