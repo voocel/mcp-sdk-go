@@ -12,6 +12,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
 	"time"
 
 	"github.com/voocel/mcp-sdk-go/client"
@@ -64,9 +65,29 @@ func runServer() {
 	// Origin validation is on by default (localhost origins and requests
 	// without an Origin header are allowed; browser frontends on other
 	// domains need Options.AllowedOrigins).
-	http.Handle("/mcp", streamhttp.NewHandler(srv, nil))
+	mux := http.NewServeMux()
+	mux.Handle("/mcp", streamhttp.NewHandler(srv, nil))
+	hs := &http.Server{Addr: addr, Handler: mux}
+
+	// Graceful shutdown: end the subscription streams first (http.Server.Shutdown
+	// would wait on them forever), then drain the HTTP server.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+	drained := make(chan struct{})
+	go func() {
+		defer close(drained)
+		<-ctx.Done()
+		sctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = srv.Shutdown(sctx)
+		_ = hs.Shutdown(sctx)
+	}()
+
 	log.Printf("MCP server on http://%s/mcp", addr)
-	log.Fatal(http.ListenAndServe(addr, nil))
+	if err := hs.ListenAndServe(); err != http.ErrServerClosed {
+		log.Fatal(err)
+	}
+	<-drained
 }
 
 func runClient() {
