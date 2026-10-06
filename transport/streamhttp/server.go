@@ -20,22 +20,18 @@ import (
 	"github.com/voocel/mcp-sdk-go/protocol"
 )
 
-// Backend is the structural seam of the server side (satisfied by
-// *server.Server).
+// Backend is the structural seam of the server side, satisfied by
+// *server.Server (embed it to wrap one). Header/body validation is a MUST of
+// the spec and needs the registry-derived facts below, so they are part of the
+// contract: a backend lacking them fails to compile instead of silently
+// skipping validation.
 type Backend interface {
 	Handle(ctx context.Context, msg *protocol.Message, emit func(*protocol.Message) error)
-}
-
-// headerBindingSource is optionally implemented by the backend (as
-// *server.Server does) to enable Mcp-Param-* header/body validation.
-type headerBindingSource interface {
+	// ToolHeaderBindings returns the x-mcp-header bindings of a tool, for
+	// Mcp-Param-* validation.
 	ToolHeaderBindings(name string) []headerbind.Binding
-}
-
-// routeNameSource is optionally implemented by the backend (as *server.Server
-// does) to extend Mcp-Name validation to extension methods that declared a
-// routing param (e.g. tasks/get -> "taskId").
-type routeNameSource interface {
+	// MethodNameParam reports the params key backing the Mcp-Name header of an
+	// extension method (e.g. tasks/get -> "taskId").
 	MethodNameParam(method string) (key string, ok bool)
 }
 
@@ -148,8 +144,8 @@ func (h *Handler) originAllowed(r *http.Request) bool {
 	return slices.Contains(h.opts.AllowedOrigins, origin)
 }
 
-// validateHeaders enforces the standard header rules and, when the backend
-// exposes bindings, the Mcp-Param-* validation matrix.
+// validateHeaders enforces the standard header rules and the Mcp-Param-*
+// validation matrix.
 func (h *Handler) validateHeaders(r *http.Request, msg *protocol.Message) *protocol.Error {
 	// MCP-Protocol-Version: required, must match _meta.
 	hv := r.Header.Get(headerProtocolVersion)
@@ -189,11 +185,7 @@ func (h *Handler) validateHeaders(r *http.Request, msg *protocol.Message) *proto
 	case protocol.MethodResourcesRead:
 		bodyName = probe.URI
 	default:
-		rns, ok := h.backend.(routeNameSource)
-		if !ok {
-			return nil
-		}
-		key, ok := rns.MethodNameParam(msg.Method)
+		key, ok := h.backend.MethodNameParam(msg.Method)
 		if !ok {
 			return nil
 		}
@@ -215,9 +207,7 @@ func (h *Handler) validateHeaders(r *http.Request, msg *protocol.Message) *proto
 	}
 
 	if msg.Method == protocol.MethodToolsCall {
-		if bs, ok := h.backend.(headerBindingSource); ok {
-			return validateParamHeaders(r, bs.ToolHeaderBindings(bodyName), probe.Arguments)
-		}
+		return validateParamHeaders(r, h.backend.ToolHeaderBindings(bodyName), probe.Arguments)
 	}
 	return nil
 }

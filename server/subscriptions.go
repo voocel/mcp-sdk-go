@@ -128,9 +128,13 @@ func (s *Server) handleListen(ctx context.Context, req *Request) (protocol.Resul
 		case <-ctx.Done():
 			// Torn down from the outside, so no cancelled notification (see
 			// emitCancelled); the empty result closes the stream.
-			res := &protocol.ListenResult{}
-			res.Meta.SubscriptionID = req.id
-			return res, nil
+			return listenEnded(req), nil
+		case <-s.closing:
+			// Server-initiated teardown: the spec requires the cancelled
+			// notification, and asks for a complete result to mark the end as
+			// graceful rather than a dropped connection.
+			emitCancelled(req, "server shutting down")
+			return listenEnded(req), nil
 		case <-sub.over:
 			// A notification was lost; ending the stream with an error is the
 			// only honest outcome — the client re-listens and re-syncs.
@@ -147,10 +151,61 @@ func (s *Server) handleListen(ctx context.Context, req *Request) (protocol.Resul
 					"failed to encode subscription notification %s: %v", ev.method, err)
 			}
 			if err := req.emit(msg); err != nil {
-				res := &protocol.ListenResult{}
-				res.Meta.SubscriptionID = req.id
-				return res, nil
+				return listenEnded(req), nil
 			}
+		}
+	}
+}
+
+// listenEnded is the empty complete result that gracefully ends a listen
+// stream; its _meta carries the subscription ID.
+func listenEnded(req *Request) *protocol.ListenResult {
+	res := &protocol.ListenResult{}
+	res.Meta.SubscriptionID = req.id
+	return res
+}
+
+// trackStream registers an active listen stream and returns its release
+// function.
+func (s *Server) trackStream() func() {
+	done := make(chan struct{})
+	s.streamMu.Lock()
+	s.streams[done] = struct{}{}
+	s.streamMu.Unlock()
+	return func() {
+		s.streamMu.Lock()
+		delete(s.streams, done)
+		s.streamMu.Unlock()
+		close(done)
+	}
+}
+
+// Shutdown ends every subscriptions/listen stream the way the spec prescribes
+// for server-initiated teardown (notifications/cancelled, then a complete
+// result) and waits until each has been handed to its transport, or ctx ends.
+// Streams opened afterwards end immediately. Other requests are untouched:
+// transports drain those themselves.
+//
+// Call it before the transport stops: http.Server.Shutdown waits for handlers
+// that listen streams would never finish, and stdio.Serve stops writing once
+// its context is cancelled.
+func (s *Server) Shutdown(ctx context.Context) error {
+	s.closeOnce.Do(func() { close(s.closing) })
+	for {
+		var pending chan struct{}
+		s.streamMu.Lock()
+		for done := range s.streams {
+			pending = done
+			break
+		}
+		s.streamMu.Unlock()
+		if pending == nil {
+			return nil
+		}
+		select {
+		case <-pending:
+		case <-ctx.Done():
+			return ctx.Err()
 		}
 	}
 }

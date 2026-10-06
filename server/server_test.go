@@ -670,6 +670,115 @@ func TestListenOverflowTerminates(t *testing.T) {
 	}
 }
 
+func listenMsg(t *testing.T, id int64) *protocol.Message {
+	t.Helper()
+	msg, err := protocol.NewRequest(protocol.IntID(id), protocol.MethodSubscriptionsListen, protocol.ListenParams{
+		Meta:          newMeta(),
+		Notifications: protocol.SubscriptionFilter{ToolsListChanged: true},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return msg
+}
+
+// wantTeardown asserts the spec's sequence for server-initiated teardown of
+// listen request id: notifications/cancelled, then a complete result.
+func wantTeardown(t *testing.T, msgs chan *protocol.Message, id int64) {
+	t.Helper()
+	cancelled := recvMsg(t, msgs)
+	if cancelled.Method != protocol.NotificationCancelled {
+		t.Fatalf("first teardown message = %+v, want notifications/cancelled", cancelled)
+	}
+	var p protocol.CancelledParams
+	if err := json.Unmarshal(cancelled.Params, &p); err != nil {
+		t.Fatal(err)
+	}
+	if p.RequestID != protocol.IntID(id) {
+		t.Fatalf("cancelled requestId = %v, want %d", p.RequestID, id)
+	}
+	res := decodeResult[protocol.ListenResult](t, recvMsg(t, msgs))
+	if res.Meta.SubscriptionID != protocol.IntID(id) {
+		t.Fatalf("final result meta: %+v", res.Meta)
+	}
+}
+
+func TestShutdownEndsListenGracefully(t *testing.T) {
+	s := newTestServer(t)
+	msgs := make(chan *protocol.Message, 8)
+	done := make(chan struct{})
+	first := listenMsg(t, 1)
+	go func() {
+		defer close(done)
+		s.Handle(context.Background(), first, func(m *protocol.Message) error { msgs <- m; return nil })
+	}()
+	if ack := recvMsg(t, msgs); ack.Method != protocol.NotificationSubscriptionsAcknowledged {
+		t.Fatalf("first message = %q", ack.Method)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := s.Shutdown(ctx); err != nil {
+		t.Fatal(err)
+	}
+	// Shutdown returns only after the final message was handed to the
+	// transport, so both teardown messages are already queued.
+	if len(msgs) != 2 {
+		t.Fatalf("queued messages after Shutdown = %d, want cancelled + result", len(msgs))
+	}
+	wantTeardown(t, msgs, 1)
+	<-done
+
+	// A stream opened after Shutdown is acknowledged, then torn down at once.
+	msgs = make(chan *protocol.Message, 8)
+	s.Handle(context.Background(), listenMsg(t, 2), func(m *protocol.Message) error { msgs <- m; return nil })
+	if ack := recvMsg(t, msgs); ack.Method != protocol.NotificationSubscriptionsAcknowledged {
+		t.Fatalf("first message = %q", ack.Method)
+	}
+	wantTeardown(t, msgs, 2)
+
+	// Idempotent, and a no-op without streams.
+	if err := s.Shutdown(ctx); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestShutdownHonorsContext(t *testing.T) {
+	s := newTestServer(t)
+	release := make(chan struct{})
+	done := make(chan struct{})
+	acked := make(chan struct{})
+	msg := listenMsg(t, 1)
+	go func() {
+		defer close(done)
+		first := true
+		s.Handle(context.Background(), msg, func(m *protocol.Message) error {
+			if first {
+				first = false
+				close(acked)
+				return nil
+			}
+			<-release // a transport that cannot take the teardown messages
+			return nil
+		})
+	}()
+	<-acked
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	if err := s.Shutdown(ctx); err != context.DeadlineExceeded {
+		t.Fatalf("Shutdown with a stuck stream = %v, want deadline exceeded", err)
+	}
+
+	close(release)
+	ctx2, cancel2 := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel2()
+	if err := s.Shutdown(ctx2); err != nil {
+		t.Fatal(err)
+	}
+	<-done
+}
+
 func TestOutputSchemaEnforced(t *testing.T) {
 	s := newTestServer(t)
 	schema := protocol.JSONSchema{

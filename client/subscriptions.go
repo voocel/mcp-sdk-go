@@ -138,6 +138,11 @@ func (s *Subscription) run() {
 		}
 		switch m.Kind() {
 		case protocol.KindNotification:
+			if m.Method == protocol.NotificationCancelled {
+				// Server-initiated teardown marker, not a change event; how
+				// the stream ends follows as a result or an error.
+				continue
+			}
 			// Blocking send is the natural backpressure; done unblocks it when
 			// the caller closes without draining, so run never leaks.
 			select {

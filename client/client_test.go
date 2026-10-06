@@ -254,6 +254,39 @@ func TestSubscription(t *testing.T) {
 	}
 }
 
+func TestSubscriptionServerShutdown(t *testing.T) {
+	s := server.New(nil)
+	server.AddTool(s, &protocol.Tool{Name: "seed"},
+		func(ctx context.Context, req *server.CallRequest, in any) (protocol.ToolResponse, any, error) {
+			return protocol.NewToolResultText("ok"), nil, nil
+		})
+	c := client.New(mem.New(s), nil)
+	sub, err := c.Listen(context.Background(), protocol.SubscriptionFilter{ToolsListChanged: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := s.Shutdown(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	// The teardown ends the stream gracefully: no event (the cancelled
+	// notification is a marker, not a change) and no error.
+	select {
+	case ev, ok := <-sub.Events():
+		if ok {
+			t.Fatalf("teardown surfaced as an event: %+v", ev)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("events not closed after server shutdown")
+	}
+	if sub.Err() != nil {
+		t.Fatalf("Err after graceful server shutdown: %v", sub.Err())
+	}
+}
+
 func recvEvent(t *testing.T, sub *client.Subscription) client.Event {
 	t.Helper()
 	select {

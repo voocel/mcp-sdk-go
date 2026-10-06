@@ -200,6 +200,32 @@ func TestServeConcurrency(t *testing.T) {
 	}
 }
 
+func TestServeShutdownEndsListenGracefully(t *testing.T) {
+	srv := testServer(func(ctx context.Context, req *server.CallRequest) (protocol.ToolResponse, error) {
+		return protocol.NewToolResultText("x"), nil
+	})
+	h := startServe(t, srv, nil)
+
+	h.send(t, fmt.Sprintf(`{"jsonrpc":"2.0","id":5,"method":"subscriptions/listen","params":{%s,"notifications":{"toolsListChanged":true}}}`, metaFragment))
+	if ack := h.recv(t); ack.Method != protocol.NotificationSubscriptionsAcknowledged {
+		t.Fatalf("first message = %q", ack.Method)
+	}
+
+	// Shutdown runs while Serve is still live, so both teardown messages reach
+	// the wire; cancelling Serve first would have suppressed them.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := srv.Shutdown(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if m := h.recv(t); m.Method != protocol.NotificationCancelled {
+		t.Fatalf("teardown first message = %+v, want notifications/cancelled", m)
+	}
+	if m := h.recv(t); m.Kind() != protocol.KindResponse || m.ID != protocol.IntID(5) {
+		t.Fatalf("teardown final message = %+v, want the listen result", m)
+	}
+}
+
 func TestServeCancelled(t *testing.T) {
 	started := make(chan struct{})
 	cancelled := make(chan struct{})

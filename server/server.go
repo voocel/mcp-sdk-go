@@ -76,6 +76,13 @@ type Server struct {
 	hub     *hub
 	methods map[string]RawHandler
 	sem     chan struct{}
+
+	// Shutdown state: closing ends every listen stream; streams tracks the
+	// active ones until their final message has been emitted.
+	closing   chan struct{}
+	closeOnce sync.Once
+	streamMu  sync.Mutex
+	streams   map[chan struct{}]struct{}
 }
 
 func New(opts *Options) *Server {
@@ -89,6 +96,8 @@ func New(opts *Options) *Server {
 		extMethods:        make(map[string]RawHandler),
 		extNameParams:     make(map[string]string),
 		hub:               newHub(),
+		closing:           make(chan struct{}),
+		streams:           make(map[chan struct{}]struct{}),
 	}
 	if opts != nil {
 		s.opts = *opts
@@ -214,6 +223,10 @@ func (s *Server) Handle(ctx context.Context, msg *protocol.Message, emit func(*p
 }
 
 func (s *Server) handleRequest(ctx context.Context, msg *protocol.Message, emit func(*protocol.Message) error) {
+	if msg.Method == protocol.MethodSubscriptionsListen {
+		// Tracked until the final response is emitted, which Shutdown waits for.
+		defer s.trackStream()()
+	}
 	req := &Request{
 		id:        msg.ID,
 		method:    msg.Method,

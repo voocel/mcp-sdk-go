@@ -343,6 +343,30 @@ func TestParamHeaderMatrix(t *testing.T) {
 	}
 }
 
+// wrapped decorates a server's Handle and inherits the rest by embedding, the
+// way an application adds behavior in front of *server.Server.
+type wrapped struct{ *server.Server }
+
+func (w wrapped) Handle(ctx context.Context, msg *protocol.Message, emit func(*protocol.Message) error) {
+	w.Server.Handle(ctx, msg, emit)
+}
+
+var _ streamhttp.Backend = wrapped{}
+
+func TestWrappedBackendStillValidatesParamHeaders(t *testing.T) {
+	srv, _ := newBackend()
+	ts := httptest.NewServer(streamhttp.NewHandler(wrapped{srv}, nil))
+	defer ts.Close()
+
+	h := stdHeaders("tools/call")
+	h["Mcp-Name"] = "hdr"
+	// The bound parameter is in the body but its Mcp-Param header is missing.
+	resp, body := doPost(t, ts.URL, callBody(1, "hdr", `{"region":"us"}`), h)
+	if resp.StatusCode != http.StatusBadRequest || errCode(t, body) != protocol.CodeHeaderMismatch {
+		t.Fatalf("status = %d, body: %s; want 400 HeaderMismatch", resp.StatusCode, body)
+	}
+}
+
 func TestHTTPBasics(t *testing.T) {
 	srv, _ := newBackend()
 	ts := httptest.NewServer(streamhttp.NewHandler(srv, nil))
@@ -568,6 +592,40 @@ func TestClientEndToEnd(t *testing.T) {
 		t.Fatal("timeout waiting for subscription event")
 	}
 	_ = sub.Close()
+}
+
+func TestServerShutdownEndsListenStreams(t *testing.T) {
+	srv, _ := newBackend()
+	ts := httptest.NewServer(streamhttp.NewHandler(srv, nil))
+	defer ts.Close()
+	c := client.New(streamhttp.New(ts.URL, nil), &client.Options{
+		Info: &protocol.Implementation{Name: "t", Version: "1"},
+	})
+	defer c.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	sub, err := c.Listen(ctx, protocol.SubscriptionFilter{ResourceSubscriptions: []string{"test://res"}})
+	if err != nil {
+		t.Fatalf("Listen: %v", err)
+	}
+	// Runs before ts.Close, so a failing test cannot hang on the open stream.
+	defer sub.Close()
+
+	if err := srv.Shutdown(ctx); err != nil {
+		t.Fatalf("server Shutdown: %v", err)
+	}
+	// The stream ended gracefully, so the handler returned and the HTTP server
+	// can drain: http.Server.Shutdown would otherwise wait on it until ctx ends.
+	if err := ts.Config.Shutdown(ctx); err != nil {
+		t.Fatalf("http Shutdown: %v", err)
+	}
+	for ev := range sub.Events() {
+		t.Fatalf("teardown surfaced as an event: %+v", ev)
+	}
+	if sub.Err() != nil {
+		t.Fatalf("Err after graceful server shutdown: %v", sub.Err())
+	}
 }
 
 func TestClientRetriesTransientStatus(t *testing.T) {
