@@ -28,6 +28,7 @@ It also ships the first Go implementation of the official **tasks extension** (`
 - **Subscriptions** — `subscriptions/listen` notification streams with filters, backed by a non-blocking hub.
 - **Tasks extension** — `tasks/get`, `tasks/update`, `tasks/cancel`, `notifications/tasks`, capability-gated per request with synchronous fallback, plus a pluggable `Store`.
 - **Two transports** — STDIO (newline-delimited, per-request goroutines, `notifications/cancelled`) and Streamable HTTP (single POST endpoint, JSON or SSE responses, stream-close cancellation, full `Mcp-*` header validation).
+- **OAuth authorization** — the client side of MCP authorization: Protected Resource Metadata and authorization server discovery, Client ID Metadata Documents and pre-registered clients, authorization code with PKCE on a loopback redirect, RFC 8707 `resource`, RFC 9207 `iss` validation, step-up scopes, and an `http.RoundTripper` that sends and refreshes the token.
 - **Safe defaults** — Origin validation on by default, body/message size limits, path traversal protection (`os.OpenRoot`), HMAC helpers for MRTR `requestState`, panics never leak stacks to the wire.
 - **Conformance-tested** — spec wire examples run as fixtures in CI: `resultType` on every result, `_meta` key rules, HTTP status mapping, header/body validation matrix, sentinel encoding.
 
@@ -97,6 +98,31 @@ res, err := c.CallTool(ctx, &protocol.CallToolParams{
 
 The client stamps `_meta` (protocol version, derived capabilities, client info) and the required `Mcp-*` HTTP headers on every request. For a subprocess server, use `stdio.NewCommand(exec.Command(...), nil)` as the transport.
 
+### Authorization
+
+```go
+authz := auth.New(auth.Config{
+	Server:            endpoint,
+	Store:             store,
+	ClientMetadataURL: "https://example.com/oauth/client.json",
+})
+c := client.New(streamhttp.New(endpoint, &streamhttp.TransportOptions{
+	HTTPClient: &http.Client{Transport: authz.Transport(http.DefaultTransport)},
+}), nil)
+
+_, err := c.Discover(ctx)
+var se *streamhttp.StatusError
+if errors.As(err, &se) && se.StatusCode == http.StatusUnauthorized {
+	l, _ := authz.Login(ctx) // discovers, listens on a loopback redirect URI
+	openBrowser(l.URL)
+	err = l.Wait(ctx) // stores the token; requests now carry it
+}
+```
+
+The client identifies itself as the 2026-07-28 specification orders: a client registered with the authorization server beforehand (`ClientID`, and `ClientSecret` if it has one; redirect URI `http://127.0.0.1/callback` on any port), or else its Client ID Metadata Document (`ClientMetadataURL`), which the authorization server fetches. The document lists loopback redirect URIs on fixed ports — a few, since login listens on the first free one — and `"token_endpoint_auth_method": "none"`. An authorization server that takes neither fails `Login` with `auth.ErrClientRequired`. Dynamic Client Registration, deprecated by the specification, is not supported.
+
+`Store` persists tokens by server URL; they are secrets, so keep them where only the user can read. The transport refreshes a token before it expires and once more when the server rejects it; a 401 or 403 it cannot fix comes back as a `*streamhttp.StatusError` for the caller to log in again.
+
 ### Elicitation (MRTR)
 
 A tool asks the user for input by returning an interim result; the client answers and retries automatically:
@@ -154,6 +180,7 @@ Clients that do not declare the capability get the tool executed synchronously (
 | `transport/streamhttp` | `Handler` (server) and `Transport` (client) for Streamable HTTP |
 | `transport/mem` | In-process transport for tests and embedding |
 | `ext/tasks` | Official tasks extension: server, client and store |
+| `auth` | Client side of MCP authorization: discovery, login, token refresh |
 
 ## Examples
 

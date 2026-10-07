@@ -28,6 +28,7 @@
 - **订阅** —— 带过滤器的 `subscriptions/listen` 通知流，由非阻塞 hub 支撑。
 - **Tasks 扩展** —— `tasks/get`、`tasks/update`、`tasks/cancel`、`notifications/tasks`，按每请求能力门控并支持同步回退，Store 可插拔。
 - **两种传输** —— STDIO（换行分帧、逐请求 goroutine、`notifications/cancelled`）与 Streamable HTTP（单 POST 端点、JSON/SSE 响应协商、断流即取消、完整 `Mcp-*` 头校验）。
+- **OAuth 授权** —— MCP 授权的客户端实现：Protected Resource Metadata 与授权服务器发现、Client ID Metadata Documents 与预注册客户端、回环重定向上带 PKCE 的授权码流程、RFC 8707 `resource`、RFC 9207 `iss` 校验、step-up 权限升级，以及负责携带和刷新 token 的 `http.RoundTripper`。
 - **安全默认值** —— Origin 校验默认开启、消息体大小限制、路径穿越防护（`os.OpenRoot`）、MRTR `requestState` HMAC 助手、panic 不向 wire 泄露堆栈。
 - **一致性测试** —— 规范 wire 示例作为 fixture 进 CI：每个结果的 `resultType`、`_meta` 保留键规则、HTTP 状态映射、头/体校验矩阵、哨兵编码。
 
@@ -97,6 +98,31 @@ res, err := c.CallTool(ctx, &protocol.CallToolParams{
 
 客户端在每个请求上自动盖 `_meta`（协议版本、推导能力、clientInfo）与必需的 `Mcp-*` HTTP 头。连接子进程服务端时，用 `stdio.NewCommand(exec.Command(...), nil)` 作为传输。
 
+### 授权
+
+```go
+authz := auth.New(auth.Config{
+	Server:            endpoint,
+	Store:             store,
+	ClientMetadataURL: "https://example.com/oauth/client.json",
+})
+c := client.New(streamhttp.New(endpoint, &streamhttp.TransportOptions{
+	HTTPClient: &http.Client{Transport: authz.Transport(http.DefaultTransport)},
+}), nil)
+
+_, err := c.Discover(ctx)
+var se *streamhttp.StatusError
+if errors.As(err, &se) && se.StatusCode == http.StatusUnauthorized {
+	l, _ := authz.Login(ctx) // 发现授权服务器、在回环重定向 URI 上监听
+	openBrowser(l.URL)
+	err = l.Wait(ctx) // 保存 token，之后的请求都会带上它
+}
+```
+
+客户端按 2026-07-28 规范规定的顺序表明身份：优先用事先在授权服务器注册的客户端（`ClientID`，有密钥再加 `ClientSecret`；重定向 URI 为 `http://127.0.0.1/callback`，端口任意），否则用它的 Client ID Metadata Document（`ClientMetadataURL`），由授权服务器去拉取。文档里列出固定端口的回环重定向 URI（多列几个，登录时监听第一个空闲的），并声明 `"token_endpoint_auth_method": "none"`。两者都不接受的授权服务器，`Login` 返回 `auth.ErrClientRequired`。规范已弃用的动态客户端注册不支持。
+
+`Store` 按服务器 URL 持久化 token；token 是机密，要存在只有用户能读的地方。传输层在 token 过期前刷新，服务器拒绝时再刷新一次；仍然解决不了的 401 或 403 以 `*streamhttp.StatusError` 返回，由调用方重新登录。
+
 ### Elicitation（MRTR）
 
 工具通过返回中间结果向用户请求输入；客户端自动补全并重试：
@@ -154,6 +180,7 @@ if task, ok := tasks.AsTask(err); ok {
 | `transport/streamhttp` | Streamable HTTP 的 `Handler`（服务端）与 `Transport`（客户端） |
 | `transport/mem` | 进程内传输，用于测试与嵌入 |
 | `ext/tasks` | 官方 tasks 扩展：服务端、客户端与存储 |
+| `auth` | MCP 授权的客户端：发现、登录、token 刷新 |
 
 ## 示例
 

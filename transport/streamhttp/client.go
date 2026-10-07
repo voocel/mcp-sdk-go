@@ -121,6 +121,14 @@ func (t *Transport) Do(ctx context.Context, req *transport.Request) (transport.S
 			}
 			return nil, nil
 		}
+		// Authorization failures are decided by the status alone, whatever
+		// the body holds; the caller needs the WWW-Authenticate challenge.
+		if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+			data, _ := io.ReadAll(io.LimitReader(resp.Body, 256))
+			drain(resp)
+			cancel()
+			return nil, &StatusError{StatusCode: resp.StatusCode, Header: resp.Header, Body: string(data)}
+		}
 
 		ct := resp.Header.Get("Content-Type")
 		if strings.HasPrefix(ct, "text/event-stream") {
@@ -138,9 +146,20 @@ func (t *Transport) Do(ctx context.Context, req *transport.Request) (transport.S
 		if json.Unmarshal(data, &m) == nil && m.Kind() != protocol.KindInvalid {
 			return &singleStream{msg: &m}, nil
 		}
-		return nil, fmt.Errorf("streamhttp: http %d: %s", resp.StatusCode, truncate(data, 256))
+		return nil, &StatusError{StatusCode: resp.StatusCode, Header: resp.Header, Body: truncate(data, 256)}
 	}
 	return nil, lastErr
+}
+
+// StatusError is an HTTP response that carried no JSON-RPC message.
+type StatusError struct {
+	StatusCode int
+	Header     http.Header
+	Body       string // truncated
+}
+
+func (e *StatusError) Error() string {
+	return fmt.Sprintf("streamhttp: http %d: %s", e.StatusCode, e.Body)
 }
 
 func (t *Transport) Close() error {
